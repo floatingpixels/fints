@@ -253,6 +253,11 @@ impl TanMedium {
     }
 }
 
+/// Private account metadata returned by the institution through the UPD.
+///
+/// These fields identify a real account of the user. `Account` values appear inside
+/// serialized [`ReusableState`], so callers must apply the same encrypted-storage and
+/// redaction requirements. This type intentionally provides no `Debug` implementation.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Account {
     pub(crate) iban: Option<String>,
@@ -342,6 +347,15 @@ pub(crate) struct InstituteState {
     pub(crate) institute_code: String,
 }
 
+/// Caller-persisted protocol state for subsequent FinTS dialogs.
+///
+/// Its serialized form transitively contains private UPD data, including account
+/// identifiers such as IBANs and account numbers, and account owner names. Callers must
+/// persist it only in encrypted storage and must never log or display the serialized
+/// bytes.
+///
+/// This state deliberately never contains credentials, PINs, TANs, challenges, dialog
+/// identifiers, or live session state.
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub struct ReusableState {
     pub(crate) system_id: Option<String>,
