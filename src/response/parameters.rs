@@ -306,18 +306,36 @@ fn parse_tan_methods(segment: &Segment, version: u16) -> Result<Vec<TanMethod>, 
     }
     let width = if version == 6 { 21 } else { 26 };
     let method_values = &parameters[3..];
-    if method_values.is_empty() || !method_values.len().is_multiple_of(width) {
+    if method_values.is_empty() {
         return Err(Error::InvalidResponse {
             structure: "HITANS method parameters",
         });
     }
-    method_values
-        .chunks_exact(width)
+    let mut blocks = method_values.chunks_exact(width);
+    let mut methods = blocks
+        .by_ref()
         .map(|components| parse_tan_method(components, version))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let trailing = blocks.remainder();
+    if !trailing.is_empty() {
+        methods.push(parse_tan_method(trailing, version)?);
+    }
+    if methods.len() > 98 {
+        return Err(Error::InvalidResponse {
+            structure: "too many HITANS methods",
+        });
+    }
+    Ok(methods)
 }
 
 fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Error> {
+    // Fields through "Antwort HHD_UC erforderlich" are positional and mandatory.
+    // Only trailing optional fields of the last repeated method may be cut.
+    if components.len() < 20 {
+        return Err(Error::InvalidResponse {
+            structure: "cut HITANS method parameters",
+        });
+    }
     let security_function = component(components, 0, "TAN security function")?;
     let numeric_function: u16 = security_function.parse().map_err(|_| Error::InvalidValue {
         field: "TAN security function",
@@ -348,6 +366,11 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
                 }
             }
         };
+    if process == TanProcess::Decoupled && components.len() < 24 {
+        return Err(Error::InvalidResponse {
+            structure: "cut decoupled HITANS method parameters",
+        });
+    }
     let medium_name_required = match component(components, 18, "TAN medium requirement")?.as_str() {
         "0" | "1" => false,
         "2" => true,

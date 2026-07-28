@@ -432,9 +432,6 @@ fn national_account(account: &Account) -> Result<Element, Error> {
 }
 
 fn international_account(account: &Account) -> Result<Element, Error> {
-    if account.iban.is_some() && account.bic.is_none() {
-        return national_account(account);
-    }
     let (country, institute) = account
         .institute
         .as_ref()

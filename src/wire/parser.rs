@@ -59,7 +59,11 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 None => return Err(WireError::MissingSegmentTerminator),
-                Some(_) => unreachable!("value parser stops only at a delimiter"),
+                Some(_) => {
+                    return Err(WireError::UnexpectedDelimiter {
+                        offset: self.offset,
+                    });
+                }
             }
         }
         Ok(Segment { elements })

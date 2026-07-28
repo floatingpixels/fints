@@ -65,6 +65,11 @@ impl Response {
                             version: header.version,
                         });
                     }
+                    if header.code == b"HIRMG" && segment.elements().len() == 1 {
+                        return Err(Error::InvalidResponse {
+                            structure: "HIRMG without response elements",
+                        });
+                    }
                     has_message_response |= header.code == b"HIRMG";
                     let reference = (header.code == b"HIRMS")
                         .then_some(header.reference)
@@ -80,13 +85,19 @@ impl Response {
                         let numeric_code = code.parse().map_err(|_| Error::InvalidValue {
                             field: "response code",
                         })?;
-                        if !matches!(numeric_code / 1000, 0 | 3 | 9) {
-                            return Err(Error::InvalidValue {
-                                field: "response code class",
-                            });
-                        }
+                        let class = match numeric_code / 1000 {
+                            0 => ResponseClass::Success,
+                            3 => ResponseClass::Warning,
+                            9 => ResponseClass::Error,
+                            _ => {
+                                return Err(Error::InvalidValue {
+                                    field: "response code class",
+                                });
+                            }
+                        };
                         responses.push(BankResponse::new(
                             numeric_code,
+                            class,
                             reference,
                             recovery_for(numeric_code),
                         ));

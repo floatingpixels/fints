@@ -83,14 +83,21 @@ pub enum InputError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BankResponse {
     code: u16,
+    class: ResponseClass,
     segment_number: Option<u16>,
     recovery: Option<Recovery>,
 }
 
 impl BankResponse {
-    pub(crate) fn new(code: u16, segment_number: Option<u16>, recovery: Option<Recovery>) -> Self {
+    pub(crate) fn new(
+        code: u16,
+        class: ResponseClass,
+        segment_number: Option<u16>,
+        recovery: Option<Recovery>,
+    ) -> Self {
         Self {
             code,
+            class,
             segment_number,
             recovery,
         }
@@ -113,12 +120,7 @@ impl BankResponse {
 
     /// The response class derived from the first digit of the four-digit code.
     pub fn class(self) -> ResponseClass {
-        match self.code / 1000 {
-            0 => ResponseClass::Success,
-            3 => ResponseClass::Warning,
-            9 => ResponseClass::Error,
-            _ => unreachable!("validated response codes have class 0, 3, or 9"),
-        }
+        self.class
     }
 }
 
@@ -141,6 +143,8 @@ pub enum Error {
     MissingValue { field: &'static str },
     #[error("FinTS response message or dialog state is inconsistent")]
     InconsistentState,
+    #[error("the FinTS continuation belongs to a different dialog")]
+    StaleContinuation,
     #[error("the TAN or approval challenge has expired")]
     ChallengeExpired,
     #[error("the decoupled approval polling limit has been reached")]

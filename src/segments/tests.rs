@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::{InstituteState, TanProcess};
 
 // FinTS 3.0 Formals 2017-10-06, C.5.1, HKIDN 2, HKVVB 3, HNHBK 3, HNHBS 1.
 #[test]
@@ -64,5 +65,224 @@ fn authenticated_message_keeps_pin_inside_binary_payload() {
             .as_text()
             .is_some_and(|value| value == "private-pin"),
         "PIN was not confined to the signature trailer"
+    );
+}
+
+fn security_context<'a>(
+    institute: &'a InstituteId,
+    credentials: &'a Credentials,
+) -> SecurityContext<'a> {
+    SecurityContext {
+        institute,
+        credentials,
+        system_id: "fictional-system",
+        security_function: "942",
+        profile_version: "2",
+        dialog_id: "fictional-dialog",
+        message_number: 2,
+        date: NaiveDate::from_ymd_opt(2026, 7, 28).unwrap(),
+        time: NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+    }
+}
+
+fn fictional_account(iban: Option<&str>) -> Account {
+    Account {
+        iban: iban.map(str::to_owned),
+        bic: None,
+        account_number: Some("123456".to_owned()),
+        subaccount: None,
+        institute: Some(InstituteState {
+            country_code: "280".to_owned(),
+            institute_code: "12345678".to_owned(),
+        }),
+        currency: Some("EUR".to_owned()),
+        account_type: Some(1),
+        owner_name_1: Some("Fictional Person".to_owned()),
+        owner_name_2: None,
+        product_name: Some("Checking".to_owned()),
+        allowed_operations: Vec::new(),
+    }
+}
+
+// FinTS 3.0 Messages 2022-04-15, C.2.1.2.1-C.2.1.2.2:
+// HKSAL 6 uses KTV, while HKSAL 7/8 use the six-slot KTI account group.
+#[test]
+fn balance_versions_use_independent_account_layout_fixtures() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let credentials = Credentials::new("fictional-user", None, "private-pin").unwrap();
+    let context = security_context(&institute, &credentials);
+
+    let national = balance_request(&context, &fictional_account(None), 6, None).unwrap();
+    let national = Message::parse(&national)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let national = encode_segments(&[national
+        .into_iter()
+        .find(|segment| segment.header().unwrap().code == b"HKSAL")
+        .unwrap()])
+    .unwrap();
+    assert!(
+        national == b"HKSAL:3:6+123456::280:12345678+N'",
+        "HKSAL 6 account fixture did not match"
+    );
+
+    let international = balance_request(
+        &context,
+        &fictional_account(Some("DE40123456780000123456")),
+        8,
+        None,
+    )
+    .unwrap();
+    let international = Message::parse(&international)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let international = encode_segments(&[international
+        .into_iter()
+        .find(|segment| segment.header().unwrap().code == b"HKSAL")
+        .unwrap()])
+    .unwrap();
+    assert!(
+        international == b"HKSAL:3:8+DE40123456780000123456::123456::280:12345678+N'",
+        "HKSAL 7/8 account fixture did not match"
+    );
+}
+
+// FinTS 3.0 Formals 2017-10-06, C.8.1; PIN/TAN 2020-07-10,
+// B.5.1-B.5.2 and correction T33.
+#[test]
+fn synchronization_and_hktan_shapes_match_independent_wire_fixtures() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let credentials = Credentials::new("fictional-user", None, "private-pin").unwrap();
+    let context = security_context(&institute, &credentials);
+    let product = ProductIdentity::new("PROD123", "1.0").unwrap();
+    let state = ReusableState::new();
+    let method = TanMethod {
+        security_function: "942".to_owned(),
+        hktan_version: 7,
+        process: TanProcess::Decoupled,
+        technical_id: "fictional-method".to_owned(),
+        display_name: "Fictional approval".to_owned(),
+        dk_method: Some("Decoupled".to_owned()),
+        max_tan_length: Some(6),
+        tan_format: Some("1".to_owned()),
+        medium_name_required: true,
+        hhd_response_required: false,
+        max_decoupled_polls: Some(3),
+        first_poll_delay_seconds: Some(2),
+        next_poll_delay_seconds: Some(3),
+        manual_polling_allowed: true,
+        automatic_polling_allowed: true,
+    };
+
+    let request = synchronization(
+        &context,
+        &product,
+        &state,
+        Some(&method),
+        Some("Fictional medium"),
+    )
+    .unwrap();
+    let payload = Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let hksyn = payload
+        .iter()
+        .find(|segment| segment.header().unwrap().code == b"HKSYN")
+        .unwrap();
+    assert!(
+        encode_segments(std::slice::from_ref(hksyn)).unwrap() == b"HKSYN:6:3+0'",
+        "HKSYN fixture did not match"
+    );
+
+    let initial = build_segment(
+        2,
+        raw_hktan(
+            7,
+            TanStep::Initial {
+                operation: "HKSAL",
+                medium_name: Some("Fictional medium"),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let submit = build_segment(
+        2,
+        raw_hktan(
+            6,
+            TanStep::Submit {
+                reference: "fictional-reference",
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let poll = build_segment(
+        2,
+        raw_hktan(
+            7,
+            TanStep::Poll {
+                reference: "fictional-reference",
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        encode_segments(&[initial]).unwrap() == b"HKTAN:2:7+4+HKSAL+++++++++Fictional medium'",
+        "initial HKTAN fixture did not match"
+    );
+    assert!(
+        encode_segments(&[submit]).unwrap() == b"HKTAN:2:6+2++++fictional-reference+N'",
+        "submit HKTAN fixture did not match"
+    );
+    assert!(
+        encode_segments(&[poll]).unwrap() == b"HKTAN:2:7+S++++fictional-reference+N'",
+        "poll HKTAN fixture did not match"
+    );
+}
+
+// FinTS 3.0 PIN/TAN 2020-07-10, B.5.2; Security HBCI 2024-06-11,
+// B.5: HKTAN submits process 2 while HNSHA carries PIN and TAN.
+#[test]
+fn tan_submission_places_pin_and_tan_in_hnsha_fixture() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let credentials = Credentials::new("fictional-user", None, "private-pin").unwrap();
+    let context = security_context(&institute, &credentials);
+    let method = TanMethod {
+        security_function: "942".to_owned(),
+        hktan_version: 6,
+        process: TanProcess::ProcessVariantTwo,
+        technical_id: "fictional-method".to_owned(),
+        display_name: "Fictional approval".to_owned(),
+        dk_method: None,
+        max_tan_length: Some(6),
+        tan_format: Some("1".to_owned()),
+        medium_name_required: false,
+        hhd_response_required: false,
+        max_decoupled_polls: None,
+        first_poll_delay_seconds: None,
+        next_poll_delay_seconds: None,
+        manual_polling_allowed: false,
+        automatic_polling_allowed: false,
+    };
+    let encoded = tan_submission(&context, &method, "fictional-reference", "123456").unwrap();
+    let payload = Message::parse(&encoded)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let hktan = encode_segments(std::slice::from_ref(&payload[1])).unwrap();
+    let hnsha = encode_segments(std::slice::from_ref(&payload[2])).unwrap();
+
+    assert!(
+        hktan == b"HKTAN:3:6+2++++fictional-reference+N'",
+        "TAN submission HKTAN fixture did not match"
+    );
+    assert!(
+        hnsha == b"HNSHA:4:2+2++private-pin:123456'",
+        "TAN submission HNSHA fixture did not match"
     );
 }

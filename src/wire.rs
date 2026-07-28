@@ -15,7 +15,9 @@ use parser::parse_segment_sequence;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_SEGMENTS: usize = 256;
 const MAX_ELEMENTS_PER_SEGMENT: usize = 256;
-const MAX_COMPONENTS_PER_ELEMENT: usize = 64;
+// PIN/TAN B.8.2 permits 98 HITANS 7 methods in one parameter DEG:
+// three leading parameters plus 98 method blocks of 26 components.
+const MAX_COMPONENTS_PER_ELEMENT: usize = 3 + 98 * 26;
 const MAX_BINARY_BYTES: usize = MAX_MESSAGE_BYTES;
 const SYNTAX_BYTES: &[u8] = b"+:'?@";
 
@@ -88,6 +90,8 @@ pub enum WireError {
     NonLatin1Text,
     #[error("FinTS message length cannot be represented in the 12-digit header field")]
     MessageLengthOverflow,
+    #[error("FinTS parser reached an unexpected delimiter at byte {offset}")]
+    UnexpectedDelimiter { offset: usize },
 }
 
 impl Message {
@@ -139,13 +143,19 @@ impl Message {
 
     pub(crate) fn payload_segments(&self) -> Result<Vec<Segment>, WireError> {
         if self.has_security_envelope() {
-            let payload = self.segments[2]
+            let payload = self
+                .segments
+                .get(2)
+                .ok_or(WireError::InvalidSecurityEnvelope)?
                 .element(1)
                 .and_then(Element::single_binary)
                 .ok_or(WireError::InvalidSecurityEnvelope)?;
             parse_segment_sequence(payload)
         } else {
-            Ok(self.segments[1..self.segments.len() - 1].to_vec())
+            self.segments
+                .get(1..self.segments.len().saturating_sub(1))
+                .map(<[Segment]>::to_vec)
+                .ok_or(WireError::InvalidMessageEnvelope)
         }
     }
 
@@ -187,8 +197,10 @@ impl Message {
             .segments
             .last()
             .ok_or(WireError::InvalidMessageEnvelope)?;
-        if first.header().map(|header| (header.code, header.version))
-            != Some((b"HNHBK".as_slice(), 3))
+        if first
+            .header()
+            .map(|header| (header.code, header.number, header.version))
+            != Some((b"HNHBK".as_slice(), 1, 3))
             || last.header().map(|header| (header.code, header.version))
                 != Some((b"HNHBS".as_slice(), 1))
         {

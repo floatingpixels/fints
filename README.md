@@ -54,6 +54,8 @@ earliest permitted poll time. Submit a `Tan` only through the matching
 `PollingMode::Automatic` to the matching `poll_*` method; an unadvertised mode,
 early poll, expired challenge, or exhausted poll bound fails explicitly. Dropping a
 continuation does not serialize it; call `terminate` to cancel the active dialog.
+A rejected TAN deliberately ends the Gate 1 flow: terminate when possible, then
+restart the complete dialog instead of retrying the TAN inside the existing dialog.
 
 The most recently parsed bank response codes are available through
 `last_responses()`. They retain only the numeric code, optional segment reference,

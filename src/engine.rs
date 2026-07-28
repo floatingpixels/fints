@@ -59,6 +59,7 @@ pub(crate) struct PendingChallenge {
     pub(crate) challenge: Challenge,
     pub(crate) method: TanMethod,
     operation: PendingOperation,
+    dialog_id: String,
     polls: u16,
     continuations: u16,
     pub(crate) next_poll_at: Option<NaiveDateTime>,
@@ -243,6 +244,7 @@ impl Engine {
                 tan_response.challenge,
                 PendingOperation::Synchronization,
                 method,
+                response.dialog_id(),
                 received_at,
             )?;
             pending.assigned_system_id = system_id;
@@ -332,18 +334,13 @@ impl Engine {
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
         }
-        if let Some(tan_response) = response.tan(method.hktan_version)?
-            && tan_response.challenge.reference != "noref"
-        {
-            validate_tan_process(&tan_response.process, "4")?;
-            return Err(Limitation::TanMedium.into());
-        }
+        let next_message_number = response
+            .message_number()
+            .checked_add(1)
+            .ok_or(Error::InconsistentState)?;
         self.dialog = Some(DialogState {
             id: response.dialog_id().to_owned(),
-            next_message_number: response
-                .message_number()
-                .checked_add(1)
-                .ok_or(Error::InconsistentState)?,
+            next_message_number,
             security_function: method.security_function.clone(),
             profile_version: "2",
             system_id: self
@@ -351,9 +348,15 @@ impl Engine {
                 .system_id
                 .clone()
                 .unwrap_or_else(|| "0".to_owned()),
-            method: Some(method),
+            method: Some(method.clone()),
             anonymous: false,
         });
+        if let Some(tan_response) = response.tan(method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_tan_process(&tan_response.process, "4")?;
+            return Err(Limitation::TanMedium.into());
+        }
         self.tan_media = response.tan_media()?;
         Ok(&self.tan_media)
     }
@@ -369,11 +372,6 @@ impl Engine {
         self.apply_parameters(&response)?;
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
-        }
-        if requested_method.is_none() && !response.has_tan_method_response() {
-            return Err(Error::MissingValue {
-                field: "3920 TAN method response",
-            });
         }
         let next_message_number = response
             .message_number()
@@ -395,6 +393,11 @@ impl Engine {
             method: requested_method.clone(),
             anonymous: false,
         });
+        if requested_method.is_none() && !response.has_tan_method_response() {
+            return Err(Error::MissingValue {
+                field: "3920 TAN method response",
+            });
+        }
         let selected = self.state.selected_tan_method.as_deref();
         if selected.is_none()
             || !self
@@ -422,6 +425,7 @@ impl Engine {
                     tan_response.challenge,
                     PendingOperation::Initialization,
                     method,
+                    response.dialog_id(),
                     received_at,
                 )?,
             )));
@@ -518,6 +522,7 @@ impl Engine {
             tan_response.challenge,
             PendingOperation::Balance,
             method,
+            response.dialog_id(),
             received_at,
         )?)))
     }
@@ -528,6 +533,7 @@ impl Engine {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<Vec<u8>, Error> {
+        self.ensure_pending_dialog(pending)?;
         if !self.continuation_active {
             return Err(Error::InconsistentState);
         }
@@ -568,6 +574,7 @@ impl Engine {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<Vec<u8>, Error> {
+        self.ensure_pending_dialog(pending)?;
         if !self.continuation_active {
             return Err(Error::InconsistentState);
         }
@@ -611,6 +618,7 @@ impl Engine {
         input: &[u8],
         pending: PendingChallenge,
     ) -> Result<InitializationResult, Error> {
+        self.ensure_pending_dialog(&pending)?;
         if pending.operation != PendingOperation::Initialization {
             return Err(Error::InconsistentState);
         }
@@ -635,6 +643,7 @@ impl Engine {
         input: &[u8],
         pending: PendingChallenge,
     ) -> Result<BalanceResult, Error> {
+        self.ensure_pending_dialog(&pending)?;
         if pending.operation != PendingOperation::Balance {
             return Err(Error::InconsistentState);
         }
@@ -671,6 +680,7 @@ impl Engine {
         input: &[u8],
         pending: PendingChallenge,
     ) -> Result<SynchronizationResult, Error> {
+        self.ensure_pending_dialog(&pending)?;
         if pending.operation != PendingOperation::Synchronization {
             return Err(Error::InconsistentState);
         }
@@ -780,6 +790,18 @@ impl Engine {
             Ok(())
         } else {
             Err(Error::InconsistentState)
+        }
+    }
+
+    fn ensure_pending_dialog(&self, pending: &PendingChallenge) -> Result<(), Error> {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.id == pending.dialog_id)
+        {
+            Ok(())
+        } else {
+            Err(Error::StaleContinuation)
         }
     }
 
@@ -928,6 +950,7 @@ fn pending_challenge(
     challenge: Challenge,
     operation: PendingOperation,
     method: TanMethod,
+    dialog_id: &str,
     received_at: NaiveDateTime,
 ) -> Result<PendingChallenge, Error> {
     let next_poll_at = if method.process == TanProcess::Decoupled {
@@ -946,6 +969,7 @@ fn pending_challenge(
         challenge,
         operation,
         method,
+        dialog_id: dialog_id.to_owned(),
         polls: 0,
         continuations: 0,
         next_poll_at,

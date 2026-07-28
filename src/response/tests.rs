@@ -23,7 +23,7 @@ fn hisal_eight_preserves_explicit_balance_metadata() {
         &[
             "HIRMG:2:2+0010::accepted".into(),
             concat!(
-                "HISAL:3:8:4+DE02120300000000202051:BYLADEM1001::::",
+                "HISAL:3:8:4+DE40123456780000123456:FICTDEFFXXX::::",
                 "+Fictional checking+EUR+C:1234,56:EUR:20260728:123456",
                 "+D:12,3:EUR:20260728+5000,:EUR+4500,5:EUR",
                 "+++20260728:123500++100,:EUR"
@@ -37,7 +37,7 @@ fn hisal_eight_preserves_explicit_balance_metadata() {
     let response = Response::parse(&fixture).unwrap();
     let balance = response.balance().unwrap().unwrap();
 
-    assert_eq!(balance.account().iban(), Some("DE02120300000000202051"));
+    assert_eq!(balance.account().iban(), Some("DE40123456780000123456"));
     assert_eq!(balance.booked().direction(), CreditDebit::Credit);
     assert_eq!(balance.booked().amount().coefficient(), 123_456);
     assert_eq!(balance.booked().amount().scale(), 2);
@@ -65,7 +65,7 @@ fn balance_timestamp_does_not_invent_midnight() {
         &[
             "HIRMG:2:2+0010::accepted".into(),
             concat!(
-                "HISAL:3:8:4+DE02120300000000202051:BYLADEM1001::::",
+                "HISAL:3:8:4+DE40123456780000123456:FICTDEFFXXX::::",
                 "+Fictional checking+EUR+C:1,:EUR:20260728++++++20260728"
             )
             .into(),
@@ -132,7 +132,7 @@ fn bpd_upd_and_user_allowed_tan_method_are_interpreted_together() {
             "HIPINS:8:1:4+1+1+0+4:6:6:::HKSAL:N:HKTAN:N".into(),
             "HIUPA:9:4:4+fictional-user+3+0".into(),
             concat!(
-                "HIUPD:10:6:4+202051::280:12345678+DE02120300000000202051",
+                "HIUPD:10:6:4+123456::280:12345678+DE40123456780000123456",
                 "+fictional-customer+1+EUR+Fictional Person++Checking++HKSAL:1"
             )
             .into(),
@@ -285,4 +285,145 @@ fn message_response_order_is_strict_but_unknown_optional_segments_are_skipped() 
             structure: "duplicate HIRMG response segment"
         })
     ));
+
+    let empty = message(&["HIRMG:2:2".into()], "dialog1", 1);
+    assert!(matches!(
+        Response::parse(&empty),
+        Err(Error::InvalidResponse {
+            structure: "HIRMG without response elements"
+        })
+    ));
+}
+
+fn typed_method(security_function: &str, technical_id: &str) -> Vec<String> {
+    [
+        security_function,
+        "2",
+        technical_id,
+        "",
+        "1.0",
+        "Fictional typed approval",
+        "6",
+        "1",
+        "Approval",
+        "2048",
+        "N",
+        "1",
+        "N",
+        "0",
+        "0",
+        "N",
+        "N",
+        "00",
+        "0",
+        "N",
+        "1",
+        "",
+        "",
+        "",
+        "N",
+        "N",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+// FinTS 3.0 PIN/TAN 2020-07-10, B.8.2 permits up to 98 repeated
+// two-step-method parameter blocks in one HITANS 7 DEG.
+#[test]
+fn hitans_seven_accepts_more_than_two_advertised_methods() {
+    let methods = [
+        typed_method("940", "fictional-a"),
+        typed_method("941", "fictional-b"),
+        typed_method("942", "fictional-c"),
+    ]
+    .concat()
+    .join(":");
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{methods}"),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.tan_methods().len(), 3);
+    assert_eq!(state.tan_methods()[2].security_function(), "942");
+}
+
+// FinTS 3.0 Formals 2017-10-06, H.1.5 cut rule; PIN/TAN 2020-07-10,
+// B.8.2: only trailing optional fields of the last repeated method may be cut.
+#[test]
+fn hitans_last_method_accepts_trailing_cut_but_rejects_mid_block_cut() {
+    let first = typed_method("940", "fictional-a");
+    let trailing_cut = first[..20].join(":");
+    let accepted = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{trailing_cut}"),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&accepted)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.tan_methods().len(), 1);
+
+    let mut cut_middle = first[..20].to_vec();
+    cut_middle.extend(typed_method("941", "fictional-b"));
+    let rejected = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{}", cut_middle.join(":")),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    assert!(
+        Response::parse(&rejected)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .is_err()
+    );
+}
+
+// Observed protocol condition: some institutions emit fixed two-decimal amounts
+// with trailing zeroes. Gate 1 accepts that deviation without changing the value.
+#[test]
+fn balance_accepts_exact_fractional_trailing_zeroes() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            concat!(
+                "HISAL:3:8:4+DE40123456780000123456:FICTDEFFXXX::::",
+                "+Fictional checking+EUR+C:512,30:EUR:20260728",
+                "+D:1234,00:EUR:20260728"
+            )
+            .into(),
+        ],
+        "dialog1",
+        2,
+    );
+
+    let response = Response::parse(&fixture).unwrap();
+    let balance = response.balance().unwrap().unwrap();
+
+    assert_eq!(balance.booked().amount().coefficient(), 51_230);
+    assert_eq!(balance.booked().amount().scale(), 2);
+    assert_eq!(balance.pending().unwrap().amount().coefficient(), 123_400);
+    assert_eq!(balance.pending().unwrap().amount().scale(), 2);
 }

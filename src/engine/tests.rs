@@ -130,6 +130,73 @@ fn personalized_method_discovery_retains_only_safe_method_identifiers() {
     engine.choose_tan_method("942").unwrap();
 }
 
+// FinTS 3.0 Formals 2017-10-06, C.8.1-C.8.2: HISYN 4 can complete
+// synchronization directly or before a TAN continuation.
+#[test]
+fn synchronization_accepts_direct_and_continued_hisyn_fixtures() {
+    let direct = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HISYN:3:4:2+fictional-direct-system",
+        ],
+        "direct-dialog",
+        1,
+    );
+    let mut direct_engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    direct_engine.state.system_id = None;
+    direct_engine
+        .synchronization_request(now().date(), now().time())
+        .unwrap();
+
+    assert!(matches!(
+        direct_engine
+            .accept_synchronization(&direct, now())
+            .unwrap(),
+        SynchronizationResult::Complete
+    ));
+    assert_eq!(
+        direct_engine.state().system_id(),
+        Some("fictional-direct-system")
+    );
+
+    let challenged = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HISYN:3:4:2+fictional-continued-system",
+            "HITAN:4:6:5+4++fictional-reference+Use a fictional TAN",
+        ],
+        "continued-dialog",
+        1,
+    );
+    let mut continued_engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    continued_engine.state.system_id = None;
+    continued_engine
+        .synchronization_request(now().date(), now().time())
+        .unwrap();
+    let pending = match continued_engine
+        .accept_synchronization(&challenged, now())
+        .unwrap()
+    {
+        SynchronizationResult::Challenge(pending) => *pending,
+        SynchronizationResult::Complete => panic!("expected synchronization challenge"),
+    };
+    continued_engine
+        .tan_submission_request(&pending, &Tan::new("123456").unwrap(), now())
+        .unwrap();
+    let completion = response(&["HIRMG:2:2+0010::accepted"], "continued-dialog", 2);
+
+    assert!(matches!(
+        continued_engine
+            .accept_synchronization_continuation(&completion, pending)
+            .unwrap(),
+        SynchronizationResult::Complete
+    ));
+    assert_eq!(
+        continued_engine.state().system_id(),
+        Some("fictional-continued-system")
+    );
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1.3: first-use medium discovery
 // is a special initialization with HKTAN referring to HKTAB, not an HKTAB order.
 #[test]
@@ -163,6 +230,51 @@ fn tan_medium_discovery_uses_the_special_initialization_shape() {
     );
 }
 
+// FinTS 3.0 Formals 2017-10-06, C.5.3: an accepted dialog remains open
+// until HKEND even when the requested initialization result is unusable locally.
+#[test]
+fn accepted_unusable_initializations_can_still_be_terminated() {
+    let mut media_engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    media_engine
+        .tan_media_initialization_request(now().date(), now().time())
+        .unwrap();
+    let unexpected_challenge = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HITAN:3:6:4+4++fictional-reference+Unexpected challenge",
+        ],
+        "media-dialog",
+        1,
+    );
+    assert!(matches!(
+        media_engine.accept_tan_media_initialization(&unexpected_challenge),
+        Err(Error::Unsupported(Limitation::TanMedium))
+    ));
+    media_engine
+        .termination_request(now().date(), now().time())
+        .unwrap();
+    let terminated = response(&["HIRMG:2:2+0100::terminated"], "media-dialog", 2);
+    media_engine.accept_termination(&terminated).unwrap();
+
+    let mut discovery_engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    discovery_engine.state.selected_tan_method = None;
+    discovery_engine
+        .initialization_request(now().date(), now().time())
+        .unwrap();
+    let missing_selection = response(&["HIRMG:2:2+0010::accepted"], "discovery-dialog", 1);
+    assert!(matches!(
+        discovery_engine.accept_initialization(&missing_selection, now()),
+        Err(Error::MissingValue {
+            field: "3920 TAN method response"
+        })
+    ));
+    discovery_engine
+        .termination_request(now().date(), now().time())
+        .unwrap();
+    let terminated = response(&["HIRMG:2:2+0100::terminated"], "discovery-dialog", 2);
+    discovery_engine.accept_termination(&terminated).unwrap();
+}
+
 // FinTS 3.0 Formals correction P4: UPD version zero is valid only in this dialog.
 #[test]
 fn upd_version_zero_accounts_remain_process_memory_only() {
@@ -172,7 +284,7 @@ fn upd_version_zero_accounts_remain_process_memory_only() {
             "HIRMG:2:2+0010::accepted",
             "HIUPA:3:4:3+fictional-user+0+0",
             concat!(
-                "HIUPD:4:6:3+202051::280:12345678+DE02120300000000202051",
+                "HIUPD:4:6:3+123456::280:12345678+DE40123456780000123456",
                 "+fictional-customer+1+EUR+Fictional Person++Checking++HKSAL:1"
             ),
         ],
@@ -278,6 +390,50 @@ fn typed_tan_validation_never_exposes_the_supplied_value() {
     assert!(!rendered.contains("secret-value"));
 }
 
+// FinTS 3.0 Formals 2017-10-06, C.5: dialog identifiers scope every
+// continuation. A process-memory continuation cannot cross a terminated dialog.
+#[test]
+fn stale_synchronization_continuation_cannot_cross_dialogs_or_persist_state() {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.system_id = None;
+    engine
+        .synchronization_request(now().date(), now().time())
+        .unwrap();
+    let challenged = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HISYN:3:4:2+stale-fictional-system",
+            "HITAN:4:6:5+4++stale-fictional-reference+Use a fictional TAN",
+        ],
+        "old-dialog",
+        1,
+    );
+    let pending = match engine.accept_synchronization(&challenged, now()).unwrap() {
+        SynchronizationResult::Challenge(pending) => *pending,
+        SynchronizationResult::Complete => panic!("expected synchronization challenge"),
+    };
+
+    engine
+        .termination_request(now().date(), now().time())
+        .unwrap();
+    let terminated = response(&["HIRMG:2:2+0100::terminated"], "old-dialog", 2);
+    engine.accept_termination(&terminated).unwrap();
+    engine
+        .initialization_request(now().date(), now().time())
+        .unwrap();
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "new-dialog", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+
+    assert!(matches!(
+        engine.tan_submission_request(&pending, &Tan::new("123456").unwrap(), now()),
+        Err(Error::StaleContinuation)
+    ));
+    assert_ne!(engine.state().system_id(), Some("stale-fictional-system"));
+}
+
 // FinTS Formals 2017-10-06, C.6-C.7; repository safety contract:
 // a server cannot keep a typed continuation alive without a local bound.
 #[test]
@@ -290,8 +446,14 @@ fn repeated_typed_continuations_have_a_local_safety_bound() {
         expires_at: None,
         medium_name: None,
     };
-    let mut pending =
-        pending_challenge(challenge, PendingOperation::Initialization, method, now()).unwrap();
+    let mut pending = pending_challenge(
+        challenge,
+        PendingOperation::Initialization,
+        method,
+        "dialog1",
+        now(),
+    )
+    .unwrap();
 
     for sequence in 1..=LOCAL_CONTINUATION_LIMIT {
         pending = continued_challenge(
@@ -350,7 +512,7 @@ fn balance_request_requires_advertised_version_and_account_permission() {
     engine.state.accounts.push(Account {
         iban: None,
         bic: None,
-        account_number: Some("202051".to_owned()),
+        account_number: Some("123456".to_owned()),
         subaccount: None,
         institute: Some(InstituteState {
             country_code: "280".to_owned(),
@@ -387,14 +549,14 @@ fn balance_request_requires_advertised_version_and_account_permission() {
     assert_eq!(hksal.header().unwrap().version, 8);
     assert_eq!(
         hksal.elements()[1].components()[2].as_text().unwrap(),
-        "202051"
+        "123456"
     );
 
     let mismatched = response(
         &[
             "HIRMG:2:2+0010::accepted",
             concat!(
-                "HISAL:3:8:4+DE02120300000000999999:BYLADEM1001::::",
+                "HISAL:3:8:4+DE21123456780000999999:FICTDEFFXXX::::",
                 "+Different fictional account+EUR+C:1,:EUR:20260728"
             ),
         ],

@@ -167,7 +167,6 @@ fn parse_amount(components: &[Value]) -> Result<Amount, Error> {
         || !integer.bytes().all(|byte| byte.is_ascii_digit())
         || (integer.len() > 1 && integer.starts_with('0'))
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-        || fraction.ends_with('0')
     {
         return Err(Error::InvalidValue {
             field: "amount value",
