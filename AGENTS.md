@@ -21,8 +21,14 @@ other sibling checkout.
 
 Stop and ask the owner before proceeding when:
 
-- A source file would exceed 600 lines or non-test code under `src/` would exceed about
-  8,000 lines. Fixtures, generated test data, and tests do not count.
+- Non-test code under `src/` would exceed about 8,000 lines. Fixtures, generated test
+  data, and tests do not count.
+- Module boundaries follow Rust convention: split by cohesive responsibility (e.g.
+  codec, dialog state, segment parsing, typed results), not by line count. Splitting a
+  grown file into submodules is routine hygiene and needs no owner approval. A file may
+  stay large while it remains one cohesive concern; stop and ask only if a single
+  module approaches ~1,500 non-test lines, or if fine-grained splitting is fragmenting
+  one concern across many small files.
 - You are about to introduce a trait with one implementation, a registry/plugin system,
   a generic segment framework for hypothetical operations, or a config option nobody
   requested.
