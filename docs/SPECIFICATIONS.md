@@ -34,6 +34,28 @@ is 2026-07-28.
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
 
+### ZKA — HBCI 2.2 Erweiterung PIN/TAN
+
+- **Protocol/release:** HBCI 2.2 PIN/TAN, Version 1.01, 2002-05-08.
+- **Official source:** [official FinTS specification
+  archive](https://www.fints.org/de/spezifikation/archiv) (research filename
+  `HBCI_22_Erweiterung_PINTAN_1.01_2002-05-08.pdf`).
+- **Research SHA-256:** `786a3c4e0a656100237edf7895f1ead9bea076dcb6ef49716a56eb4f6f409604`.
+- **Gate 1 sections:** VI.7 (HTTPS communication access), specifically the
+  `Filterfunktion` code `MIM` for MIME Base 64 and the requirement to filter the
+  complete message.
+- **Apply alongside:** FinTS 3.0 Formals Data Dictionary `Filterfunktion`
+  (`MIM` = MIME Base 64; complete-message filtering) and the HIKOM 4 occupancy
+  rule that leaves `Filterfunktion` unoccupied for communication service 3
+  (HTTPS).
+- **Authorizes:** the inherited interoperable HTTPS body mapping: send the complete
+  FinTS message Base64-encoded as the HTTP POST request body and Base64-decode the
+  complete response body before FinTS parsing. A response that is not valid Base64
+  is a transport error; it is never retried as raw FinTS.
+- **Access/redistribution:** accessed from the official archive on 2026-07-28.
+  Redistribution rights for this historical PDF have not been reviewed, so the
+  research copy remains ignored under `local/` and is not committed.
+
 ### FinTS — Financial Transaction Services, Schnittstellenspezifikation, Sicherheitsverfahren PIN/TAN
 
 - **Protocol/release:** Version 3.0-FV Release 2020, Final Version Release 2020,
@@ -207,6 +229,11 @@ the implementation commit:
 - [`thiserror`](https://docs.rs/thiserror/latest/thiserror/): supports typed errors,
   but all error text and source conversion still require an explicit redaction
   review.
+
+As corroboration only, the deployed
+[`python-fints` HTTPS transport](https://github.com/raphaelm/python-fints/blob/master/fints/connection.py)
+uses the inherited complete-message Base64 mapping. It is not authority for message
+content, security, dialog behavior, or error handling.
 
 ## Repository rule
 

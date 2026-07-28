@@ -50,6 +50,8 @@ The initial direct-dependency allowlist is:
 - `chrono` for protocol-defined dates and times.
 - `reqwest` with rustls TLS and default features disabled for HTTPS transport.
 - `encoding_rs` only where an official FinTS encoding requirement proves it necessary.
+- `base64` for encoding and decoding complete FinTS 3.0 PIN/TAN HTTPS request and
+  response bodies.
 
 Required transitive dependencies are allowed. Direct dev dependencies need the same
 owner approval as runtime dependencies.
