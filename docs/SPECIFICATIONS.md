@@ -25,11 +25,18 @@ is 2026-07-28.
   G (data dictionary, including HNHBK, HNHBS, HKIDN, HKVVB, HKSYN/HISYN,
   HKEND, HIRMG/HIRMS, HIBPA, HIUPA, and HIUPD); H.1 (wire syntax); I.2
   (message order); I.3 (character-set overview); I.4 (transport-specific rules).
+- **Gate 3 sections:** C.3.2.2-C.3.2.3 (complete replacement when BPD/UPD
+  versions change); D.1-D.3 and the HIBPA/HIKOM Data Dictionary entries
+  (institute identity and communication parameters); E.3 and the HIUPD 6 Data
+  Dictionary entry (account-bound and non-account-bound UPD records, including
+  the published 35-character IBAN correction).
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
   BPD/UPD handling, product fields, response envelopes, and protocol state
-  numbering.
+  numbering; and Gate 3 replacement of changed parameter sets, endpoint
+  institute validation, and omission of non-account-bound UPD records from the
+  account list.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -113,12 +120,18 @@ is 2026-07-28.
   response groups, BPD parameter segments, and the related Data Dictionary
   entries. HKCAZ is preferred; HKKAZ 7 and then 6 are the bounded legacy
   fallbacks only when advertised and authorized.
+- **Gate 3 sections:** B.2.3 (national and international account
+  identifications), C.2.1.1.1, C.2.1.2.1-C.2.1.2.3, and C.2.3.1.1.1,
+  covering the independently negotiable HKKAZ 6/7, HKSAL 6/7/8, and HKCAZ 1
+  profiles and their BPD parameter segments.
 - **Apply alongside:** G102/CR 525 is already incorporated into this Release
   2022 volume. The current return-code volume still applies.
 - **Authorizes:** negotiated Gate 1 balance requests and responses for segment
   versions 6-8 and their typed account, amount, currency, sign, date/time, and
   optional-value semantics; and Gate 2 HKCAZ 1 or bounded HKKAZ 7/6 booked
   transaction retrieval, including the operation-specific continuation field.
+  For Gate 3 it authorizes deterministic selection from the advertised
+  operation/version combinations, never institution-name dispatch.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -135,11 +148,15 @@ is 2026-07-28.
   and 9997.
 - **Gate 2 sections:** B.1-B.4, especially code 3040 and its mandatory
   Aufsetzpunkt parameter, plus 9210 for a rejected continuation point.
+- **Gate 3 sections:** B.1-B.4, especially 3050 and 3081 (parameter refresh),
+  3076 (SCA not required), 9075 (strong authentication required), and 9185
+  (unsupported or obsolete FinTS/HBCI version).
 - **Apply alongside:** Formals B.6-B.7 and the operation-specific selected
   response-code examples. The online register has the same 2026-02-03 release
   date and must be checked for later changes before implementation.
-- **Authorizes:** typed Gate 1 and Gate 2 success, warning, error, pagination,
-  SCA, synchronization, and indeterminate-status outcomes.
+- **Authorizes:** typed Gate 1 through Gate 3 success, warning, error,
+  pagination, SCA, synchronization, parameter-refresh, and unsupported-version
+  outcomes without exposing bank response text.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -182,6 +199,12 @@ Gate 2 additionally applies these entries:
   continuation within a booking day and between booking days.
 - **T31** (2019-09-12): turnover queries may be statically TAN-exempt or may
   require an HKTAN whose SCA exemption is decided during execution.
+
+Gate 3 additionally applies **P22**, **P24**, and **P26** to every fictional
+profile: replace parameter sets after code 3081, retain the account-type
+requirement for payment accounts, and reject a bank-supplied BPD version zero.
+These corrections authorize protocol-level compatibility only; they do not
+authorize institution-specific branches.
 
 ## Gate 2 financial-data documents
 
@@ -374,10 +397,13 @@ and correspond to the direct dependency versions selected for the supported gate
   errors, but all error text and source conversion still require an explicit
   redaction review.
 
-As corroboration only, the deployed
-[`python-fints` HTTPS transport](https://github.com/raphaelm/python-fints/blob/master/fints/connection.py)
-uses the inherited complete-message Base64 mapping. It is not authority for message
-content, security, dialog behavior, or error handling.
+As corroboration only, [`python-fints`](https://github.com/raphaelm/python-fints)
+at commit `e3c916c90eb75745d4959b1fc1aff76b5ba23a19` (accessed 2026-07-28,
+LGPL-3.0-or-later) was inspected to identify deployed interoperability questions,
+including camt-only, legacy MT940, and SCA-response variations. Its complete-message
+Base64 transport also corroborates the inherited HTTPS mapping. It is not authority,
+no source or fixture was copied, and every implemented behavior remains independently
+justified by the official documents above.
 
 ## Repository rule
 

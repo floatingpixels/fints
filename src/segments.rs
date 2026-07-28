@@ -141,9 +141,9 @@ pub(crate) fn balance_request(
         return Err(Limitation::BalanceVersion.into());
     }
     let account_element = if version == 6 {
-        national_account(account)?
+        national_account(account, Limitation::BalanceVersion)?
     } else {
-        international_account(account)?
+        international_account(account, Limitation::BalanceVersion)?
     };
     let mut operations = vec![raw_segment(
         "HKSAL",
@@ -180,7 +180,7 @@ pub(crate) fn transaction_request(
             "HKCAZ",
             1,
             vec![
-                international_account(request.account)?,
+                international_account(request.account, Limitation::TransactionsVersion)?,
                 group(&[descriptor])?,
                 text("N")?,
             ],
@@ -188,12 +188,18 @@ pub(crate) fn transaction_request(
         TransactionFormat::Mt940 { version: 6 } => (
             "HKKAZ",
             6,
-            vec![national_account(request.account)?, text("N")?],
+            vec![
+                national_account(request.account, Limitation::TransactionsVersion)?,
+                text("N")?,
+            ],
         ),
         TransactionFormat::Mt940 { version: 7 } => (
             "HKKAZ",
             7,
-            vec![international_account(request.account)?, text("N")?],
+            vec![
+                international_account(request.account, Limitation::TransactionsVersion)?,
+                text("N")?,
+            ],
         ),
         TransactionFormat::Mt940 { .. } => return Err(Limitation::TransactionsVersion.into()),
     };
@@ -476,30 +482,24 @@ fn raw_hktan(version: u16, step: TanStep<'_>) -> Result<RawSegment, Error> {
     Ok(raw_segment("HKTAN", version, fields))
 }
 
-fn national_account(account: &Account) -> Result<Element, Error> {
-    let institute = account
-        .institute
-        .as_ref()
-        .ok_or(Limitation::BalanceVersion)?;
+fn national_account(account: &Account, limitation: Limitation) -> Result<Element, Error> {
+    let institute = account.institute.as_ref().ok_or(limitation)?;
     group(&[
-        account
-            .account_number
-            .as_deref()
-            .ok_or(Limitation::BalanceVersion)?,
+        account.account_number.as_deref().ok_or(limitation)?,
         account.subaccount.as_deref().unwrap_or(""),
         &institute.country_code,
         &institute.institute_code,
     ])
 }
 
-fn international_account(account: &Account) -> Result<Element, Error> {
+fn international_account(account: &Account, limitation: Limitation) -> Result<Element, Error> {
     let (country, institute) = account
         .institute
         .as_ref()
         .map(|value| (value.country_code.as_str(), value.institute_code.as_str()))
         .unwrap_or(("", ""));
     if account.iban.is_none() && account.account_number.is_none() {
-        return Err(Limitation::BalanceVersion.into());
+        return Err(limitation.into());
     }
     group(&[
         account.iban.as_deref().unwrap_or(""),

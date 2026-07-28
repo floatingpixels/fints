@@ -13,6 +13,7 @@ pub enum Recovery {
     CorrectProductIdentity,
     RefreshParameters,
     RestartDialog,
+    StrongAuthenticationRequired,
     UnsupportedCapability,
     WaitForApproval,
     ContactInstitute,
@@ -56,6 +57,8 @@ pub enum Limitation {
     TanProcessVariant,
     #[error("the selected TAN method does not advertise this decoupled polling mode")]
     DecoupledPolling,
+    #[error("the endpoint returned parameters for a different institution")]
+    InstituteMismatch,
 }
 
 /// Errors from input validation. Values are deliberately omitted from every variant.
@@ -132,7 +135,7 @@ impl BankResponse {
     }
 }
 
-/// Failures exposed by the bounded Gate 1 protocol engine.
+/// Failures exposed by the bounded supported-gate protocol engine.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]

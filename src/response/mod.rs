@@ -194,6 +194,10 @@ impl Response {
         parameters::apply(&self.segments, state)
     }
 
+    pub(crate) fn bpd_institute(&self) -> Result<Option<crate::model::InstituteState>, Error> {
+        parameters::bpd_institute(&self.segments)
+    }
+
     pub(crate) fn system_id(&self) -> Result<Option<String>, Error> {
         parameters::system_id(&self.segments)
     }
@@ -277,9 +281,10 @@ fn recovery_for(code: u16) -> Option<Recovery> {
         3040 | 3956 | 3957 | 9997 => Some(Recovery::RetryLater),
         3050 | 3081 => Some(Recovery::RefreshParameters),
         3072 | 9942 => Some(Recovery::CorrectCredentials),
-        3920 | 3958 | 9075 => Some(Recovery::ChooseTanMethod),
+        3920 | 3958 => Some(Recovery::ChooseTanMethod),
         3955 => Some(Recovery::WaitForApproval),
         9078 => Some(Recovery::CorrectProductIdentity),
+        9075 => Some(Recovery::StrongAuthenticationRequired),
         9185 => Some(Recovery::CorrectEndpoint),
         9391 => Some(Recovery::Resynchronize),
         9000 | 9800 | 9951 => Some(Recovery::RestartDialog),

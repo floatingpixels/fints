@@ -650,6 +650,78 @@ fn balance_request_requires_advertised_version_and_account_permission() {
     ));
 }
 
+// FinTS Formals 2017-10-06, D.2 and HIBPA 3: the BPD institute identity
+// identifies the responding institute. Parameters from a wrong endpoint must not
+// replace reusable state for the configured institute.
+#[test]
+fn gate3_wrong_endpoint_parameters_are_rejected_before_state_mutation() {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    let mismatched = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIBPA:3:3:3+41+280:87654321+Different Fictional Bank+9+1+300",
+            "HISALS:4:8:3+1+1+0+N",
+        ],
+        "dialog1",
+        1,
+    );
+
+    assert!(matches!(
+        engine.accept_initialization(&mismatched, now()),
+        Err(Error::Unsupported(Limitation::InstituteMismatch))
+    ));
+    assert_eq!(engine.state().bpd_version(), 0);
+    assert!(engine.state.balance_versions.is_empty());
+}
+
+// FinTS Formals D and Messages C.2.1.2: an advertised but unsupported HISALS
+// version differs from a completely absent balance capability.
+#[test]
+fn gate3_balance_capability_errors_distinguish_version_from_absence() {
+    let account = transaction_account("DE40123456780000123456", "123456", &[("HKSAL", 1)]);
+    let mut unsupported = engine_with_method(TanProcess::ProcessVariantTwo);
+    unsupported.state.accounts.push(account.clone());
+    unsupported.state.balance_capability_advertised = true;
+    unsupported.state.balance_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        unsupported
+            .accept_initialization(&initialized, now())
+            .unwrap(),
+        InitializationResult::Connected
+    ));
+    assert!(matches!(
+        unsupported.balance_request(0, now().date(), now().time()),
+        Err(Error::Unsupported(Limitation::BalanceVersion))
+    ));
+
+    let mut absent = engine_with_method(TanProcess::ProcessVariantTwo);
+    absent.state.accounts.push(account);
+    absent.state.balance_requires_tan = Some(false);
+    assert!(matches!(
+        absent.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    assert!(matches!(
+        absent.balance_request(0, now().date(), now().time()),
+        Err(Error::Unsupported(Limitation::BalanceNotAdvertised))
+    ));
+}
+
+// FinTS Messages 2022-04-15, C.2.1.1.1: HKKAZ 6 requires the national
+// account group. An IBAN-only UPD account cannot be silently coerced.
+#[test]
+fn gate3_legacy_transaction_account_mismatch_reports_transaction_limitation() {
+    let mut account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    account.account_number = None;
+    let mut engine = connected_transaction_engine(vec![account], false, vec![6], None, Some(false));
+
+    assert!(matches!(
+        engine.transaction_request(0, None, None, now().date(), now().time()),
+        Err(Error::Unsupported(Limitation::TransactionsVersion))
+    ));
+}
+
 // FinTS Messages 2022-04-15, C.2.3.1.1.1 and C.2.1.1.1.1-.2:
 // prefer the advertised camt operation and keep the legacy operation as fallback.
 #[test]

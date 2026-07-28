@@ -492,7 +492,11 @@ impl Engine {
             .iter()
             .copied()
             .find(|version| (6..=8).contains(version))
-            .ok_or(Limitation::BalanceNotAdvertised)?;
+            .ok_or(if self.state.balance_capability_advertised {
+                Limitation::BalanceVersion
+            } else {
+                Limitation::BalanceNotAdvertised
+            })?;
         let tan = match self.state.balance_requires_tan {
             Some(true) => {
                 let method = self.active_method()?.clone();
@@ -1014,6 +1018,12 @@ impl Engine {
     }
 
     fn apply_parameters(&mut self, response: &Response) -> Result<(), Error> {
+        if let Some(institute) = response.bpd_institute()?
+            && (institute.country_code != self.institute.country_code
+                || institute.institute_code != self.institute.institute_code)
+        {
+            return Err(Limitation::InstituteMismatch.into());
+        }
         if let Some(accounts) = response.apply_parameters(&mut self.state)? {
             self.transient_accounts = Some(accounts);
         } else if self.state.upd_version > 0 {

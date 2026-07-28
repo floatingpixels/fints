@@ -38,25 +38,23 @@ or actual credentials.
 
 ## Current assignment
 
-Only Gate 1 is active: a registered FinTS 3.0 PIN/TAN connection that discovers BPD/UPD
-and obtains an advertised cash-account balance through `HKSAL`, supporting typed or
-decoupled TAN where required.
+Only Gate 3 is active: broaden compatibility of the completed cash balance and booked
+transaction operations through official advertisement, BPD/UPD, response-code, and
+account-layout variations demonstrated by four fictional institution profiles.
 
-Start with the smallest vertical protocol path:
+The Gate 3 close-out stays narrow:
 
-1. Register the exact official specification documents and sections before coding.
-2. Write independent fictional wire fixtures for dialog initialization and the required
-   response segments.
-3. Implement only the message codec and concrete segments those fixtures require.
-4. Add synchronization plus BPD/UPD interpretation needed to select the advertised
-   balance and TAN behavior.
-5. Add explicit continuation values for typed and decoupled TAN.
-6. Return a typed balance result without consumer persistence or mapping concerns.
-7. Audit every public error and `Debug` representation for secret and private-data
-   leakage.
+1. Keep capability and segment-version selection entirely advertisement-derived.
+2. Cover one Atruvia, one Finanz Informatik, and two independent-institution protocol
+   profiles with independently written fictional fixtures.
+3. Distinguish absent capabilities from advertised but unsupported versions.
+4. Reject a mismatched HIBPA institute identity before mutating reusable state.
+5. Accept specification-permitted non-account UPD records without fabricating accounts.
+6. Preserve actionable, redacted response and endpoint failures.
 
-Do not implement booked transactions, pagination beyond what Gate 1 proves necessary,
-depots, credit cards, payments, a provider registry, or a universal public segment API.
+Do not add another banking operation, institution registry, provider abstraction,
+endpoint directory, depots, credit cards, payments, or a universal public segment API.
+Gate 4 remains closed.
 
 ## Cross-repository handoff
 

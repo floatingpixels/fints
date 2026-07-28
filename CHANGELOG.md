@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-28** — Completed Gate 3 with four fictional multibank profiles and deterministic advertised capability/version selection.
+  Added pre-mutation HIBPA institute validation, non-account HIUPD handling, the official 35-character IBAN correction, and distinct typed capability/SCA failures.
+  The 64-test network-independent stack is green with no institution registry, new operation, dependency, credential, or live capture.
+
 - **2026-07-28** — Completed Gate 2 with advertised HKCAZ/camt.052 booked transactions and bounded HKKAZ/MT940 fallback.
   Added operation-bound TAN continuations, exhaustive same-dialog pagination, repeated-point/page/entry limits, exact references or statement positions, and private typed results.
   The 51-test network-independent stack covers fictional independent wire/XML/MT940 fixtures; live verification remains owner-run.

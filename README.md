@@ -13,7 +13,7 @@ The crate is intentionally independent of Finanzplaner, Tauri, persistence, UI, 
 institution directories. Consumers provide their own endpoint, registered product
 identity, credentials, and durable storage.
 
-## Gate 1 and Gate 2 API
+## Gate 1 through Gate 3 API
 
 `Client` is a concrete synchronous HTTPS client for one institute and one user. The
 caller supplies:
@@ -109,7 +109,7 @@ containing private query data, or serialized reusable state.
   or the exact statement number, page number, and entry position. Gate 2 does not
   compare MT940 `:25:` with the requested UPD account because deployed formats vary;
   the result remains bound to the UPD account used for the request. This limitation
-  is revisited with Gate 3 fixtures.
+  remains deliberate after the Gate 3 fictional profile review.
 - Amounts, directions, dates, reversal status, references, transaction codes,
   counterpart data, and remittance information are returned only where the
   institution supplies them. No transaction fingerprint is synthesized.
@@ -118,6 +118,24 @@ containing private query data, or serialized reusable state.
 `StatementPosition` contain private financial data and deliberately omit `Debug`.
 They are process results, not serializable reusable state, and callers must never
 log them.
+
+## Supported Gate 3 compatibility
+
+- Four independently written fictional profiles cover the advertised combinations
+  demonstrated by one Atruvia institution, one Finanz Informatik institution, and
+  two independently operated institutions. Names never select protocol behavior.
+- BPD capabilities are replaced as a complete set and supported versions are
+  selected deterministically. An advertised but unsupported balance version differs
+  from an operation that was never advertised.
+- Non-account-bound HIUPD records are accepted without fabricating accounts, and the
+  official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
+- HIBPA parameters whose institute identity differs from the configured institute
+  fail before reusable state changes. Codes such as 9075 and 9185 retain distinct
+  actionable recovery categories without retaining bank free text.
+
+Gate 3 adds no institution registry, provider abstraction, endpoint discovery, new
+operation, or dependency. Stale or wrong endpoint selection remains caller-owned;
+the crate reports the typed protocol or transport evidence it can verify.
 
 ## Development
 

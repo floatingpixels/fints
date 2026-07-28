@@ -16,6 +16,7 @@ pub(super) fn apply(
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
+    let mut balance_capability_advertised = false;
     let mut received_camt_descriptors = Vec::new();
     let mut received_legacy_transaction_versions = Vec::new();
     let mut transaction_capability_advertised = false;
@@ -52,10 +53,15 @@ pub(super) fn apply(
             }
             b"HIUPD" => {
                 require_version(header.version, 6, "HIUPD")?;
-                received_accounts.push(parse_account(segment)?);
+                if let Some(account) = parse_account(segment)? {
+                    received_accounts.push(account);
+                }
             }
-            b"HISALS" if (6..=8).contains(&header.version) => {
-                received_balance_versions.push(header.version);
+            b"HISALS" => {
+                balance_capability_advertised = true;
+                if (6..=8).contains(&header.version) {
+                    received_balance_versions.push(header.version);
+                }
             }
             b"HICAZS" => {
                 transaction_capability_advertised = true;
@@ -98,6 +104,7 @@ pub(super) fn apply(
         });
         received_methods.dedup_by(|left, right| left.security_function == right.security_function);
         state.balance_versions = received_balance_versions;
+        state.balance_capability_advertised = balance_capability_advertised;
         state.balance_requires_tan = balance_requires_tan;
         state.transaction_capability_advertised = transaction_capability_advertised;
         state.camt_capability = received_camt_descriptors
@@ -120,6 +127,32 @@ pub(super) fn apply(
         }
     }
     Ok(transient_accounts)
+}
+
+pub(super) fn bpd_institute(segments: &[Segment]) -> Result<Option<InstituteState>, Error> {
+    let Some(segment) = segments.iter().find(|segment| {
+        segment
+            .header()
+            .is_some_and(|header| header.code == b"HIBPA")
+    }) else {
+        return Ok(None);
+    };
+    require_version(
+        segment.header().expect("header checked").version,
+        3,
+        "HIBPA",
+    )?;
+    let components = segment
+        .elements()
+        .get(2)
+        .ok_or(Error::MissingValue {
+            field: "BPD institute identity",
+        })?
+        .components();
+    Ok(Some(InstituteState {
+        country_code: component(components, 0, "BPD country code")?,
+        institute_code: component(components, 1, "BPD institute code")?,
+    }))
 }
 
 pub(super) fn system_id(segments: &[Segment]) -> Result<Option<String>, Error> {
@@ -224,7 +257,7 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Vec<TanMedium>, Error> {
     Ok(media)
 }
 
-fn parse_account(segment: &Segment) -> Result<Account, Error> {
+fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
     let elements = segment.elements();
     let national = elements
         .get(1)
@@ -249,11 +282,18 @@ fn parse_account(segment: &Segment) -> Result<Account, Error> {
             });
         }
     };
-    let iban = optional_single_text(elements, 2);
+    let mut iban = optional_single_text(elements, 2);
     if account_number.is_none() && iban.is_none() {
-        return Err(Error::MissingValue {
-            field: "UPD account identity",
-        });
+        // Formals E.3 permits HIUPD records for non-account-bound operations.
+        return Ok(None);
+    }
+    if iban
+        .as_ref()
+        .is_some_and(|value| value.chars().count() == 35)
+    {
+        // Formals HIUPD 6 correction: tolerate the original erroneous 35-character
+        // maximum by discarding exactly the final character.
+        iban.as_mut().expect("IBAN checked").pop();
     }
 
     let mut allowed_operations = Vec::new();
@@ -281,7 +321,7 @@ fn parse_account(segment: &Segment) -> Result<Account, Error> {
         });
     }
 
-    Ok(Account {
+    Ok(Some(Account {
         iban,
         bic: None,
         account_number,
@@ -299,7 +339,7 @@ fn parse_account(segment: &Segment) -> Result<Account, Error> {
         owner_name_2: optional_single_text(elements, 7),
         product_name: optional_single_text(elements, 8),
         allowed_operations,
-    })
+    }))
 }
 
 fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bool>, Error> {

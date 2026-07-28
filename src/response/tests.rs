@@ -198,6 +198,172 @@ fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
     assert!(state.accounts()[0].allows_booked_transactions());
 }
 
+// Gate 3 fictional Atruvia profile. The interoperability lead is non-authoritative;
+// the accepted camt-only combination is governed by FinTS Messages 2022-04-15,
+// C.2.3.1.1.1, Formals D/E, and PIN/TAN correction T31.
+#[test]
+fn gate3_atruvia_profile_accepts_advertised_camt_without_legacy_turnover() {
+    let descriptor = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+17+280:12345678+Fictional Cooperative Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+90:J:N:{descriptor}"),
+            "HIPINS:5:1:3+1+1+0+4:6:6:::HKCAZ:N".into(),
+            "HIUPA:6:4:3+fictional-user+4+0".into(),
+            concat!(
+                "HIUPD:7:6:3+111111::280:12345678+DE40123456780000111111",
+                "+fictional-customer+1+EUR+Fictional Person++Checking++HKCAZ:1"
+            )
+            .into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert!(state.transaction_capability_advertised);
+    assert!(state.camt_capability.is_some());
+    assert!(state.legacy_transaction_versions.is_empty());
+    assert_eq!(state.camt_requires_tan, Some(false));
+    assert!(state.accounts()[0].allows_booked_transactions());
+}
+
+// Gate 3 fictional Finanz Informatik profile. The independently written response
+// exercises protocol-advertised duplicate/simultaneous versions under Formals D/E,
+// Messages C.2.1.1.1 and C.2.1.2, plus return code 3076.
+#[test]
+fn gate3_finanz_informatik_profile_deduplicates_negotiated_versions() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted+3076::SCA not required".into(),
+            "HIBPA:3:3:3+23+280:12345678+Fictional Savings Bank+9+1+300".into(),
+            "HISALS:4:6:3+1+1+0+N".into(),
+            "HISALS:5:8:3+1+1+0+N".into(),
+            "HISALS:6:8:3+1+1+0+N".into(),
+            "HIKAZS:7:6:3+1+1+0+90:J:N".into(),
+            "HIKAZS:8:7:3+1+1+0+90:J:N".into(),
+            "HIKAZS:9:7:3+1+1+0+90:J:N".into(),
+            "HIPINS:10:1:3+1+1+0+4:6:6:::HKSAL:N:HKKAZ:N".into(),
+            "HIUPA:11:4:3+fictional-user+5+0".into(),
+            concat!(
+                "HIUPD:12:6:3+222222::280:12345678+DE40123456780000222222",
+                "+fictional-customer+1+EUR+Fictional Person++Checking",
+                "++HKSAL:1+HKKAZ:1+HKSAL:1"
+            )
+            .into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    let response = Response::parse(&fixture).unwrap();
+    response.apply_parameters(&mut state).unwrap();
+
+    assert_eq!(state.balance_versions, [8, 6]);
+    assert_eq!(state.legacy_transaction_versions, [7, 6]);
+    assert_eq!(state.balance_requires_tan, Some(false));
+    assert_eq!(state.legacy_transactions_require_tan, Some(false));
+    assert_eq!(response.responses()[1].code(), 3076);
+}
+
+// Gate 3 fictional independent-institution legacy profile. FinTS Messages
+// C.2.1.1.1 and C.2.1.2.1 explicitly retain national HKKAZ/HKSAL version 6.
+#[test]
+fn gate3_independent_legacy_profile_accepts_national_account_operations() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+5+280:12345678+Fictional Private Bank+9+1+300".into(),
+            "HISALS:4:6:3+1+1+0+N".into(),
+            "HIKAZS:5:6:3+1+1+0+90:J:N".into(),
+            "HIPINS:6:1:3+1+1+0+4:6:6:::HKSAL:N:HKKAZ:N".into(),
+            "HIUPA:7:4:3+fictional-user+2+0".into(),
+            concat!(
+                "HIUPD:8:6:3+333333::280:12345678++fictional-customer+1",
+                "+EUR+Fictional Person++Checking++HKSAL:1+HKKAZ:1"
+            )
+            .into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.balance_versions, [6]);
+    assert_eq!(state.legacy_transaction_versions, [6]);
+    assert!(state.accounts()[0].iban().is_none());
+    assert_eq!(state.accounts()[0].account_number(), Some("333333"));
+}
+
+// Gate 3 fictional independent-institution SCA profile. The current official
+// return-code register defines 9075 as strong authentication required and 9185
+// as an unsupported or obsolete FinTS/HBCI version.
+#[test]
+fn gate3_independent_sca_profile_exposes_actionable_recovery_categories() {
+    let fixture = message(
+        &["HIRMG:2:2+9075::strong authentication required+9185::version unsupported".into()],
+        "dialog1",
+        1,
+    );
+    let response = Response::parse(&fixture).unwrap();
+
+    assert_eq!(
+        response.responses()[0].recovery(),
+        Some(crate::Recovery::StrongAuthenticationRequired)
+    );
+    assert_eq!(
+        response.responses()[1].recovery(),
+        Some(crate::Recovery::CorrectEndpoint)
+    );
+}
+
+// FinTS Formals 2017-10-06, E.3 and HIUPD 6: non-account-bound operation
+// records may omit the account binding. The published Data Dictionary correction
+// additionally permits cutting the erroneous 35th IBAN character.
+#[test]
+fn gate3_upd_skips_non_account_records_and_applies_iban_length_correction() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+9+280:12345678+Fictional Direct Bank+9+1+300".into(),
+            "HIUPA:4:4:3+fictional-user+6+0".into(),
+            "HIUPD:5:6:3+++fictional-customer+++++++HKTAB:1".into(),
+            concat!(
+                "HIUPD:6:6:3+444444::280:12345678",
+                "+DE40123456780000123456ABCDEFGHIJKLM",
+                "+fictional-customer+1+EUR+Fictional Person++Checking++HKSAL:1"
+            )
+            .into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.accounts().len(), 1);
+    assert_eq!(
+        state.accounts()[0].iban(),
+        Some("DE40123456780000123456ABCDEFGHIJKL")
+    );
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, C.3.1.1 and Data Dictionary
 // "TAN-Medium-Liste" 5.
 #[test]

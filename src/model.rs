@@ -379,6 +379,8 @@ pub struct ReusableState {
     pub(crate) bpd_version: u16,
     pub(crate) upd_version: u16,
     pub(crate) balance_versions: Vec<u16>,
+    #[serde(default)]
+    pub(crate) balance_capability_advertised: bool,
     pub(crate) balance_requires_tan: Option<bool>,
     #[serde(default)]
     pub(crate) transaction_capability_advertised: bool,

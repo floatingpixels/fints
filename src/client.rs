@@ -72,7 +72,7 @@ pub struct BookedTransactionContinuation {
     pending: PendingChallenge,
 }
 
-/// Concrete synchronous Gate 1 and Gate 2 FinTS client.
+/// Concrete synchronous FinTS client for the operations supported through Gate 3.
 ///
 /// The client deliberately has no `Debug` implementation because it owns credentials,
 /// dialog state, challenges, and authenticated protocol messages.
