@@ -149,6 +149,88 @@ fn balance_versions_use_independent_account_layout_fixtures() {
     );
 }
 
+// FinTS Messages 2022-04-15, C.2.3.1.1.1 and C.2.1.1.1.1-.2;
+// Formals B.6. These expected segments are written independently of the encoder.
+#[test]
+fn transaction_requests_match_camt_and_legacy_wire_fixtures() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let credentials = Credentials::new("fictional-user", None, "private-pin").unwrap();
+    let context = security_context(&institute, &credentials);
+    let account = fictional_account(Some("DE40123456780000123456"));
+    let from = NaiveDate::from_ymd_opt(2026, 7, 1);
+    let to = NaiveDate::from_ymd_opt(2026, 7, 28);
+
+    let camt = TransactionFormat::Camt {
+        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
+    };
+    let encoded = transaction_request(
+        &context,
+        TransactionRequest {
+            account: &account,
+            format: &camt,
+            from,
+            to,
+            continuation_point: Some("fictional-next"),
+        },
+        None,
+    )
+    .unwrap();
+    let payload = Message::parse(&encoded)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let operation = payload
+        .iter()
+        .find(|segment| segment.header().unwrap().code == b"HKCAZ")
+        .unwrap();
+    assert_eq!(
+        encode_segments(std::slice::from_ref(operation)).unwrap(),
+        concat!(
+            "HKCAZ:3:1+DE40123456780000123456::123456::280:12345678",
+            "+urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08",
+            "+N+20260701+20260728++fictional-next'"
+        )
+        .as_bytes()
+    );
+
+    for (version, expected) in [
+        (6, "HKKAZ:3:6+123456::280:12345678+N+20260701+20260728'"),
+        (
+            7,
+            concat!(
+                "HKKAZ:3:7+DE40123456780000123456::123456::280:12345678",
+                "+N+20260701+20260728'"
+            ),
+        ),
+    ] {
+        let format = TransactionFormat::Mt940 { version };
+        let encoded = transaction_request(
+            &context,
+            TransactionRequest {
+                account: &account,
+                format: &format,
+                from,
+                to,
+                continuation_point: None,
+            },
+            None,
+        )
+        .unwrap();
+        let payload = Message::parse(&encoded)
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        let operation = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKKAZ")
+            .unwrap();
+        assert_eq!(
+            encode_segments(std::slice::from_ref(operation)).unwrap(),
+            expected.as_bytes()
+        );
+    }
+}
+
 // FinTS 3.0 Formals 2017-10-06, C.8.1; PIN/TAN 2020-07-10,
 // B.5.1-B.5.2 and correction T33.
 #[test]

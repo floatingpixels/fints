@@ -9,7 +9,7 @@ Specification PDFs were downloaded only into the ignored `local/` directory for 
 research pass. They are not part of the repository. Access date for every source below
 is 2026-07-28.
 
-## Gate 1 normative documents
+## FinTS normative documents
 
 ### FinTS — Financial Transaction Services, Schnittstellenspezifikation, Formals
 
@@ -107,11 +107,18 @@ is 2026-07-28.
   C.2.1.2.1-C.2.1.2.3 (HKSAL/HISAL/HISALS versions 6, 7, and 8), and the
   related Data Dictionary entries for amount, booked balance, pending balance,
   credit/debit sign, currency, date, time, and timestamp.
+- **Gate 2 sections:** C.2.1.1.1 (HKKAZ/HIKAZ/HIKAZS versions 6 and 7) and
+  C.2.3.1.1.1 (HKCAZ/HICAZ/HICAZS version 1), including their request account
+  groups, date ranges, maximum-entry and Aufsetzpunkt fields, binary booked-data
+  response groups, BPD parameter segments, and the related Data Dictionary
+  entries. HKCAZ is preferred; HKKAZ 7 and then 6 are the bounded legacy
+  fallbacks only when advertised and authorized.
 - **Apply alongside:** G102/CR 525 is already incorporated into this Release
   2022 volume. The current return-code volume still applies.
 - **Authorizes:** negotiated Gate 1 balance requests and responses for segment
   versions 6-8 and their typed account, amount, currency, sign, date/time, and
-  optional-value semantics.
+  optional-value semantics; and Gate 2 HKCAZ 1 or bounded HKKAZ 7/6 booked
+  transaction retrieval, including the operation-specific continuation field.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -126,11 +133,13 @@ is 2026-07-28.
   0030, 0100, 3010, 3040, 3050, 3072, 3075, 3076, 3081, 3920, 3955-3958,
   9000, 9075, 9078, 9110, 9130, 9185, 9210, 9380, 9391, 9800, 9942, 9951,
   and 9997.
+- **Gate 2 sections:** B.1-B.4, especially code 3040 and its mandatory
+  Aufsetzpunkt parameter, plus 9210 for a rejected continuation point.
 - **Apply alongside:** Formals B.6-B.7 and the operation-specific selected
   response-code examples. The online register has the same 2026-02-03 release
   date and must be checked for later changes before implementation.
-- **Authorizes:** typed Gate 1 success, warning, error, continuation, SCA,
-  synchronization, and indeterminate-status outcomes.
+- **Authorizes:** typed Gate 1 and Gate 2 success, warning, error, pagination,
+  SCA, synchronization, and indeterminate-status outcomes.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -165,14 +174,136 @@ Gate 1 applies these entries:
 - **Messages:** G102/CR 525 (2022-02-24, HKSAL version 8), incorporated into
   the Messages Release 2022 PDF.
 
-Two correction attachments were retained temporarily for exact review:
+Gate 2 additionally applies these entries:
 
-- **T31 attachment:** `CR0511_Anl1_Klarstellung_zur_Umsatzabfrage_ohne_TAN_3.0_FV.pdf`,
-  Security PIN/TAN B.3 page 21, 2019-09-12; SHA-256
-  `a1f7736f1bacd4bd9770dff8cfcf5dddd3eb880e8a56be225f40e353efc9cae5`.
-  It authorizes distinguishing a statically TAN-exempt balance request from an
-  HKTAN-accompanied request whose SCA exemption is decided at execution time.
-- **T33 attachments:** `CR0517_Fehlerkorrektur·HKTAN_6.pdf` (SHA-256
+- **G97** (2020-07-10): a valid camt.052 response may contain more than one
+  booking day; transaction parsing must not assume one report date.
+- **G108** (2023-01-26): camt.052.001.08 examples for HKCAZ, including
+  continuation within a booking day and between booking days.
+- **T31** (2019-09-12): turnover queries may be statically TAN-exempt or may
+  require an HKTAN whose SCA exemption is decided during execution.
+
+## Gate 2 financial-data documents
+
+### DFÜ-Abkommen, Anlage 3 — Spezifikation der Datenformate
+
+- **Protocol/release:** Version 3.9, Final Version, 2025-03-12.
+- **Official source:** [valid DK data-format
+  version](https://www.ebics.de/de/datenformate/gueltige-version) (official
+  filename `Anlage_3_Datenformate_V3.9.pdf`).
+- **Research SHA-256:** `218ceb0c0962a14eaf6f18960e158dd0e5ad0954eebdbe4132e3f09a3b58a6b3`.
+- **Gate 2 sections:** 7, especially 7.1.1 (message pagination), 7.1.2
+  (account), 7.1.6 (entry), 7.1.7 (transaction details), and 7.2
+  (camt.052 occupancy). Gate 2 accepts only `BOOK` entries from
+  `camt.052.001.08`, preserves supplied entry and account-servicer references,
+  and keeps optional data absent when the XML omits it.
+- **Apply alongside:** G97 and G108 from the FinTS correction register and the
+  FinTS Messages HKCAZ/HICAZ version 1 transport segments.
+- **Authorizes:** namespace-aware, UTF-8 camt.052.001.08 parsing of the booked
+  response payload returned by HICAZ, including exact amounts, booking/value
+  dates, transaction references, counterpart data, and remittance information
+  only where supplied.
+- **Access/redistribution:** the official PDF is rights-reserved and was
+  downloaded only to ignored `local/` for research. It is not committed or
+  redistributed.
+
+### DFÜ-Abkommen, Anlage 3 — Spezifikation der Datenformate (archived MT940 rules)
+
+- **Protocol/release:** Version 3.8, Final Version, 2024-04-08.
+- **Official source:** [official DK data-format
+  archive](https://www.ebics.de/de/datenformate/archiv), archive
+  `Anlage3_Archiv_V3_8.zip`, containing
+  `Anlage_3_Datenformate_V3.8.pdf`.
+- **Research SHA-256:** PDF
+  `c22b5bf6d6d0c8557e0f69ca8cd97412d5f1c2fb711f77a844c3627412ea60ee`
+  (download archive
+  `84448f62d6bad5953a3745ba1a9f991c6da538605c29502b0790564cb488c66d`).
+- **Gate 2 sections:** 8.1 (syntax), 8.2.1-8.2.4 (MT940 layout, occupancy,
+  field 61 booking key, and structured field 86), and 8.2.5 (example).
+  Version 3.9 section 8 explicitly marks MT940/MT942 as removed and points to
+  this archived version for the last applicable rules.
+- **Apply alongside:** FinTS Messages HKKAZ/HIKAZ versions 6 and 7 and Formals
+  B.6 pagination. MT942 pending entries are outside Gate 2.
+- **Authorizes:** the bounded advertised HKKAZ fallback parser for booked MT940
+  entries, preserving the bank reference from field 61 or the exact statement
+  sequence and entry position when no bank reference is supplied.
+- **Access/redistribution:** the archive and PDF are rights-reserved research
+  copies under ignored `local/`; neither is committed or redistributed.
+
+### FinTS Formals pagination rules applied by Gate 2
+
+- **Protocol/release:** FinTS 3.0-FV Formals, Final Version, 2017-10-06; same
+  source, SHA-256, and redistribution terms as the Formals entry above.
+- **Gate 2 sections:** B.6 `Aufsetzpunkt` and `Maximale Anzahl Einträge`.
+  Code 3040 requires automatically resending the same retrieval order with the
+  opaque point in the same dialog until complete; the point becomes invalid
+  when that dialog ends.
+- **Apply alongside:** the current return-code register's 3040 and 9210
+  definitions and the operation-specific HKCAZ/HKKAZ field occupancy.
+- **Authorizes:** automatic same-dialog pagination with opaque continuation
+  points, subject to local repeated-point and page-count safety limits.
+
+### FinTS correction G97 — clarification for booked camt turnover data
+
+- **Protocol/release:** FinTS 3.0 Messages correction G97, clarification,
+  2020-07-10.
+- **Official source:** [FinTS correction and extension
+  register](https://www.fints.org/de/spezifikation/aenderungen), entry G97.
+- **Research SHA-256:** not applicable; G97 is published inline in the official
+  register and has no separate downloadable artifact.
+- **Gate 2 sections:** Messages Data Dictionary elements `Gebuchte camt-Umsätze`
+  and `camt-Umsätze gebucht`.
+- **Apply alongside:** FinTS Messages HKCAZ/HICAZ 1 and DK Anlage 3 v3.9
+  chapter 7.
+- **Authorizes:** accepting an otherwise valid camt.052 message whose entries
+  cover more than one booking day.
+- **Access/redistribution:** accessed 2026-07-28. The live register is
+  rights-reserved and is linked rather than copied.
+
+### FinTS correction G108 — camt.052 examples for ISO version 2019
+
+- **Protocol/release:** CR 532 Annex 1, clarification G108, 2023-01-26.
+- **Official source:** [FinTS correction and extension
+  register](https://www.fints.org/de/spezifikation/aenderungen), entry G108
+  `Beispiele für die eindeutige Belegung von camt.052-messages bei HKCAZ für die
+  ISO-Version 2019`.
+- **Research SHA-256:** `27efb2027c67dc0d2b0895460b1608b6bd0a47aea56e928c61ed7855cc3d0fa9`
+  (official filename
+  `CR0532_Anl1_Beispiele camt-Umsätze in ISO-Version 2019_FV.pdf`).
+- **Gate 2 sections:** the three HKCAZ examples: without an Aufsetzpunkt,
+  with an Aufsetzpunkt within one booking day, and with an Aufsetzpunkt between
+  booking days.
+- **Apply alongside:** Formals B.6, Messages HKCAZ/HICAZ 1, G97, and DK
+  Anlage 3 v3.9 chapter 7.
+- **Authorizes:** the camt.052.001.08 occupancy used by HKCAZ and exhaustive
+  FinTS continuation across and within booking days. Gate 2 still discards
+  pending entries.
+- **Access/redistribution:** accessed 2026-07-28. Redistribution rights were not
+  reviewed; the research copy remains ignored under `local/` and is not
+  committed.
+
+### FinTS PIN/TAN correction T31 — turnover query without TAN
+
+- **Protocol/release:** FinTS 3.0 PIN/TAN correction T31, clarification,
+  2019-09-12.
+- **Official source:** [FinTS correction and extension
+  register](https://www.fints.org/de/spezifikation/aenderungen), entry T31
+  (attachment
+  `CR0511_Anl1_Klarstellung_zur_Umsatzabfrage_ohne_TAN_3.0_FV.pdf`).
+- **Research SHA-256:** `a1f7736f1bacd4bd9770dff8cfcf5dddd3eb880e8a56be225f40e353efc9cae5`.
+- **Gate 2 sections:** Security PIN/TAN B.3 page 21 and the corrected
+  balance/turnover SCA example.
+- **Apply alongside:** HIPINS operation TAN status and the selected HKTAN/HITAN
+  6 or 7 process.
+- **Authorizes:** distinguishing a statically TAN-exempt turnover request from
+  an HKTAN-accompanied request whose SCA exemption is decided during execution.
+- **Access/redistribution:** accessed 2026-07-28. Redistribution rights were not
+  reviewed; the research copy remains ignored under `local/` and is not
+  committed.
+
+Two T33 attachments were retained temporarily for exact Gate 1 review:
+
+- `CR0517_Fehlerkorrektur·HKTAN_6.pdf` (SHA-256
   `dfc8f99baf55e550eed99fa1d62700d65f748d780b1bde601c5c23b179c798cf`)
   and `CR0517_Fehlerkorrektur·HKTAN_7.pdf` (SHA-256
   `a69f25759028f5d9753258a65320d8ff4f83b9588588abd6781adf08f1f3301a`),
@@ -207,7 +338,7 @@ or owner data is stored in this repository.
 ## Non-protocol implementation references
 
 These sources do not define FinTS behavior. They constrain the Rust implementation
-and correspond to the direct dependency versions selected for Gate 1:
+and correspond to the direct dependency versions selected for the supported gates:
 
 - [Rust `Debug`](https://doc.rust-lang.org/stable/std/fmt/trait.Debug.html):
   derived formatting exposes fields, so secret-bearing protocol types must omit it
@@ -223,6 +354,13 @@ and correspond to the direct dependency versions selected for Gate 1:
   engine](https://docs.rs/base64/0.22.1/base64/engine/general_purpose/index.html):
   implements the complete-message Base64 encoding inherited from the historical
   HBCI PIN/TAN HTTPS mapping; decoding failure remains an explicit transport error.
+- [`quick-xml` 0.41.0
+  `NsReader`](https://docs.rs/quick-xml/0.41.0/quick_xml/reader/struct.NsReader.html):
+  provides streaming namespace-aware XML events for bounded camt.052 parsing,
+  with default features disabled. Version 0.41 is the minimum because it fixes
+  [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195.html)
+  by bounding namespace declarations per element; the implementation keeps the
+  default cap of 256 or a tighter value and treats XML failures as typed errors.
 - [`encoding_rs` 0.8.35
   `mem`](https://docs.rs/encoding_rs/0.8.35/encoding_rs/mem/index.html):
   provides strict Latin-1 range checks and Latin-1/UTF-8 conversion primitives;
@@ -231,7 +369,7 @@ and correspond to the direct dependency versions selected for Gate 1:
 - [`chrono` 0.4.45](https://docs.rs/chrono/0.4.45/chrono/): provides checked
   parsing and construction for protocol-defined dates and times.
 - [`serde` derive](https://serde.rs/derive.html): applies only to the explicitly
-  reusable Gate 1 synchronization state named in `SCOPE.md`.
+  reusable synchronization and BPD/UPD capability state named in `SCOPE.md`.
 - [`thiserror` 2.0.19](https://docs.rs/thiserror/2.0.19/thiserror/): supports typed
   errors, but all error text and source conversion still require an explicit
   redaction review.

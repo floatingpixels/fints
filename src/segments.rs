@@ -2,7 +2,10 @@ use chrono::{NaiveDate, NaiveTime};
 
 use crate::{
     error::{Error, Limitation},
-    model::{Account, Credentials, InstituteId, ProductIdentity, ReusableState, TanMethod},
+    model::{
+        Account, Credentials, InstituteId, ProductIdentity, ReusableState, TanMethod,
+        TransactionFormat,
+    },
     wire::{Element, Message, Segment, Value, encode_segments},
 };
 
@@ -153,6 +156,64 @@ pub(crate) fn balance_request(
             TanStep::Initial {
                 operation: "HKSAL",
                 medium_name: medium,
+            },
+        )?);
+    }
+    authenticated(context, operations, None)
+}
+
+pub(crate) struct TransactionRequest<'a> {
+    pub(crate) account: &'a Account,
+    pub(crate) format: &'a TransactionFormat,
+    pub(crate) from: Option<NaiveDate>,
+    pub(crate) to: Option<NaiveDate>,
+    pub(crate) continuation_point: Option<&'a str>,
+}
+
+pub(crate) fn transaction_request(
+    context: &SecurityContext<'_>,
+    request: TransactionRequest<'_>,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
+    let (operation, version, mut elements) = match request.format {
+        TransactionFormat::Camt { descriptor } => (
+            "HKCAZ",
+            1,
+            vec![
+                international_account(request.account)?,
+                group(&[descriptor])?,
+                text("N")?,
+            ],
+        ),
+        TransactionFormat::Mt940 { version: 6 } => (
+            "HKKAZ",
+            6,
+            vec![national_account(request.account)?, text("N")?],
+        ),
+        TransactionFormat::Mt940 { version: 7 } => (
+            "HKKAZ",
+            7,
+            vec![international_account(request.account)?, text("N")?],
+        ),
+        TransactionFormat::Mt940 { .. } => return Err(Limitation::TransactionsVersion.into()),
+    };
+    elements.push(optional_date(request.from)?);
+    elements.push(optional_date(request.to)?);
+    if request.continuation_point.is_some() {
+        elements.push(text("")?);
+        elements.push(text(request.continuation_point.unwrap_or_default())?);
+    } else {
+        while elements.last().is_some_and(element_is_empty) {
+            elements.pop();
+        }
+    }
+    let mut operations = vec![raw_segment(operation, version, elements)];
+    if let Some((method, medium_name)) = tan {
+        operations.push(raw_hktan(
+            method.hktan_version,
+            TanStep::Initial {
+                operation,
+                medium_name,
             },
         )?);
     }
@@ -505,6 +566,21 @@ fn group(values: &[&str]) -> Result<Element, Error> {
             .map(|value| Value::text(value))
             .collect::<Result<Vec<_>, _>>()?,
     ))
+}
+
+fn optional_date(value: Option<NaiveDate>) -> Result<Element, Error> {
+    text(
+        &value
+            .map(|date| date.format("%Y%m%d").to_string())
+            .unwrap_or_default(),
+    )
+}
+
+fn element_is_empty(element: &Element) -> bool {
+    element
+        .components()
+        .iter()
+        .all(|value| value.as_text().is_some_and(|text| text.is_empty()))
 }
 
 #[cfg(test)]

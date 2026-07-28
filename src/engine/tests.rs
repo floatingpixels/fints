@@ -20,6 +20,38 @@ fn response(segments: &[&str], dialog_id: &str, message_number: u16) -> Vec<u8> 
     wire.into_bytes()
 }
 
+fn binary_response(
+    prefix: &str,
+    payload: &[u8],
+    suffix: &str,
+    dialog_id: &str,
+    message_number: u16,
+) -> Vec<u8> {
+    let mut wire = format!(
+        "HNHBK:1:3+000000000000+300+{dialog_id}+{message_number}+{dialog_id}:1'\
+         HIRMG:2:2+0010::accepted'{prefix}"
+    )
+    .into_bytes();
+    wire.extend_from_slice(payload.len().to_string().as_bytes());
+    wire.push(b'@');
+    wire.extend_from_slice(payload);
+    wire.extend_from_slice(suffix.as_bytes());
+    let length = format!("{:012}", wire.len());
+    wire[10..22].copy_from_slice(length.as_bytes());
+    wire
+}
+
+fn mt940_page(statement: u16, bank_reference: &str) -> Vec<u8> {
+    format!(
+        "\r\n:20:FICTIONAL{statement}\r\n:25:12345678/123456\r\n\
+         :28C:{statement}/1\r\n:60F:C260727EUR100,00\r\n\
+         :61:2607280728C1,00NTRFFICTREF//{bank_reference}\r\n\
+         :86:166?20SVWZ+Fictional page {statement}\r\n\
+         :62F:C260728EUR101,00\r\n-"
+    )
+    .into_bytes()
+}
+
 fn now() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 7, 28)
         .unwrap()
@@ -63,6 +95,55 @@ fn engine_with_method(process: TanProcess) -> Engine {
         state,
     )
     .unwrap()
+}
+
+fn transaction_account(iban: &str, account_number: &str, operations: &[(&str, u8)]) -> Account {
+    Account {
+        iban: Some(iban.to_owned()),
+        bic: None,
+        account_number: Some(account_number.to_owned()),
+        subaccount: None,
+        institute: Some(InstituteState {
+            country_code: "280".to_owned(),
+            institute_code: "12345678".to_owned(),
+        }),
+        currency: Some("EUR".to_owned()),
+        account_type: Some(1),
+        owner_name_1: Some("Fictional Person".to_owned()),
+        owner_name_2: None,
+        product_name: Some("Checking".to_owned()),
+        allowed_operations: operations
+            .iter()
+            .map(|(code, required_signatures)| OperationPermission {
+                code: (*code).to_owned(),
+                required_signatures: *required_signatures,
+            })
+            .collect(),
+    }
+}
+
+fn connected_transaction_engine(
+    accounts: Vec<Account>,
+    camt: bool,
+    legacy_versions: Vec<u16>,
+    camt_requires_tan: Option<bool>,
+    legacy_requires_tan: Option<bool>,
+) -> Engine {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = accounts;
+    engine.state.transaction_capability_advertised = camt || !legacy_versions.is_empty();
+    engine.state.camt_capability = camt.then(|| crate::model::CamtCapability {
+        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
+    });
+    engine.state.legacy_transaction_versions = legacy_versions;
+    engine.state.camt_requires_tan = camt_requires_tan;
+    engine.state.legacy_transactions_require_tan = legacy_requires_tan;
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    engine
 }
 
 #[test]
@@ -566,5 +647,260 @@ fn balance_request_requires_advertised_version_and_account_permission() {
     assert!(matches!(
         engine.accept_balance(&mismatched, now()),
         Err(Error::InconsistentState)
+    ));
+}
+
+// FinTS Messages 2022-04-15, C.2.3.1.1.1 and C.2.1.1.1.1-.2:
+// prefer the advertised camt operation and keep the legacy operation as fallback.
+#[test]
+fn transaction_format_selection_prefers_camt_without_guessing_tan_status() {
+    let account = transaction_account(
+        "DE40123456780000123456",
+        "123456",
+        &[("HKCAZ", 1), ("HKKAZ", 1)],
+    );
+    let mut engine =
+        connected_transaction_engine(vec![account], true, vec![7], Some(false), Some(true));
+
+    let request = engine
+        .transaction_request(
+            0,
+            NaiveDate::from_ymd_opt(2026, 7, 1),
+            Some(now().date()),
+            now().date(),
+            now().time(),
+        )
+        .unwrap();
+    let payload = crate::wire::Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+
+    assert!(
+        payload
+            .iter()
+            .any(|segment| segment.header().unwrap().code == b"HKCAZ")
+    );
+    assert!(
+        payload
+            .iter()
+            .all(|segment| segment.header().unwrap().code != b"HKKAZ")
+    );
+    assert!(
+        payload
+            .iter()
+            .all(|segment| segment.header().unwrap().code != b"HKTAN")
+    );
+
+    let account = transaction_account(
+        "DE40123456780000123456",
+        "123456",
+        &[("HKCAZ", 1), ("HKKAZ", 1)],
+    );
+    let fallback = connected_transaction_engine(vec![account], true, vec![7], None, Some(false));
+    assert!(matches!(
+        fallback.transaction_format(&fallback.state.accounts[0]),
+        Ok((TransactionFormat::Mt940 { version: 7 }, false))
+    ));
+}
+
+// FinTS Formals 2017-10-06, B.6 and Messages 2022-04-15,
+// C.2.1.1.1.1-.2. Pagination repeats the same order in one dialog with the
+// returned Aufsetzpunkt, and entries remain attached to the requested UPD account.
+#[test]
+fn booked_transactions_exhaust_pagination_and_keep_accounts_distinct() {
+    let first_account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    let second_account = transaction_account("DE21123456780000654321", "654321", &[("HKKAZ", 1)]);
+    let mut engine = connected_transaction_engine(
+        vec![first_account, second_account],
+        false,
+        vec![7],
+        None,
+        Some(false),
+    );
+
+    engine
+        .transaction_request(1, None, None, now().date(), now().time())
+        .unwrap();
+    let first_page = binary_response(
+        "HIRMS:3:2:3+3040::more:fictional-next'HIKAZ:4:7:3+@",
+        &mt940_page(1, "FICTBANKREF1"),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        engine.accept_transactions(&first_page, now()).unwrap(),
+        TransactionsResult::Continue
+    ));
+
+    let continuation = engine
+        .next_transaction_page_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&continuation)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let hkkaz = payload
+        .iter()
+        .find(|segment| segment.header().unwrap().code == b"HKKAZ")
+        .unwrap();
+    assert_eq!(
+        hkkaz.elements().last().unwrap().components()[0]
+            .as_text()
+            .unwrap(),
+        "fictional-next"
+    );
+
+    let second_page = binary_response(
+        "HIKAZ:3:7:3+@",
+        &mt940_page(2, "FICTBANKREF2"),
+        "'HNHBS:4:1+3'",
+        "dialog1",
+        3,
+    );
+    let result = match engine.accept_transactions(&second_page, now()).unwrap() {
+        TransactionsResult::Complete(result) => result,
+        _ => panic!("expected complete paginated transaction result"),
+    };
+
+    assert_eq!(result.account().iban(), Some("DE21123456780000654321"));
+    assert_eq!(result.entries().len(), 2);
+    assert_eq!(
+        result.entries()[0].account_servicer_reference(),
+        Some("FICTBANKREF1")
+    );
+    assert_eq!(
+        result.entries()[1].account_servicer_reference(),
+        Some("FICTBANKREF2")
+    );
+}
+
+// FinTS Formals 2017-10-06, B.6 plus the repository's bounded-pagination
+// contract: repeated points and excessive page counts fail before another replay.
+#[test]
+fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
+    let account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    let mut repeated =
+        connected_transaction_engine(vec![account.clone()], false, vec![7], None, Some(false));
+    repeated
+        .transaction_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let first = binary_response(
+        "HIRMS:3:2:3+3040::more:fictional-repeat'HIKAZ:4:7:3+@",
+        &mt940_page(1, "FICTBANKREF1"),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    repeated.accept_transactions(&first, now()).unwrap();
+    repeated
+        .next_transaction_page_request(now().date(), now().time())
+        .unwrap();
+    let second = binary_response(
+        "HIRMS:3:2:3+3040::more:fictional-repeat'HIKAZ:4:7:3+@",
+        &mt940_page(2, "FICTBANKREF2"),
+        "'HNHBS:5:1+3'",
+        "dialog1",
+        3,
+    );
+    assert!(matches!(
+        repeated.accept_transactions(&second, now()),
+        Err(Error::RepeatedContinuationPoint)
+    ));
+
+    let mut bounded =
+        connected_transaction_engine(vec![account], false, vec![7], None, Some(false));
+    bounded
+        .transaction_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    bounded.accept_transactions(&first, now()).unwrap();
+    bounded.transaction.as_mut().unwrap().pages_requested = LOCAL_TRANSACTION_PAGE_LIMIT;
+    assert!(matches!(
+        bounded.next_transaction_page_request(now().date(), now().time()),
+        Err(Error::PaginationLimitReached)
+    ));
+}
+
+// PIN/TAN correction T31 and FinTS PIN/TAN 2020-07-10, B.5.2:
+// the advertised operation TAN status governs the transaction continuation.
+#[test]
+fn booked_transaction_tan_continuation_is_typed_and_operation_bound() {
+    let account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    let mut engine = connected_transaction_engine(vec![account], false, vec![7], None, Some(true));
+    let request = engine
+        .transaction_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert!(payload.iter().any(|segment| {
+        segment.header().unwrap().code == b"HKTAN"
+            && segment.elements()[2].components()[0]
+                .as_text()
+                .is_some_and(|operation| operation == "HKKAZ")
+    }));
+
+    let challenge = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HITAN:3:6:3+4++fictional-transaction-reference+Approve fictional entries",
+        ],
+        "dialog1",
+        2,
+    );
+    let pending = match engine.accept_transactions(&challenge, now()).unwrap() {
+        TransactionsResult::Challenge(pending) => *pending,
+        _ => panic!("expected transaction TAN challenge"),
+    };
+    engine
+        .tan_submission_request(&pending, &Tan::new("123456").unwrap(), now())
+        .unwrap();
+    let completion = binary_response(
+        "HIKAZ:3:7:3+@",
+        &mt940_page(1, "FICTBANKREF1"),
+        "'HNHBS:4:1+3'",
+        "dialog1",
+        3,
+    );
+
+    assert!(matches!(
+        engine
+            .accept_transactions_continuation(&completion, pending, now())
+            .unwrap(),
+        TransactionsResult::Complete(_)
+    ));
+}
+
+// SCOPE Gate 2: BPD/UPD capabilities are authoritative and unsupported
+// combinations remain typed limitations instead of guessed fallbacks.
+#[test]
+fn transaction_capability_failures_are_typed_before_transport() {
+    let unauthorized = connected_transaction_engine(
+        vec![transaction_account("DE40123456780000123456", "123456", &[])],
+        false,
+        vec![7],
+        None,
+        Some(false),
+    );
+    assert!(matches!(
+        unauthorized.transaction_format(&unauthorized.state.accounts[0]),
+        Err(Error::Unsupported(Limitation::TransactionsNotAuthorized))
+    ));
+
+    let account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    let mut unsupported =
+        connected_transaction_engine(vec![account.clone()], false, vec![], None, None);
+    unsupported.state.transaction_capability_advertised = true;
+    assert!(matches!(
+        unsupported.transaction_format(&account),
+        Err(Error::Unsupported(Limitation::TransactionsVersion))
+    ));
+
+    unsupported.state.transaction_capability_advertised = false;
+    assert!(matches!(
+        unsupported.transaction_format(&account),
+        Err(Error::Unsupported(Limitation::TransactionsNotAdvertised))
     ));
 }

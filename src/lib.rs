@@ -14,14 +14,16 @@ mod transport;
 mod wire;
 
 pub use client::{
-    BalanceContinuation, BalanceRequest, Client, ContinuationKind, Initialization,
-    InitializationContinuation, PollingMode, Synchronization, SynchronizationContinuation,
+    BalanceContinuation, BalanceRequest, BookedTransactionContinuation, BookedTransactionRequest,
+    Client, ContinuationKind, Initialization, InitializationContinuation, PollingMode,
+    Synchronization, SynchronizationContinuation,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
 pub use model::{
-    Account, Amount, Balance, Challenge, Credentials, CreditDebit, InstituteId, ProductIdentity,
-    ReusableState, SignedAmount, Tan, TanMedium, TanMediumClass, TanMediumStatus, TanMethod,
-    TanProcess, Timestamp,
+    Account, Amount, Balance, BookedEntry, BookedTransactionDetail, BookedTransactions, Challenge,
+    Credentials, CreditDebit, InstituteId, ProductIdentity, ReusableState, SignedAmount,
+    StatementPosition, Tan, TanMedium, TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
+    Timestamp,
 };
 pub use transport::TransportError;
 pub use wire::WireError;

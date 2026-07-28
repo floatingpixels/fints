@@ -3,11 +3,12 @@ use chrono::NaiveDateTime;
 use crate::{
     engine::{
         BalanceResult, Engine, InitializationResult, PendingChallenge, SynchronizationResult,
+        TransactionsResult,
     },
     error::{BankResponse, Error},
     model::{
-        Account, Balance, Challenge, Credentials, InstituteId, ProductIdentity, ReusableState, Tan,
-        TanMedium, TanMethod, TanProcess,
+        Account, Balance, BookedTransactions, Challenge, Credentials, InstituteId, ProductIdentity,
+        ReusableState, Tan, TanMedium, TanMethod, TanProcess,
     },
     transport::Transport,
 };
@@ -45,6 +46,12 @@ pub enum BalanceRequest {
     Challenge(Box<BalanceContinuation>),
 }
 
+/// Result of an advertised booked-transaction request after pagination is exhausted.
+pub enum BookedTransactionRequest {
+    Complete(Box<BookedTransactions>),
+    Challenge(Box<BookedTransactionContinuation>),
+}
+
 /// Process-memory continuation for dialog initialization.
 pub struct InitializationContinuation {
     pending: PendingChallenge,
@@ -60,7 +67,12 @@ pub struct BalanceContinuation {
     pending: PendingChallenge,
 }
 
-/// Concrete synchronous Gate 1 FinTS client.
+/// Process-memory continuation for a booked-transaction request.
+pub struct BookedTransactionContinuation {
+    pending: PendingChallenge,
+}
+
+/// Concrete synchronous Gate 1 and Gate 2 FinTS client.
 ///
 /// The client deliberately has no `Debug` implementation because it owns credentials,
 /// dialog state, challenges, and authenticated protocol messages.
@@ -158,7 +170,7 @@ impl Client {
         Ok(self.engine.tan_media())
     }
 
-    /// Opens the personalized dialog used for subsequent Gate 1 operations.
+    /// Opens the personalized dialog used for subsequent supported operations.
     ///
     /// If no selected method is usable, the method-discovery dialog is closed before
     /// `ChooseTanMethod` is returned.
@@ -187,6 +199,25 @@ impl Client {
             .balance_request(account_index, now.date(), now.time())?;
         let response = self.send(&request)?;
         map_balance(self.engine.accept_balance(&response, now)?)
+    }
+
+    /// Retrieves booked entries for one UPD account and exhausts same-dialog pagination.
+    ///
+    /// `from` and `to` are optional inclusive protocol dates. Returned data remains
+    /// grouped with the requested account and must never be logged.
+    pub fn booked_transactions(
+        &mut self,
+        account_index: usize,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+        now: NaiveDateTime,
+    ) -> Result<BookedTransactionRequest, Error> {
+        let request =
+            self.engine
+                .transaction_request(account_index, from, to, now.date(), now.time())?;
+        let response = self.send(&request)?;
+        let result = self.engine.accept_transactions(&response, now)?;
+        self.finish_transactions(result, now)
     }
 
     pub fn submit_initialization_tan(
@@ -279,6 +310,38 @@ impl Client {
         )
     }
 
+    pub fn submit_booked_transaction_tan(
+        &mut self,
+        continuation: BookedTransactionContinuation,
+        tan: &Tan,
+        now: NaiveDateTime,
+    ) -> Result<BookedTransactionRequest, Error> {
+        let request = self
+            .engine
+            .tan_submission_request(&continuation.pending, tan, now)?;
+        let response = self.send(&request)?;
+        let result =
+            self.engine
+                .accept_transactions_continuation(&response, continuation.pending, now)?;
+        self.finish_transactions(result, now)
+    }
+
+    pub fn poll_booked_transactions(
+        &mut self,
+        mut continuation: BookedTransactionContinuation,
+        mode: PollingMode,
+        now: NaiveDateTime,
+    ) -> Result<BookedTransactionRequest, Error> {
+        let request = self
+            .engine
+            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
+        let response = self.send(&request)?;
+        let result =
+            self.engine
+                .accept_transactions_continuation(&response, continuation.pending, now)?;
+        self.finish_transactions(result, now)
+    }
+
     /// Explicitly closes the active dialog. This also cancels a dropped continuation.
     pub fn terminate(&mut self, now: NaiveDateTime) -> Result<(), Error> {
         let request = self.engine.termination_request(now.date(), now.time())?;
@@ -303,6 +366,32 @@ impl Client {
             SynchronizationResult::Challenge(pending) => Ok(Synchronization::Challenge(Box::new(
                 SynchronizationContinuation { pending: *pending },
             ))),
+        }
+    }
+
+    fn finish_transactions(
+        &mut self,
+        mut result: TransactionsResult,
+        now: NaiveDateTime,
+    ) -> Result<BookedTransactionRequest, Error> {
+        loop {
+            match result {
+                TransactionsResult::Complete(transactions) => {
+                    return Ok(BookedTransactionRequest::Complete(transactions));
+                }
+                TransactionsResult::Challenge(pending) => {
+                    return Ok(BookedTransactionRequest::Challenge(Box::new(
+                        BookedTransactionContinuation { pending: *pending },
+                    )));
+                }
+                TransactionsResult::Continue => {
+                    let request = self
+                        .engine
+                        .next_transaction_page_request(now.date(), now.time())?;
+                    let response = self.send(&request)?;
+                    result = self.engine.accept_transactions(&response, now)?;
+                }
+            }
         }
     }
 
@@ -343,6 +432,20 @@ impl SynchronizationContinuation {
 }
 
 impl BalanceContinuation {
+    pub fn challenge(&self) -> &Challenge {
+        &self.pending.challenge
+    }
+
+    pub fn kind(&self) -> ContinuationKind {
+        continuation_kind(&self.pending)
+    }
+
+    pub fn earliest_poll_at(&self) -> Option<NaiveDateTime> {
+        self.pending.next_poll_at
+    }
+}
+
+impl BookedTransactionContinuation {
     pub fn challenge(&self) -> &Challenge {
         &self.pending.challenge
     }

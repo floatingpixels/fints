@@ -1,8 +1,8 @@
 use crate::{
     error::Error,
     model::{
-        Account, InstituteState, OperationPermission, ReusableState, TanMedium, TanMediumClass,
-        TanMediumStatus, TanMethod, TanProcess,
+        Account, CamtCapability, InstituteState, OperationPermission, ReusableState, TanMedium,
+        TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
     },
     wire::{Segment, Value},
 };
@@ -16,9 +16,14 @@ pub(super) fn apply(
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
+    let mut received_camt_descriptors = Vec::new();
+    let mut received_legacy_transaction_versions = Vec::new();
+    let mut transaction_capability_advertised = false;
     let mut received_upd_version = None;
     let mut received_bpd_version = None;
     let mut balance_requires_tan = None;
+    let mut camt_requires_tan = None;
+    let mut legacy_transactions_require_tan = None;
 
     for segment in segments {
         let header = segment.header().ok_or(Error::InvalidResponse {
@@ -52,9 +57,24 @@ pub(super) fn apply(
             b"HISALS" if (6..=8).contains(&header.version) => {
                 received_balance_versions.push(header.version);
             }
+            b"HICAZS" => {
+                transaction_capability_advertised = true;
+                if header.version == 1 {
+                    received_camt_descriptors.extend(parse_camt_descriptors(segment)?);
+                }
+            }
+            b"HIKAZS" => {
+                transaction_capability_advertised = true;
+                if (6..=7).contains(&header.version) {
+                    require_transaction_parameters(segment)?;
+                    received_legacy_transaction_versions.push(header.version);
+                }
+            }
             b"HIPINS" => {
                 require_version(header.version, 1, "HIPINS")?;
-                balance_requires_tan = parse_balance_tan_requirement(segment)?;
+                balance_requires_tan = parse_tan_requirement(segment, "HKSAL")?;
+                camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
+                legacy_transactions_require_tan = parse_tan_requirement(segment, "HKKAZ")?;
             }
             b"HITANS" if (6..=7).contains(&header.version) => {
                 received_methods.extend(parse_tan_methods(segment, header.version)?);
@@ -67,6 +87,10 @@ pub(super) fn apply(
         state.bpd_version = version;
         received_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
         received_balance_versions.dedup();
+        received_legacy_transaction_versions.sort_unstable_by(|left, right| right.cmp(left));
+        received_legacy_transaction_versions.dedup();
+        received_camt_descriptors.sort();
+        received_camt_descriptors.dedup();
         received_methods.sort_by(|left, right| {
             left.security_function
                 .cmp(&right.security_function)
@@ -75,6 +99,14 @@ pub(super) fn apply(
         received_methods.dedup_by(|left, right| left.security_function == right.security_function);
         state.balance_versions = received_balance_versions;
         state.balance_requires_tan = balance_requires_tan;
+        state.transaction_capability_advertised = transaction_capability_advertised;
+        state.camt_capability = received_camt_descriptors
+            .into_iter()
+            .find(|descriptor| descriptor == "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08")
+            .map(|descriptor| CamtCapability { descriptor });
+        state.legacy_transaction_versions = received_legacy_transaction_versions;
+        state.camt_requires_tan = camt_requires_tan;
+        state.legacy_transactions_require_tan = legacy_transactions_require_tan;
         state.tan_methods = received_methods;
     }
 
@@ -270,7 +302,7 @@ fn parse_account(segment: &Segment) -> Result<Account, Error> {
     })
 }
 
-fn parse_balance_tan_requirement(segment: &Segment) -> Result<Option<bool>, Error> {
+fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bool>, Error> {
     let Some(parameters) = segment.elements().get(4) else {
         return Err(Error::MissingValue {
             field: "HIPINS parameters",
@@ -278,17 +310,76 @@ fn parse_balance_tan_requirement(segment: &Segment) -> Result<Option<bool>, Erro
     };
     let components = parameters.components();
     for pair in components.get(5..).unwrap_or_default().chunks_exact(2) {
-        if optional_component(pair, 0).as_deref() == Some("HKSAL") {
+        if optional_component(pair, 0).as_deref() == Some(operation) {
             return match optional_component(pair, 1).as_deref() {
                 Some("J") => Ok(Some(true)),
                 Some("N") => Ok(Some(false)),
                 _ => Err(Error::InvalidValue {
-                    field: "HKSAL TAN requirement",
+                    field: "operation TAN requirement",
                 }),
             };
         }
     }
     Ok(None)
+}
+
+fn parse_camt_descriptors(segment: &Segment) -> Result<Vec<String>, Error> {
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HICAZS parameters",
+        })?
+        .components();
+    if components.len() < 4 {
+        return Err(Error::InvalidResponse {
+            structure: "HICAZS parameters",
+        });
+    }
+    component(components, 0, "HICAZS storage period")?
+        .parse::<u16>()
+        .map_err(|_| Error::InvalidValue {
+            field: "HICAZS storage period",
+        })?;
+    for index in 1..=2 {
+        if !matches!(
+            component(components, index, "HICAZS yes/no parameter")?.as_str(),
+            "J" | "N"
+        ) {
+            return Err(Error::InvalidValue {
+                field: "HICAZS yes/no parameter",
+            });
+        }
+    }
+    components
+        .iter()
+        .skip(3)
+        .map(|value| {
+            value
+                .as_text()
+                .filter(|value| !value.is_empty() && value.len() <= 256)
+                .map(|value| value.into_owned())
+                .ok_or(Error::InvalidValue {
+                    field: "camt descriptor",
+                })
+        })
+        .collect()
+}
+
+fn require_transaction_parameters(segment: &Segment) -> Result<(), Error> {
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HIKAZS parameters",
+        })?
+        .components();
+    if components.len() < 3 {
+        return Err(Error::InvalidResponse {
+            structure: "HIKAZS parameters",
+        });
+    }
+    Ok(())
 }
 
 fn parse_tan_methods(segment: &Segment, version: u16) -> Result<Vec<TanMethod>, Error> {

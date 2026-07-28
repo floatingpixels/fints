@@ -1,12 +1,13 @@
 use crate::{
     error::{BankResponse, Error, Recovery, ResponseClass},
-    model::{Balance, ReusableState, TanMedium},
+    model::{Balance, ReusableState, TanMedium, TransactionFormat},
     wire::{Message, Segment},
 };
 
 mod balance;
 mod parameters;
 mod tan;
+mod transactions;
 
 pub(crate) struct Response {
     dialog_id: String,
@@ -15,6 +16,12 @@ pub(crate) struct Response {
     responses: Vec<BankResponse>,
     allowed_tan_methods: Vec<String>,
     has_tan_method_response: bool,
+    continuation_points: Vec<ContinuationPoint>,
+}
+
+struct ContinuationPoint {
+    segment_number: u16,
+    value: String,
 }
 
 impl Response {
@@ -43,6 +50,7 @@ impl Response {
         let mut allowed_tan_methods = Vec::new();
         let mut has_message_response = false;
         let mut has_tan_method_response = false;
+        let mut continuation_points = Vec::new();
 
         for segment in &segments {
             let header = segment.header().ok_or(Error::InvalidResponse {
@@ -101,6 +109,21 @@ impl Response {
                             reference,
                             recovery_for(numeric_code),
                         ));
+                        if numeric_code == 3040 {
+                            let segment_number = reference.ok_or(Error::InvalidResponse {
+                                structure: "3040 without referenced request segment",
+                            })?;
+                            let value = component(components, 3, "continuation point")?;
+                            if encoding_rs::mem::encode_latin1_lossy(&value).len() > 35 {
+                                return Err(Error::InvalidValue {
+                                    field: "continuation point",
+                                });
+                            }
+                            continuation_points.push(ContinuationPoint {
+                                segment_number,
+                                value,
+                            });
+                        }
                         if numeric_code == 3920 {
                             has_tan_method_response = true;
                             allowed_tan_methods.extend(
@@ -133,6 +156,7 @@ impl Response {
             responses,
             allowed_tan_methods,
             has_tan_method_response,
+            continuation_points,
         })
     }
 
@@ -180,6 +204,27 @@ impl Response {
 
     pub(crate) fn balance(&self) -> Result<Option<Balance>, Error> {
         balance::parse(&self.segments)
+    }
+
+    pub(crate) fn transactions(
+        &self,
+        format: &TransactionFormat,
+    ) -> Result<Option<transactions::TransactionPage>, Error> {
+        transactions::parse(&self.segments, format)
+    }
+
+    pub(crate) fn continuation_point(&self, segment_number: u16) -> Result<Option<&str>, Error> {
+        let mut points = self
+            .continuation_points
+            .iter()
+            .filter(|point| point.segment_number == segment_number);
+        let point = points.next();
+        if points.next().is_some() {
+            return Err(Error::InvalidResponse {
+                structure: "multiple continuation points for one request",
+            });
+        }
+        Ok(point.map(|point| point.value.as_str()))
     }
 
     pub(crate) fn tan(&self, expected_version: u16) -> Result<Option<tan::TanResponse>, Error> {
@@ -245,3 +290,5 @@ fn recovery_for(code: u16) -> Option<Recovery> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transaction_tests;

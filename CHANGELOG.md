@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-28** — Completed Gate 2 with advertised HKCAZ/camt.052 booked transactions and bounded HKKAZ/MT940 fallback.
+  Added operation-bound TAN continuations, exhaustive same-dialog pagination, repeated-point/page/entry limits, exact references or statement positions, and private typed results.
+  The 51-test network-independent stack covers fictional independent wire/XML/MT940 fixtures; live verification remains owner-run.
+
 - **2026-07-28** — Completed Gate 1 with a strict FinTS 3.0 codec, concrete PIN/TAN dialog engine, system-ID/BPD/UPD synchronization, and bounded rustls HTTPS transport.
   Added negotiated HKTAN/HITAN 6-7 continuations, HKTAB/HITAB 5 medium discovery, HKSAL/HISAL 6-8 balances, redacted response handling, and fictional independent-wire regressions.
   The 41-test network-independent verification stack is green; live bank verification remains an owner-run consumer integration step.

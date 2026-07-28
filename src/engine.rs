@@ -1,11 +1,14 @@
+use std::collections::HashSet;
+
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 
 use crate::{
     client::PollingMode,
     error::{BankResponse, Error, InputError, Limitation},
     model::{
-        Balance, Challenge, Credentials, InstituteId, ProductIdentity, ReusableState, Tan,
-        TanMedium, TanMethod, TanProcess, valid_latin1_length,
+        Balance, BookedEntry, BookedTransactions, Challenge, Credentials, InstituteId,
+        ProductIdentity, ReusableState, Tan, TanMedium, TanMethod, TanProcess, TransactionFormat,
+        valid_latin1_length,
     },
     response::Response,
     segments::{self, SecurityContext},
@@ -13,6 +16,8 @@ use crate::{
 
 const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
 const LOCAL_CONTINUATION_LIMIT: u16 = 20;
+const LOCAL_TRANSACTION_PAGE_LIMIT: u16 = 100;
+const LOCAL_TRANSACTION_ENTRY_LIMIT: usize = 10_000;
 
 pub(crate) struct Engine {
     institute: InstituteId,
@@ -25,6 +30,7 @@ pub(crate) struct Engine {
     transient_accounts: Option<Vec<crate::model::Account>>,
     last_responses: Vec<BankResponse>,
     requested_balance: Option<crate::model::Account>,
+    transaction: Option<TransactionState>,
     continuation_active: bool,
     dialog: Option<DialogState>,
 }
@@ -37,6 +43,18 @@ struct DialogState {
     system_id: String,
     method: Option<TanMethod>,
     anonymous: bool,
+}
+
+struct TransactionState {
+    account: crate::model::Account,
+    format: TransactionFormat,
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    requires_tan: bool,
+    continuation_point: Option<String>,
+    seen_continuation_points: HashSet<String>,
+    pages_requested: u16,
+    entries: Vec<BookedEntry>,
 }
 
 pub(crate) enum InitializationResult {
@@ -52,6 +70,12 @@ pub(crate) enum SynchronizationResult {
 
 pub(crate) enum BalanceResult {
     Complete(Box<Balance>),
+    Challenge(Box<PendingChallenge>),
+}
+
+pub(crate) enum TransactionsResult {
+    Complete(Box<BookedTransactions>),
+    Continue,
     Challenge(Box<PendingChallenge>),
 }
 
@@ -71,6 +95,7 @@ enum PendingOperation {
     Synchronization,
     Initialization,
     Balance,
+    Transactions,
 }
 
 impl Engine {
@@ -92,6 +117,7 @@ impl Engine {
             transient_accounts: None,
             last_responses: Vec::new(),
             requested_balance: None,
+            transaction: None,
             continuation_active: false,
             dialog: None,
         })
@@ -527,6 +553,120 @@ impl Engine {
         )?)))
     }
 
+    pub(crate) fn transaction_request(
+        &mut self,
+        account_index: usize,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active || self.transaction.is_some() {
+            return Err(Error::InconsistentState);
+        }
+        if from.zip(to).is_some_and(|(from, to)| to < from) {
+            return Err(InputError::TransactionDateRange.into());
+        }
+        let account = self
+            .accounts()
+            .get(account_index)
+            .ok_or(Limitation::TransactionsNotAuthorized)?
+            .clone();
+        let (format, requires_tan) = self.transaction_format(&account)?;
+        let tan = if requires_tan {
+            let method = self.active_method()?.clone();
+            Some((method, self.state.selected_tan_medium.clone()))
+        } else {
+            None
+        };
+        let message = {
+            let context = self.context(date, time)?;
+            segments::transaction_request(
+                &context,
+                segments::TransactionRequest {
+                    account: &account,
+                    format: &format,
+                    from,
+                    to,
+                    continuation_point: None,
+                },
+                tan.as_ref()
+                    .map(|(method, medium)| (method, medium.as_deref())),
+            )?
+        };
+        self.transaction = Some(TransactionState {
+            account,
+            format,
+            from,
+            to,
+            requires_tan,
+            continuation_point: None,
+            seen_continuation_points: HashSet::new(),
+            pages_requested: 1,
+            entries: Vec::new(),
+        });
+        Ok(message)
+    }
+
+    pub(crate) fn next_transaction_page_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        let transaction = self.transaction.as_ref().ok_or(Error::InconsistentState)?;
+        if transaction.pages_requested >= LOCAL_TRANSACTION_PAGE_LIMIT {
+            return Err(Error::PaginationLimitReached);
+        }
+        let continuation_point = transaction
+            .continuation_point
+            .clone()
+            .ok_or(Error::InconsistentState)?;
+        let account = transaction.account.clone();
+        let format = transaction.format.clone();
+        let from = transaction.from;
+        let to = transaction.to;
+        let requires_tan = transaction.requires_tan;
+        let tan = if requires_tan {
+            let method = self.active_method()?.clone();
+            Some((method, self.state.selected_tan_medium.clone()))
+        } else {
+            None
+        };
+        let message = {
+            let context = self.context(date, time)?;
+            segments::transaction_request(
+                &context,
+                segments::TransactionRequest {
+                    account: &account,
+                    format: &format,
+                    from,
+                    to,
+                    continuation_point: Some(&continuation_point),
+                },
+                tan.as_ref()
+                    .map(|(method, medium)| (method, medium.as_deref())),
+            )?
+        };
+        let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
+        transaction.pages_requested = transaction
+            .pages_requested
+            .checked_add(1)
+            .ok_or(Error::PaginationLimitReached)?;
+        Ok(message)
+    }
+
+    pub(crate) fn accept_transactions(
+        &mut self,
+        input: &[u8],
+        received_at: NaiveDateTime,
+    ) -> Result<TransactionsResult, Error> {
+        let response = self.accept_dialog_response(input)?;
+        self.accept_transaction_response(response, None, received_at)
+    }
+
     pub(crate) fn tan_submission_request(
         &mut self,
         pending: &PendingChallenge,
@@ -675,6 +815,20 @@ impl Engine {
         )?)))
     }
 
+    pub(crate) fn accept_transactions_continuation(
+        &mut self,
+        input: &[u8],
+        pending: PendingChallenge,
+        received_at: NaiveDateTime,
+    ) -> Result<TransactionsResult, Error> {
+        self.ensure_pending_dialog(&pending)?;
+        if pending.operation != PendingOperation::Transactions {
+            return Err(Error::InconsistentState);
+        }
+        let response = self.accept_dialog_response(input)?;
+        self.accept_transaction_response(response, Some(pending), received_at)
+    }
+
     pub(crate) fn accept_synchronization_continuation(
         &mut self,
         input: &[u8],
@@ -742,6 +896,7 @@ impl Engine {
         self.dialog = None;
         self.continuation_active = false;
         self.requested_balance = None;
+        self.transaction = None;
         Ok(())
     }
 
@@ -749,6 +904,7 @@ impl Engine {
         self.dialog = None;
         self.continuation_active = false;
         self.requested_balance = None;
+        self.transaction = None;
     }
 
     fn accept_dialog_response(&mut self, input: &[u8]) -> Result<Response, Error> {
@@ -860,6 +1016,177 @@ impl Engine {
             self.allowed_tan_methods_known = true;
         }
         Ok(())
+    }
+
+    fn transaction_format(
+        &self,
+        account: &crate::model::Account,
+    ) -> Result<(TransactionFormat, bool), Error> {
+        let camt_permission = account
+            .allowed_operations
+            .iter()
+            .find(|operation| operation.code == "HKCAZ");
+        let legacy_permission = account
+            .allowed_operations
+            .iter()
+            .find(|operation| operation.code == "HKKAZ");
+        if camt_permission.is_none() && legacy_permission.is_none() {
+            return Err(Limitation::TransactionsNotAuthorized.into());
+        }
+        let mut missing_tan_parameters = false;
+        if let (Some(permission), Some(capability)) =
+            (camt_permission, self.state.camt_capability.as_ref())
+            && permission.required_signatures <= 1
+        {
+            if let Some(requires_tan) = self.state.camt_requires_tan {
+                return Ok((
+                    TransactionFormat::Camt {
+                        descriptor: capability.descriptor.clone(),
+                    },
+                    requires_tan,
+                ));
+            }
+            missing_tan_parameters = true;
+        }
+        if let Some(permission) = legacy_permission
+            && permission.required_signatures <= 1
+            && let Some(version) = self
+                .state
+                .legacy_transaction_versions
+                .iter()
+                .copied()
+                .find(|version| (6..=7).contains(version))
+        {
+            if let Some(requires_tan) = self.state.legacy_transactions_require_tan {
+                return Ok((TransactionFormat::Mt940 { version }, requires_tan));
+            }
+            missing_tan_parameters = true;
+        }
+        if camt_permission
+            .into_iter()
+            .chain(legacy_permission)
+            .all(|permission| permission.required_signatures > 1)
+        {
+            return Err(Limitation::MultipleSigners.into());
+        }
+        if missing_tan_parameters {
+            return Err(Limitation::PinTanParameters.into());
+        }
+        if self.state.transaction_capability_advertised {
+            Err(Limitation::TransactionsVersion.into())
+        } else {
+            Err(Limitation::TransactionsNotAdvertised.into())
+        }
+    }
+
+    fn accept_transaction_response(
+        &mut self,
+        response: Response,
+        pending: Option<PendingChallenge>,
+        received_at: NaiveDateTime,
+    ) -> Result<TransactionsResult, Error> {
+        if let Some(error) = response.first_error() {
+            self.transaction = None;
+            self.continuation_active = false;
+            return Err(Error::Bank(error));
+        }
+        let format = self
+            .transaction
+            .as_ref()
+            .ok_or(Error::InconsistentState)?
+            .format
+            .clone();
+        let page = response.transactions(&format)?;
+        let method = self.active_method().ok().cloned();
+        let tan_response = method
+            .as_ref()
+            .map(|method| response.tan(method.hktan_version))
+            .transpose()?
+            .flatten()
+            .filter(|tan| tan.challenge.reference != "noref");
+        if tan_response.is_some()
+            && !self
+                .transaction
+                .as_ref()
+                .is_some_and(|transaction| transaction.requires_tan)
+        {
+            return Err(Error::InvalidResponse {
+                structure: "unsolicited transaction TAN challenge",
+            });
+        }
+        if page.is_some() && tan_response.is_some() {
+            return Err(Error::InvalidResponse {
+                structure: "transaction result and TAN challenge together",
+            });
+        }
+        if let Some(tan_response) = tan_response {
+            validate_tan_process(
+                &tan_response.process,
+                if pending.is_some() {
+                    match method.as_ref().map(|method| method.process) {
+                        Some(TanProcess::ProcessVariantTwo) => "2",
+                        Some(TanProcess::Decoupled) => "S",
+                        _ => return Err(Limitation::TanProcessVariant.into()),
+                    }
+                } else {
+                    "4"
+                },
+            )?;
+            self.continuation_active = true;
+            let next = match pending {
+                Some(pending) => continued_challenge(pending, tan_response.challenge)?,
+                None => pending_challenge(
+                    tan_response.challenge,
+                    PendingOperation::Transactions,
+                    method.ok_or(Error::InconsistentState)?,
+                    response.dialog_id(),
+                    received_at,
+                )?,
+            };
+            return Ok(TransactionsResult::Challenge(Box::new(next)));
+        }
+
+        let continuation_point = response.continuation_point(3)?.map(str::to_owned);
+        let no_entries = response
+            .responses()
+            .iter()
+            .any(|response| response.code() == 3010);
+        if page.is_none() && !no_entries && continuation_point.is_none() {
+            return Err(Error::MissingValue {
+                field: "booked transaction response",
+            });
+        }
+        if let Some(page) = page {
+            let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
+            if let Some(account) = page.account
+                && !transaction.account.same_identity(&account)
+            {
+                return Err(Error::InconsistentState);
+            }
+            if transaction
+                .entries
+                .len()
+                .checked_add(page.entries.len())
+                .is_none_or(|count| count > LOCAL_TRANSACTION_ENTRY_LIMIT)
+            {
+                return Err(Error::PaginationLimitReached);
+            }
+            transaction.entries.extend(page.entries);
+        }
+        self.continuation_active = false;
+        if let Some(point) = continuation_point {
+            let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
+            if !transaction.seen_continuation_points.insert(point.clone()) {
+                return Err(Error::RepeatedContinuationPoint);
+            }
+            transaction.continuation_point = Some(point);
+            return Ok(TransactionsResult::Continue);
+        }
+        let transaction = self.transaction.take().ok_or(Error::InconsistentState)?;
+        Ok(TransactionsResult::Complete(Box::new(BookedTransactions {
+            account: transaction.account,
+            entries: transaction.entries,
+        })))
     }
 }
 

@@ -38,6 +38,12 @@ pub enum Limitation {
     BalanceNotAuthorized,
     #[error("the institution requires an unsupported HKSAL version")]
     BalanceVersion,
+    #[error("the institution does not advertise a supported booked-transaction operation")]
+    TransactionsNotAdvertised,
+    #[error("the account is not authorized for booked-transaction retrieval")]
+    TransactionsNotAuthorized,
+    #[error("the institution requires an unsupported booked-transaction format or version")]
+    TransactionsVersion,
     #[error("the institution requires an unsupported TAN method")]
     TanMethod,
     #[error("the institution requires a different TAN medium")]
@@ -77,6 +83,8 @@ pub enum InputError {
     TanMedium,
     #[error("reusable FinTS state is malformed")]
     ReusableState,
+    #[error("transaction date range must not end before it begins")]
+    TransactionDateRange,
 }
 
 /// A bank response code stripped of its potentially private free text.
@@ -151,6 +159,12 @@ pub enum Error {
     PollLimitReached,
     #[error("the FinTS continuation limit has been reached")]
     ContinuationLimitReached,
+    #[error("the FinTS transaction pagination limit has been reached")]
+    PaginationLimitReached,
+    #[error("the institution repeated a transaction continuation point")]
+    RepeatedContinuationPoint,
+    #[error("booked transaction data is malformed")]
+    MalformedTransactionData,
     #[error("the decoupled approval may not be polled again yet")]
     PollTooEarly,
     #[error("FinTS bank rejected or qualified the request with code {0:?}")]

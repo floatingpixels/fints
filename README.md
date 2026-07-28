@@ -13,7 +13,7 @@ The crate is intentionally independent of Finanzplaner, Tauri, persistence, UI, 
 institution directories. Consumers provide their own endpoint, registered product
 identity, credentials, and durable storage.
 
-## Gate 1 API
+## Gate 1 and Gate 2 API
 
 `Client` is a concrete synchronous HTTPS client for one institute and one user. The
 caller supplies:
@@ -40,8 +40,9 @@ A new connection follows this bounded sequence:
    `select_tan_medium`.
 4. If `state().system_id()` is absent, call `synchronize`. Persist the state only
    after synchronization completes.
-5. Call `initialize` again. Once it returns `Connected`, call `balance` only for an
-   account discovered through `accounts()`, then call `terminate`.
+5. Call `initialize` again. Once it returns `Connected`, call `balance` or
+   `booked_transactions` only for an account discovered through `accounts()`, then
+   call `terminate`.
 
 `refresh_parameters` performs a separate anonymous BPD refresh and closes its dialog.
 It is the recovery path when 3920 supplies no usable method; the client does not
@@ -56,6 +57,9 @@ early poll, expired challenge, or exhausted poll bound fails explicitly. Droppin
 continuation does not serialize it; call `terminate` to cancel the active dialog.
 A rejected TAN deliberately ends the Gate 1 flow: terminate when possible, then
 restart the complete dialog instead of retrying the TAN inside the existing dialog.
+The same operation-bound continuation contract applies to booked transactions.
+After a transaction TAN or decoupled approval completes, the client automatically
+exhausts any remaining same-dialog pages before returning the result.
 
 The most recently parsed bank response codes are available through
 `last_responses()`. They retain only the numeric code, optional segment reference,
@@ -85,6 +89,29 @@ the caller starts a fresh initialization instead of replaying a message number.
 Secret-bearing and private-data-bearing types intentionally omit `Debug`. Callers
 must not log credentials, continuations, challenges, accounts, balances, endpoints
 containing private query data, or serialized reusable state.
+
+## Supported Gate 2 profile
+
+- `booked_transactions` prefers advertised and UPD-authorized `HKCAZ`/`HICAZ` 1
+  with `camt.052.001.08`, then falls back only to advertised `HKKAZ`/`HIKAZ` 7
+  or 6.
+- Only `BOOK` entries are returned. Pending camt entries and MT942 data are outside
+  Gate 2; unsupported descriptors, segment versions, and missing account permission
+  are typed limitations.
+- FinTS response-code 3040 pagination is exhausted in the active dialog. Opaque
+  continuation points are never persisted; repeated points, more than 100 pages,
+  or more than 10,000 aggregate entries fail explicitly without a partial result.
+- camt XML is parsed as bounded, namespace-aware UTF-8. The legacy MT940 fallback
+  uses its specified Latin-1 form and preserves either the supplied bank reference
+  or the exact statement number, page number, and entry position.
+- Amounts, directions, dates, reversal status, references, transaction codes,
+  counterpart data, and remittance information are returned only where the
+  institution supplies them. No transaction fingerprint is synthesized.
+
+`BookedTransactions`, `BookedEntry`, `BookedTransactionDetail`, and
+`StatementPosition` contain private financial data and deliberately omit `Debug`.
+They are process results, not serializable reusable state, and callers must never
+log them.
 
 ## Development
 

@@ -156,6 +156,48 @@ fn bpd_upd_and_user_allowed_tan_method_are_interpreted_together() {
     assert_eq!(state.tan_methods()[0].max_decoupled_polls(), Some(5));
 }
 
+// FinTS Messages 2022-04-15, C.2.3.1.1.1 and C.2.1.1.1.1-.2;
+// PIN/TAN correction T31. Capability and TAN status come from BPD/UPD, not endpoints.
+#[test]
+fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
+    let descriptor = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+90:J:N:{descriptor}"),
+            "HIKAZS:5:7:3+1+1+0+90:J:N".into(),
+            "HIKAZS:6:8:3+1+1+0+90:J:N".into(),
+            "HIPINS:7:1:3+1+1+0+4:6:6:::HKCAZ:N:HKKAZ:J".into(),
+            "HIUPA:8:4:3+fictional-user+3+0".into(),
+            concat!(
+                "HIUPD:9:6:3+123456::280:12345678+DE40123456780000123456",
+                "+fictional-customer+1+EUR+Fictional Person++Checking",
+                "++HKCAZ:1+HKKAZ:1"
+            )
+            .into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert!(state.transaction_capability_advertised);
+    assert_eq!(
+        state.camt_capability.as_ref().unwrap().descriptor,
+        "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
+    );
+    assert_eq!(state.legacy_transaction_versions, [7]);
+    assert_eq!(state.camt_requires_tan, Some(false));
+    assert_eq!(state.legacy_transactions_require_tan, Some(true));
+    assert!(state.accounts()[0].allows_booked_transactions());
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, C.3.1.1 and Data Dictionary
 // "TAN-Medium-Liste" 5.
 #[test]
@@ -216,7 +258,10 @@ fn bank_response_preserves_code_but_not_private_text() {
 #[test]
 fn response_classes_are_typed_and_only_normative_classes_are_accepted() {
     let fixture = message(
-        &["HIRMG:2:2+0010::accepted+3040::qualified+9942::rejected".into()],
+        &[
+            "HIRMG:2:2+0010::accepted+9942::rejected".into(),
+            "HIRMS:3:2:4+3040::qualified:fictional-next".into(),
+        ],
         "dialog1",
         1,
     );
@@ -227,10 +272,10 @@ fn response_classes_are_typed_and_only_normative_classes_are_accepted() {
         crate::ResponseClass::Success
     );
     assert_eq!(
-        response.responses()[1].class(),
+        response.responses()[2].class(),
         crate::ResponseClass::Warning
     );
-    assert_eq!(response.responses()[2].class(), crate::ResponseClass::Error);
+    assert_eq!(response.responses()[1].class(), crate::ResponseClass::Error);
     assert_eq!(response.first_error().unwrap().code(), 9942);
 
     let invalid = message(&["HIRMG:2:2+1010::invalid class".into()], "dialog1", 1);

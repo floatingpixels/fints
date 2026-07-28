@@ -51,6 +51,7 @@ The initial direct-dependency allowlist is:
 - `reqwest` with rustls TLS and default features disabled for HTTPS transport.
 - `encoding_rs` only where an official FinTS encoding requirement proves it necessary.
 - `base64` for the HTTPS body encoding inherited from the HBCI PIN/TAN mapping.
+- `quick-xml` for bounded, namespace-aware parsing of HKCAZ camt.052 transaction data.
 
 Required transitive dependencies are allowed. Direct dev dependencies need the same
 owner approval as runtime dependencies.
