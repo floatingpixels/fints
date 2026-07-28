@@ -1,0 +1,972 @@
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
+
+use crate::{
+    client::PollingMode,
+    error::{BankResponse, Error, InputError, Limitation},
+    model::{
+        Balance, Challenge, Credentials, InstituteId, ProductIdentity, ReusableState, Tan,
+        TanMedium, TanMethod, TanProcess, valid_latin1_length,
+    },
+    response::Response,
+    segments::{self, SecurityContext},
+};
+
+const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
+const LOCAL_CONTINUATION_LIMIT: u16 = 20;
+
+pub(crate) struct Engine {
+    institute: InstituteId,
+    product: ProductIdentity,
+    credentials: Credentials,
+    state: ReusableState,
+    allowed_tan_methods: Vec<String>,
+    allowed_tan_methods_known: bool,
+    tan_media: Vec<TanMedium>,
+    transient_accounts: Option<Vec<crate::model::Account>>,
+    last_responses: Vec<BankResponse>,
+    requested_balance: Option<crate::model::Account>,
+    continuation_active: bool,
+    dialog: Option<DialogState>,
+}
+
+struct DialogState {
+    id: String,
+    next_message_number: u16,
+    security_function: String,
+    profile_version: &'static str,
+    system_id: String,
+    method: Option<TanMethod>,
+    anonymous: bool,
+}
+
+pub(crate) enum InitializationResult {
+    Connected,
+    ChooseTanMethod,
+    Challenge(Box<PendingChallenge>),
+}
+
+pub(crate) enum SynchronizationResult {
+    Complete,
+    Challenge(Box<PendingChallenge>),
+}
+
+pub(crate) enum BalanceResult {
+    Complete(Box<Balance>),
+    Challenge(Box<PendingChallenge>),
+}
+
+pub(crate) struct PendingChallenge {
+    pub(crate) challenge: Challenge,
+    pub(crate) method: TanMethod,
+    operation: PendingOperation,
+    polls: u16,
+    continuations: u16,
+    pub(crate) next_poll_at: Option<NaiveDateTime>,
+    assigned_system_id: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingOperation {
+    Synchronization,
+    Initialization,
+    Balance,
+}
+
+impl Engine {
+    pub(crate) fn new(
+        institute: InstituteId,
+        product: ProductIdentity,
+        credentials: Credentials,
+        state: ReusableState,
+    ) -> Result<Self, Error> {
+        validate_reusable_state(&state)?;
+        Ok(Self {
+            institute,
+            product,
+            credentials,
+            state,
+            allowed_tan_methods: Vec::new(),
+            allowed_tan_methods_known: false,
+            tan_media: Vec::new(),
+            transient_accounts: None,
+            last_responses: Vec::new(),
+            requested_balance: None,
+            continuation_active: false,
+            dialog: None,
+        })
+    }
+
+    pub(crate) fn state(&self) -> &ReusableState {
+        &self.state
+    }
+
+    pub(crate) fn into_state(self) -> ReusableState {
+        self.state
+    }
+
+    pub(crate) fn accounts(&self) -> &[crate::model::Account] {
+        self.transient_accounts
+            .as_deref()
+            .unwrap_or(&self.state.accounts)
+    }
+
+    pub(crate) fn allowed_tan_methods(&self) -> &[String] {
+        &self.allowed_tan_methods
+    }
+
+    pub(crate) fn tan_media(&self) -> &[TanMedium] {
+        &self.tan_media
+    }
+
+    pub(crate) fn last_responses(&self) -> &[BankResponse] {
+        &self.last_responses
+    }
+
+    pub(crate) fn choose_tan_method(&mut self, security_function: &str) -> Result<(), Error> {
+        if security_function.len() != 3
+            || !security_function.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(InputError::TanMethod.into());
+        }
+        if !self
+            .state
+            .tan_methods
+            .iter()
+            .any(|method| method.security_function == security_function)
+            || (self.allowed_tan_methods_known
+                && !self
+                    .allowed_tan_methods
+                    .iter()
+                    .any(|method| method == security_function))
+        {
+            return Err(Limitation::TanMethod.into());
+        }
+        self.state.selected_tan_method = Some(security_function.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn choose_tan_medium(&mut self, name: &str) -> Result<(), Error> {
+        if name.is_empty()
+            || !encoding_rs::mem::is_str_latin1(name)
+            || encoding_rs::mem::encode_latin1_lossy(name).len() > 32
+        {
+            return Err(InputError::TanMedium.into());
+        }
+        if !self.tan_media.is_empty()
+            && !self
+                .tan_media
+                .iter()
+                .any(|medium| medium.name.as_deref() == Some(name))
+        {
+            return Err(Limitation::TanMedium.into());
+        }
+        self.state.selected_tan_medium = Some(name.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn anonymous_initialization_request(&self) -> Result<Vec<u8>, Error> {
+        self.ensure_no_dialog()?;
+        segments::anonymous_initialization(&self.institute, &self.product, &self.state)
+    }
+
+    pub(crate) fn accept_anonymous_initialization(&mut self, input: &[u8]) -> Result<(), Error> {
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        self.apply_parameters(&response)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        self.dialog = Some(DialogState {
+            id: response.dialog_id().to_owned(),
+            next_message_number: response
+                .message_number()
+                .checked_add(1)
+                .ok_or(Error::InconsistentState)?,
+            security_function: String::new(),
+            profile_version: "1",
+            system_id: "0".to_owned(),
+            method: None,
+            anonymous: true,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn synchronization_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        self.ensure_no_dialog()?;
+        let method = self.selected_method()?.clone();
+        validate_supported_method(&method)?;
+        validate_medium(&method, self.state.selected_tan_medium.as_deref())?;
+        let context = self.initial_context(&method, date, time);
+        segments::synchronization(
+            &context,
+            &self.product,
+            &self.state,
+            Some(&method),
+            self.state.selected_tan_medium.as_deref(),
+        )
+    }
+
+    pub(crate) fn accept_synchronization(
+        &mut self,
+        input: &[u8],
+        received_at: NaiveDateTime,
+    ) -> Result<SynchronizationResult, Error> {
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        self.apply_parameters(&response)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        let system_id = response.system_id()?;
+        let method = self.selected_method()?.clone();
+        self.dialog = Some(DialogState {
+            id: response.dialog_id().to_owned(),
+            next_message_number: response
+                .message_number()
+                .checked_add(1)
+                .ok_or(Error::InconsistentState)?,
+            security_function: method.security_function.clone(),
+            profile_version: "2",
+            system_id: system_id.clone().unwrap_or_else(|| "0".to_owned()),
+            method: Some(method.clone()),
+            anonymous: false,
+        });
+        if let Some(tan_response) = response.tan(method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_tan_process(&tan_response.process, "4")?;
+            let mut pending = pending_challenge(
+                tan_response.challenge,
+                PendingOperation::Synchronization,
+                method,
+                received_at,
+            )?;
+            pending.assigned_system_id = system_id;
+            self.continuation_active = true;
+            return Ok(SynchronizationResult::Challenge(Box::new(pending)));
+        }
+        self.state.system_id = Some(system_id.ok_or(Error::MissingValue {
+            field: "assigned system ID",
+        })?);
+        self.continuation_active = false;
+        Ok(SynchronizationResult::Complete)
+    }
+
+    pub(crate) fn initialization_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        self.ensure_no_dialog()?;
+        let method = self.selected_method().ok().cloned();
+        if let Some(method) = &method {
+            validate_supported_method(method)?;
+            validate_medium(method, self.state.selected_tan_medium.as_deref())?;
+        }
+        let system_id = self.state.system_id.as_deref().unwrap_or("0");
+        let context = SecurityContext {
+            institute: &self.institute,
+            credentials: &self.credentials,
+            system_id,
+            security_function: method
+                .as_ref()
+                .map_or("999", |method| method.security_function.as_str()),
+            profile_version: if method.is_some() { "2" } else { "1" },
+            dialog_id: "0",
+            message_number: 1,
+            date,
+            time,
+        };
+        segments::initialization(
+            &context,
+            &self.product,
+            &self.state,
+            method.as_ref(),
+            "HKIDN",
+            self.state.selected_tan_medium.as_deref(),
+        )
+    }
+
+    pub(crate) fn tan_media_initialization_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        self.ensure_no_dialog()?;
+        let method = self.selected_method()?.clone();
+        validate_supported_method(&method)?;
+        let system_id = self.state.system_id.as_deref().unwrap_or("0");
+        let context = SecurityContext {
+            institute: &self.institute,
+            credentials: &self.credentials,
+            system_id,
+            security_function: &method.security_function,
+            profile_version: "2",
+            dialog_id: "0",
+            message_number: 1,
+            date,
+            time,
+        };
+        segments::initialization(
+            &context,
+            &self.product,
+            &self.state,
+            Some(&method),
+            "HKTAB",
+            self.state.selected_tan_medium.as_deref().or(Some("noref")),
+        )
+    }
+
+    pub(crate) fn accept_tan_media_initialization(
+        &mut self,
+        input: &[u8],
+    ) -> Result<&[TanMedium], Error> {
+        let method = self.selected_method()?.clone();
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        self.apply_parameters(&response)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if let Some(tan_response) = response.tan(method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_tan_process(&tan_response.process, "4")?;
+            return Err(Limitation::TanMedium.into());
+        }
+        self.dialog = Some(DialogState {
+            id: response.dialog_id().to_owned(),
+            next_message_number: response
+                .message_number()
+                .checked_add(1)
+                .ok_or(Error::InconsistentState)?,
+            security_function: method.security_function.clone(),
+            profile_version: "2",
+            system_id: self
+                .state
+                .system_id
+                .clone()
+                .unwrap_or_else(|| "0".to_owned()),
+            method: Some(method),
+            anonymous: false,
+        });
+        self.tan_media = response.tan_media()?;
+        Ok(&self.tan_media)
+    }
+
+    pub(crate) fn accept_initialization(
+        &mut self,
+        input: &[u8],
+        received_at: NaiveDateTime,
+    ) -> Result<InitializationResult, Error> {
+        let requested_method = self.selected_method().ok().cloned();
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        self.apply_parameters(&response)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if requested_method.is_none() && !response.has_tan_method_response() {
+            return Err(Error::MissingValue {
+                field: "3920 TAN method response",
+            });
+        }
+        let next_message_number = response
+            .message_number()
+            .checked_add(1)
+            .ok_or(Error::InconsistentState)?;
+        self.dialog = Some(DialogState {
+            id: response.dialog_id().to_owned(),
+            next_message_number,
+            security_function: requested_method.as_ref().map_or_else(
+                || "999".to_owned(),
+                |method| method.security_function.clone(),
+            ),
+            profile_version: if requested_method.is_some() { "2" } else { "1" },
+            system_id: self
+                .state
+                .system_id
+                .clone()
+                .unwrap_or_else(|| "0".to_owned()),
+            method: requested_method.clone(),
+            anonymous: false,
+        });
+        let selected = self.state.selected_tan_method.as_deref();
+        if selected.is_none()
+            || !self
+                .state
+                .tan_methods
+                .iter()
+                .any(|method| Some(method.security_function.as_str()) == selected)
+            || (self.allowed_tan_methods_known
+                && !self
+                    .allowed_tan_methods
+                    .iter()
+                    .any(|method| Some(method.as_str()) == selected))
+        {
+            return Ok(InitializationResult::ChooseTanMethod);
+        }
+
+        let method = self.selected_method()?.clone();
+        if let Some(tan_response) = response.tan(method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_tan_process(&tan_response.process, "4")?;
+            self.continuation_active = true;
+            return Ok(InitializationResult::Challenge(Box::new(
+                pending_challenge(
+                    tan_response.challenge,
+                    PendingOperation::Initialization,
+                    method,
+                    received_at,
+                )?,
+            )));
+        }
+        self.continuation_active = false;
+        Ok(InitializationResult::Connected)
+    }
+
+    pub(crate) fn balance_request(
+        &mut self,
+        account_index: usize,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        let account = self
+            .accounts()
+            .get(account_index)
+            .ok_or(Limitation::BalanceNotAuthorized)?
+            .clone();
+        if !account.allows_balance() {
+            return Err(Limitation::BalanceNotAuthorized.into());
+        }
+        let signatures = account
+            .allowed_operations
+            .iter()
+            .find(|operation| operation.code == "HKSAL")
+            .map(|operation| operation.required_signatures)
+            .unwrap_or(0);
+        if signatures > 1 {
+            return Err(Limitation::MultipleSigners.into());
+        }
+        let version = self
+            .state
+            .balance_versions
+            .iter()
+            .copied()
+            .find(|version| (6..=8).contains(version))
+            .ok_or(Limitation::BalanceNotAdvertised)?;
+        let tan = match self.state.balance_requires_tan {
+            Some(true) => {
+                let method = self.active_method()?.clone();
+                Some((method, self.state.selected_tan_medium.clone()))
+            }
+            Some(false) => None,
+            None => return Err(Limitation::PinTanParameters.into()),
+        };
+        let message = {
+            let context = self.context(date, time)?;
+            segments::balance_request(
+                &context,
+                &account,
+                version,
+                tan.as_ref()
+                    .map(|(method, medium)| (method, medium.as_deref())),
+            )?
+        };
+        self.requested_balance = Some(account);
+        Ok(message)
+    }
+
+    pub(crate) fn accept_balance(
+        &mut self,
+        input: &[u8],
+        received_at: NaiveDateTime,
+    ) -> Result<BalanceResult, Error> {
+        let response = self.accept_dialog_response(input)?;
+        if let Some(error) = response.first_error() {
+            self.requested_balance = None;
+            return Err(Error::Bank(error));
+        }
+        if let Some(balance) = response.balance()? {
+            let requested = self
+                .requested_balance
+                .take()
+                .ok_or(Error::InconsistentState)?;
+            if !requested.same_identity(&balance.account) {
+                return Err(Error::InconsistentState);
+            }
+            self.continuation_active = false;
+            return Ok(BalanceResult::Complete(Box::new(balance)));
+        }
+        let method = self.active_method()?.clone();
+        let tan_response = response
+            .tan(method.hktan_version)?
+            .ok_or(Error::MissingValue {
+                field: "balance or HITAN response",
+            })?;
+        validate_tan_process(&tan_response.process, "4")?;
+        self.continuation_active = true;
+        Ok(BalanceResult::Challenge(Box::new(pending_challenge(
+            tan_response.challenge,
+            PendingOperation::Balance,
+            method,
+            received_at,
+        )?)))
+    }
+
+    pub(crate) fn tan_submission_request(
+        &mut self,
+        pending: &PendingChallenge,
+        tan: &Tan,
+        now: NaiveDateTime,
+    ) -> Result<Vec<u8>, Error> {
+        if !self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        ensure_not_expired(&pending.challenge, now)?;
+        if pending.method.process != TanProcess::ProcessVariantTwo {
+            return Err(Limitation::TanProcessVariant.into());
+        }
+        if pending.method.hhd_response_required {
+            return Err(Limitation::PinTanParameters.into());
+        }
+        let tan_length = encoding_rs::mem::encode_latin1_lossy(&tan.value).len();
+        if pending
+            .method
+            .max_tan_length
+            .is_some_and(|maximum| tan_length > usize::from(maximum))
+        {
+            return Err(InputError::Tan.into());
+        }
+        match pending.method.tan_format.as_deref() {
+            Some("1") if !tan.value.bytes().all(|byte| byte.is_ascii_digit()) => {
+                return Err(InputError::Tan.into());
+            }
+            None | Some("1" | "2") => {}
+            Some(_) => return Err(Limitation::PinTanParameters.into()),
+        }
+        let context = self.context(now.date(), now.time())?;
+        segments::tan_submission(
+            &context,
+            &pending.method,
+            &pending.challenge.reference,
+            &tan.value,
+        )
+    }
+
+    pub(crate) fn decoupled_poll_request(
+        &mut self,
+        pending: &mut PendingChallenge,
+        mode: PollingMode,
+        now: NaiveDateTime,
+    ) -> Result<Vec<u8>, Error> {
+        if !self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        ensure_not_expired(&pending.challenge, now)?;
+        if pending.method.process != TanProcess::Decoupled {
+            return Err(Limitation::TanMethod.into());
+        }
+        let allowed = match mode {
+            PollingMode::Manual => pending.method.manual_polling_allowed,
+            PollingMode::Automatic => pending.method.automatic_polling_allowed,
+        };
+        if !allowed {
+            return Err(Limitation::DecoupledPolling.into());
+        }
+        let bank_limit = pending
+            .method
+            .max_decoupled_polls
+            .unwrap_or(LOCAL_DECOUPLED_POLL_LIMIT);
+        let limit = bank_limit.min(LOCAL_DECOUPLED_POLL_LIMIT);
+        if pending.polls >= limit {
+            return Err(Error::PollLimitReached);
+        }
+        if pending.next_poll_at.is_some_and(|earliest| now < earliest) {
+            return Err(Error::PollTooEarly);
+        }
+        pending.polls += 1;
+        pending.next_poll_at = pending
+            .method
+            .next_poll_delay_seconds
+            .map(|seconds| {
+                now.checked_add_signed(TimeDelta::seconds(i64::from(seconds)))
+                    .ok_or(Error::InconsistentState)
+            })
+            .transpose()?;
+        let context = self.context(now.date(), now.time())?;
+        segments::decoupled_poll(&context, &pending.method, &pending.challenge.reference)
+    }
+
+    pub(crate) fn accept_initialization_continuation(
+        &mut self,
+        input: &[u8],
+        pending: PendingChallenge,
+    ) -> Result<InitializationResult, Error> {
+        if pending.operation != PendingOperation::Initialization {
+            return Err(Error::InconsistentState);
+        }
+        let response = self.accept_dialog_response(input)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if let Some(tan_response) = response.tan(pending.method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_continuation_process(&tan_response.process, pending.method.process)?;
+            return Ok(InitializationResult::Challenge(Box::new(
+                continued_challenge(pending, tan_response.challenge)?,
+            )));
+        }
+        self.continuation_active = false;
+        Ok(InitializationResult::Connected)
+    }
+
+    pub(crate) fn accept_balance_continuation(
+        &mut self,
+        input: &[u8],
+        pending: PendingChallenge,
+    ) -> Result<BalanceResult, Error> {
+        if pending.operation != PendingOperation::Balance {
+            return Err(Error::InconsistentState);
+        }
+        let response = self.accept_dialog_response(input)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if let Some(balance) = response.balance()? {
+            let requested = self
+                .requested_balance
+                .take()
+                .ok_or(Error::InconsistentState)?;
+            if !requested.same_identity(&balance.account) {
+                return Err(Error::InconsistentState);
+            }
+            self.continuation_active = false;
+            return Ok(BalanceResult::Complete(Box::new(balance)));
+        }
+        let tan_response =
+            response
+                .tan(pending.method.hktan_version)?
+                .ok_or(Error::MissingValue {
+                    field: "continuation HITAN",
+                })?;
+        validate_continuation_process(&tan_response.process, pending.method.process)?;
+        Ok(BalanceResult::Challenge(Box::new(continued_challenge(
+            pending,
+            tan_response.challenge,
+        )?)))
+    }
+
+    pub(crate) fn accept_synchronization_continuation(
+        &mut self,
+        input: &[u8],
+        pending: PendingChallenge,
+    ) -> Result<SynchronizationResult, Error> {
+        if pending.operation != PendingOperation::Synchronization {
+            return Err(Error::InconsistentState);
+        }
+        let response = self.accept_dialog_response(input)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if let Some(tan_response) = response.tan(pending.method.hktan_version)?
+            && tan_response.challenge.reference != "noref"
+        {
+            validate_continuation_process(&tan_response.process, pending.method.process)?;
+            return Ok(SynchronizationResult::Challenge(Box::new(
+                continued_challenge(pending, tan_response.challenge)?,
+            )));
+        }
+        let system_id =
+            response
+                .system_id()?
+                .or(pending.assigned_system_id)
+                .ok_or(Error::MissingValue {
+                    field: "assigned system ID",
+                })?;
+        self.state.system_id = Some(system_id.clone());
+        if let Some(dialog) = &mut self.dialog {
+            dialog.system_id = system_id;
+        }
+        self.continuation_active = false;
+        Ok(SynchronizationResult::Complete)
+    }
+
+    pub(crate) fn termination_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        let dialog = self.dialog.as_ref().ok_or(Error::InconsistentState)?;
+        if dialog.anonymous {
+            segments::anonymous_termination(&dialog.id, dialog.next_message_number)
+        } else {
+            let context = self.context(date, time)?;
+            segments::termination(&context)
+        }
+    }
+
+    pub(crate) fn accept_termination(&mut self, input: &[u8]) -> Result<(), Error> {
+        let response = self.accept_dialog_response(input)?;
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        if !response
+            .responses()
+            .iter()
+            .any(|response| response.code() == 100)
+        {
+            return Err(Error::MissingValue {
+                field: "dialog termination response",
+            });
+        }
+        self.dialog = None;
+        self.continuation_active = false;
+        self.requested_balance = None;
+        Ok(())
+    }
+
+    pub(crate) fn abort_dialog(&mut self) {
+        self.dialog = None;
+        self.continuation_active = false;
+        self.requested_balance = None;
+    }
+
+    fn accept_dialog_response(&mut self, input: &[u8]) -> Result<Response, Error> {
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        let dialog = self.dialog.as_mut().ok_or(Error::InconsistentState)?;
+        let expected_message_number = dialog.next_message_number;
+        if response.dialog_id() != dialog.id || response.message_number() != expected_message_number
+        {
+            return Err(Error::InconsistentState);
+        }
+        dialog.next_message_number = dialog
+            .next_message_number
+            .checked_add(1)
+            .ok_or(Error::InconsistentState)?;
+        Ok(response)
+    }
+
+    fn record_responses(&mut self, response: &Response) {
+        self.last_responses.clear();
+        self.last_responses.extend_from_slice(response.responses());
+    }
+
+    fn selected_method(&self) -> Result<&TanMethod, Error> {
+        let selected = self
+            .state
+            .selected_tan_method
+            .as_deref()
+            .ok_or(Limitation::TanMethod)?;
+        self.state
+            .tan_methods
+            .iter()
+            .find(|method| method.security_function == selected)
+            .ok_or_else(|| Limitation::TanMethod.into())
+    }
+
+    fn ensure_no_dialog(&self) -> Result<(), Error> {
+        if self.dialog.is_none() {
+            Ok(())
+        } else {
+            Err(Error::InconsistentState)
+        }
+    }
+
+    fn active_method(&self) -> Result<&TanMethod, Error> {
+        self.dialog
+            .as_ref()
+            .and_then(|dialog| dialog.method.as_ref())
+            .ok_or(Error::InconsistentState)
+    }
+
+    fn initial_context<'a>(
+        &'a self,
+        method: &'a TanMethod,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> SecurityContext<'a> {
+        SecurityContext {
+            institute: &self.institute,
+            credentials: &self.credentials,
+            system_id: "0",
+            security_function: &method.security_function,
+            profile_version: "2",
+            dialog_id: "0",
+            message_number: 1,
+            date,
+            time,
+        }
+    }
+
+    fn context(&self, date: NaiveDate, time: NaiveTime) -> Result<SecurityContext<'_>, Error> {
+        let dialog = self.dialog.as_ref().ok_or(Error::InconsistentState)?;
+        if dialog.anonymous {
+            return Err(Error::InconsistentState);
+        }
+        Ok(SecurityContext {
+            institute: &self.institute,
+            credentials: &self.credentials,
+            system_id: &dialog.system_id,
+            security_function: &dialog.security_function,
+            profile_version: dialog.profile_version,
+            dialog_id: &dialog.id,
+            message_number: dialog.next_message_number,
+            date,
+            time,
+        })
+    }
+
+    fn apply_parameters(&mut self, response: &Response) -> Result<(), Error> {
+        if let Some(accounts) = response.apply_parameters(&mut self.state)? {
+            self.transient_accounts = Some(accounts);
+        } else if self.state.upd_version > 0 {
+            self.transient_accounts = None;
+        }
+        if response.has_tan_method_response() {
+            self.allowed_tan_methods = response.allowed_tan_methods().to_vec();
+            self.allowed_tan_methods_known = true;
+        }
+        Ok(())
+    }
+}
+
+fn validate_supported_method(method: &TanMethod) -> Result<(), Error> {
+    if !matches!(
+        method.process,
+        TanProcess::ProcessVariantTwo | TanProcess::Decoupled
+    ) {
+        return Err(Limitation::TanProcessVariant.into());
+    }
+    if method.hhd_response_required {
+        return Err(Limitation::PinTanParameters.into());
+    }
+    Ok(())
+}
+
+fn validate_reusable_state(state: &ReusableState) -> Result<(), Error> {
+    if state.bpd_version > 999
+        || state.upd_version > 999
+        || state
+            .system_id
+            .as_deref()
+            .is_some_and(|value| !valid_latin1_length(value, 1, 30))
+        || state.selected_tan_method.as_deref().is_some_and(|value| {
+            value.len() != 3 || !value.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        || state
+            .selected_tan_medium
+            .as_deref()
+            .is_some_and(|value| !valid_latin1_length(value, 1, 32))
+        || state.tan_methods.iter().any(|method| {
+            method.security_function.len() != 3
+                || !method
+                    .security_function
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+                || !matches!(method.security_function.parse::<u16>(), Ok(900..=997))
+                || !(6..=7).contains(&method.hktan_version)
+        })
+    {
+        Err(InputError::ReusableState.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_medium(method: &TanMethod, medium: Option<&str>) -> Result<(), Error> {
+    if method.medium_name_required && medium.is_none() {
+        Err(Limitation::TanMedium.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_tan_process(actual: &str, expected: &str) -> Result<(), Error> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Error::InvalidValue {
+            field: "HITAN process",
+        })
+    }
+}
+
+fn validate_continuation_process(actual: &str, process: TanProcess) -> Result<(), Error> {
+    let expected = match process {
+        TanProcess::ProcessVariantOne => return Err(Limitation::TanProcessVariant.into()),
+        TanProcess::ProcessVariantTwo => "2",
+        TanProcess::Decoupled => "S",
+    };
+    validate_tan_process(actual, expected)
+}
+
+fn ensure_not_expired(challenge: &Challenge, now: NaiveDateTime) -> Result<(), Error> {
+    if challenge.expires_at.is_some_and(|expiry| {
+        expiry
+            .time()
+            .is_some_and(|time| now > expiry.date().and_time(time))
+            || (expiry.time().is_none() && now.date() > expiry.date())
+    }) {
+        Err(Error::ChallengeExpired)
+    } else {
+        Ok(())
+    }
+}
+
+fn pending_challenge(
+    challenge: Challenge,
+    operation: PendingOperation,
+    method: TanMethod,
+    received_at: NaiveDateTime,
+) -> Result<PendingChallenge, Error> {
+    let next_poll_at = if method.process == TanProcess::Decoupled {
+        method
+            .first_poll_delay_seconds
+            .map(|seconds| {
+                received_at
+                    .checked_add_signed(TimeDelta::seconds(i64::from(seconds)))
+                    .ok_or(Error::InconsistentState)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(PendingChallenge {
+        challenge,
+        operation,
+        method,
+        polls: 0,
+        continuations: 0,
+        next_poll_at,
+        assigned_system_id: None,
+    })
+}
+
+fn continued_challenge(
+    mut pending: PendingChallenge,
+    challenge: Challenge,
+) -> Result<PendingChallenge, Error> {
+    pending.continuations = pending
+        .continuations
+        .checked_add(1)
+        .ok_or(Error::ContinuationLimitReached)?;
+    if pending.continuations > LOCAL_CONTINUATION_LIMIT {
+        return Err(Error::ContinuationLimitReached);
+    }
+    pending.challenge = challenge;
+    Ok(pending)
+}
+
+#[cfg(test)]
+mod tests;

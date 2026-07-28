@@ -206,29 +206,35 @@ or owner data is stored in this repository.
 
 ## Non-protocol implementation references
 
-These sources do not define FinTS behavior. They constrain only a future Rust
-implementation and must be rechecked against the dependency versions selected in
-the implementation commit:
+These sources do not define FinTS behavior. They constrain the Rust implementation
+and correspond to the direct dependency versions selected for Gate 1:
 
 - [Rust `Debug`](https://doc.rust-lang.org/stable/std/fmt/trait.Debug.html):
   derived formatting exposes fields, so secret-bearing protocol types must omit it
   or provide deliberately redacted formatting.
-- [`reqwest` redirect policy](https://docs.rs/reqwest/latest/reqwest/redirect/struct.Policy.html)
-  and [blocking response](https://docs.rs/reqwest/latest/reqwest/blocking/struct.Response.html):
+- [`reqwest` 0.13.4 redirect
+  policy](https://docs.rs/reqwest/0.13.4/reqwest/redirect/struct.Policy.html)
+  and [blocking
+  response](https://docs.rs/reqwest/0.13.4/reqwest/blocking/struct.Response.html):
   redirects can be disabled and a response can be read incrementally through
   `std::io::Read`, permitting a concrete bounded HTTPS transport without a
   transport trait or a direct async-runtime dependency.
-- [`encoding_rs::mem`](https://docs.rs/encoding_rs/latest/encoding_rs/mem/index.html):
+- [`base64` 0.22.1 general-purpose
+  engine](https://docs.rs/base64/0.22.1/base64/engine/general_purpose/index.html):
+  implements the complete-message Base64 encoding inherited from the historical
+  HBCI PIN/TAN HTTPS mapping; decoding failure remains an explicit transport error.
+- [`encoding_rs` 0.8.35
+  `mem`](https://docs.rs/encoding_rs/0.8.35/encoding_rs/mem/index.html):
   provides strict Latin-1 range checks and Latin-1/UTF-8 conversion primitives;
   label lookup must not be used because the web-encoding label `ISO-8859-1`
   resolves as Windows-1252.
-- [`chrono`](https://docs.rs/chrono/latest/chrono/): provides checked parsing and
-  construction for protocol-defined dates and times.
+- [`chrono` 0.4.45](https://docs.rs/chrono/0.4.45/chrono/): provides checked
+  parsing and construction for protocol-defined dates and times.
 - [`serde` derive](https://serde.rs/derive.html): applies only to the explicitly
   reusable Gate 1 synchronization state named in `SCOPE.md`.
-- [`thiserror`](https://docs.rs/thiserror/latest/thiserror/): supports typed errors,
-  but all error text and source conversion still require an explicit redaction
-  review.
+- [`thiserror` 2.0.19](https://docs.rs/thiserror/2.0.19/thiserror/): supports typed
+  errors, but all error text and source conversion still require an explicit
+  redaction review.
 
 As corroboration only, the deployed
 [`python-fints` HTTPS transport](https://github.com/raphaelm/python-fints/blob/master/fints/connection.py)
