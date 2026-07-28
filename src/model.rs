@@ -322,6 +322,30 @@ impl Account {
             .any(|operation| matches!(operation.code.as_str(), "HKCAZ" | "HKKAZ"))
     }
 
+    pub fn allows_depot_positions(&self) -> bool {
+        self.allowed_operations
+            .iter()
+            .any(|operation| operation.code == "HKWPD")
+    }
+
+    pub fn allows_securities_transactions(&self) -> bool {
+        self.allowed_operations
+            .iter()
+            .any(|operation| operation.code == "HKWDU")
+    }
+
+    pub fn allows_credit_card_transactions(&self) -> bool {
+        self.allowed_operations
+            .iter()
+            .any(|operation| operation.code == "HKKKU")
+    }
+
+    pub fn allows_credit_card_balance(&self) -> bool {
+        self.allowed_operations
+            .iter()
+            .any(|operation| operation.code == "HKKKS")
+    }
+
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
         match (self.iban.as_deref(), other.iban.as_deref()) {
             (Some(left), Some(right)) => left == right,
@@ -358,6 +382,13 @@ pub(crate) struct CamtCapability {
     pub(crate) descriptor: String,
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub(crate) struct CreditCardCapability {
+    pub(crate) account_required: bool,
+    pub(crate) date_range_allowed: bool,
+    pub(crate) entry_count_allowed: bool,
+}
+
 #[derive(Clone)]
 pub(crate) enum TransactionFormat {
     Camt { descriptor: String },
@@ -392,6 +423,30 @@ pub struct ReusableState {
     pub(crate) camt_requires_tan: Option<bool>,
     #[serde(default)]
     pub(crate) legacy_transactions_require_tan: Option<bool>,
+    #[serde(default)]
+    pub(crate) depot_positions_advertised: bool,
+    #[serde(default)]
+    pub(crate) depot_positions_supported: bool,
+    #[serde(default)]
+    pub(crate) depot_positions_requires_tan: Option<bool>,
+    #[serde(default)]
+    pub(crate) securities_transactions_advertised: bool,
+    #[serde(default)]
+    pub(crate) securities_transactions_supported: bool,
+    #[serde(default)]
+    pub(crate) securities_transactions_requires_tan: Option<bool>,
+    #[serde(default)]
+    pub(crate) credit_card_transactions_advertised: bool,
+    #[serde(default)]
+    pub(crate) credit_card_transactions: Option<CreditCardCapability>,
+    #[serde(default)]
+    pub(crate) credit_card_transactions_requires_tan: Option<bool>,
+    #[serde(default)]
+    pub(crate) credit_card_balance_advertised: bool,
+    #[serde(default)]
+    pub(crate) credit_card_balance_account_required: Option<bool>,
+    #[serde(default)]
+    pub(crate) credit_card_balance_requires_tan: Option<bool>,
     pub(crate) tan_methods: Vec<TanMethod>,
     pub(crate) accounts: Vec<Account>,
     pub(crate) selected_tan_method: Option<String>,
@@ -436,6 +491,507 @@ impl ReusableState {
 pub enum CreditDebit {
     Credit,
     Debit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuantityUnit {
+    Units,
+    Nominal,
+}
+
+/// Exact securities quantity supplied by the institution.
+///
+/// The value can reveal private holdings and intentionally provides no `Debug`
+/// implementation.
+#[derive(Clone)]
+pub struct SecuritiesQuantity {
+    coefficient: u128,
+    scale: u8,
+    unit: QuantityUnit,
+    negative: bool,
+}
+
+impl SecuritiesQuantity {
+    pub(crate) fn new(coefficient: u128, scale: u8, unit: QuantityUnit, negative: bool) -> Self {
+        Self {
+            coefficient,
+            scale,
+            unit,
+            negative,
+        }
+    }
+
+    pub fn coefficient(&self) -> u128 {
+        self.coefficient
+    }
+
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
+
+    pub fn unit(&self) -> QuantityUnit {
+        self.unit
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.negative
+    }
+}
+
+/// Identifiers and name for one institution-supplied security.
+///
+/// These fields identify private holdings and intentionally provide no `Debug`
+/// implementation.
+#[derive(Clone)]
+pub struct SecurityInstrument {
+    pub(crate) isin: Option<String>,
+    pub(crate) wkn: Option<String>,
+    pub(crate) name: String,
+}
+
+impl SecurityInstrument {
+    pub fn isin(&self) -> Option<&str> {
+        self.isin.as_deref()
+    }
+
+    pub fn wkn(&self) -> Option<&str> {
+        self.wkn.as_deref()
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PriceQuality {
+    Market,
+    Indicative,
+}
+
+/// Exact quoted security price or cost basis supplied by the institution.
+///
+/// `quality` is absent for a structured cost basis. This private holding value
+/// intentionally provides no `Debug` implementation.
+#[derive(Clone)]
+pub struct SecurityPrice {
+    coefficient: u128,
+    scale: u8,
+    currency: Option<String>,
+    percentage: bool,
+    quality: Option<PriceQuality>,
+    date: Option<NaiveDate>,
+    time: Option<NaiveTime>,
+}
+
+impl SecurityPrice {
+    pub(crate) fn new(
+        coefficient: u128,
+        scale: u8,
+        currency: Option<String>,
+        percentage: bool,
+        quality: Option<PriceQuality>,
+        date: Option<NaiveDate>,
+        time: Option<NaiveTime>,
+    ) -> Self {
+        Self {
+            coefficient,
+            scale,
+            currency,
+            percentage,
+            quality,
+            date,
+            time,
+        }
+    }
+
+    pub fn coefficient(&self) -> u128 {
+        self.coefficient
+    }
+
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
+
+    pub fn currency(&self) -> Option<&str> {
+        self.currency.as_deref()
+    }
+
+    pub fn is_percentage(&self) -> bool {
+        self.percentage
+    }
+
+    pub fn quality(&self) -> Option<PriceQuality> {
+        self.quality
+    }
+
+    pub fn date(&self) -> Option<NaiveDate> {
+        self.date
+    }
+
+    pub fn time(&self) -> Option<NaiveTime> {
+        self.time
+    }
+}
+
+/// Signed securities amount; the sign is kept independently from the exact amount.
+///
+/// This private holding value intentionally provides no `Debug` implementation.
+pub struct SecuritiesAmount {
+    pub(crate) amount: Amount,
+    pub(crate) negative: bool,
+}
+
+impl SecuritiesAmount {
+    pub fn amount(&self) -> &Amount {
+        &self.amount
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.negative
+    }
+}
+
+/// One explicitly reported position in a depot statement.
+///
+/// Optional values remain absent and the private result intentionally provides no
+/// `Debug` implementation.
+pub struct DepotPosition {
+    pub(crate) instrument: SecurityInstrument,
+    pub(crate) quantity: SecuritiesQuantity,
+    pub(crate) price: Option<SecurityPrice>,
+    pub(crate) market_values: Vec<SecuritiesAmount>,
+    pub(crate) cost_basis: Option<SecurityPrice>,
+}
+
+impl DepotPosition {
+    pub fn instrument(&self) -> &SecurityInstrument {
+        &self.instrument
+    }
+
+    pub fn quantity(&self) -> &SecuritiesQuantity {
+        &self.quantity
+    }
+
+    pub fn price(&self) -> Option<&SecurityPrice> {
+        self.price.as_ref()
+    }
+
+    pub fn market_values(&self) -> &[SecuritiesAmount] {
+        &self.market_values
+    }
+
+    pub fn cost_basis(&self) -> Option<&SecurityPrice> {
+        self.cost_basis.as_ref()
+    }
+}
+
+/// Exhaustively paginated positions for exactly one UPD depot.
+///
+/// Institution-reported page totals remain in response order; they are never
+/// recomputed or deduplicated. This private result intentionally provides no
+/// `Debug` implementation.
+pub struct DepotPositions {
+    pub(crate) account: Account,
+    pub(crate) positions: Vec<DepotPosition>,
+    pub(crate) total_values: Vec<SecuritiesAmount>,
+}
+
+impl DepotPositions {
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+
+    pub fn positions(&self) -> &[DepotPosition] {
+        &self.positions
+    }
+
+    pub fn total_values(&self) -> &[SecuritiesAmount] {
+        &self.total_values
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecuritiesMovement {
+    Delivery,
+    Receipt,
+}
+
+/// One booked securities transaction, containing only explicitly supplied values.
+///
+/// `NONREF` and an omitted optional transaction-detail block produce absent
+/// fields. Free text is not interpreted as a fee or identity. This private result
+/// intentionally provides no `Debug` implementation.
+pub struct SecuritiesTransaction {
+    pub(crate) instrument: SecurityInstrument,
+    pub(crate) reference: Option<String>,
+    pub(crate) quantity: Option<SecuritiesQuantity>,
+    pub(crate) price: Option<SecurityPrice>,
+    pub(crate) amount: Option<SecuritiesAmount>,
+    pub(crate) accrued_interest: Option<SecuritiesAmount>,
+    pub(crate) transaction_kind: Option<String>,
+    pub(crate) movement: Option<SecuritiesMovement>,
+    pub(crate) effective_date: Option<NaiveDate>,
+    pub(crate) value_date: Option<NaiveDate>,
+    pub(crate) reversal: Option<bool>,
+    pub(crate) free_text: Vec<String>,
+}
+
+impl SecuritiesTransaction {
+    pub fn instrument(&self) -> &SecurityInstrument {
+        &self.instrument
+    }
+    pub fn reference(&self) -> Option<&str> {
+        self.reference.as_deref()
+    }
+    pub fn quantity(&self) -> Option<&SecuritiesQuantity> {
+        self.quantity.as_ref()
+    }
+    pub fn price(&self) -> Option<&SecurityPrice> {
+        self.price.as_ref()
+    }
+    pub fn amount(&self) -> Option<&SecuritiesAmount> {
+        self.amount.as_ref()
+    }
+    pub fn accrued_interest(&self) -> Option<&SecuritiesAmount> {
+        self.accrued_interest.as_ref()
+    }
+    pub fn transaction_kind(&self) -> Option<&str> {
+        self.transaction_kind.as_deref()
+    }
+    pub fn direction(&self) -> Option<SecuritiesMovement> {
+        self.movement
+    }
+    pub fn effective_date(&self) -> Option<NaiveDate> {
+        self.effective_date
+    }
+    pub fn value_date(&self) -> Option<NaiveDate> {
+        self.value_date
+    }
+    pub fn is_reversal(&self) -> Option<bool> {
+        self.reversal
+    }
+    pub fn free_text(&self) -> &[String] {
+        &self.free_text
+    }
+}
+
+/// Exhaustively paginated booked securities transactions for one UPD depot.
+///
+/// This private result intentionally provides no `Debug` implementation.
+pub struct SecuritiesTransactions {
+    pub(crate) account: Account,
+    pub(crate) entries: Vec<SecuritiesTransaction>,
+}
+
+impl SecuritiesTransactions {
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+    pub fn entries(&self) -> &[SecuritiesTransaction] {
+        &self.entries
+    }
+}
+
+/// Exact amount with the G112 debit/credit direction.
+///
+/// This private financial value intentionally provides no `Debug` implementation.
+pub struct CreditCardAmount {
+    pub(crate) amount: Amount,
+    pub(crate) direction: CreditDebit,
+}
+
+impl CreditCardAmount {
+    pub fn amount(&self) -> &Amount {
+        &self.amount
+    }
+    pub fn direction(&self) -> CreditDebit {
+        self.direction
+    }
+}
+
+/// Current G112 credit-card balance with its institution-supplied timestamp.
+///
+/// The date is mandatory in the `sdo` value and the time remains absent when the
+/// institution omits it. This private financial value intentionally provides no
+/// `Debug` implementation.
+pub struct CreditCardCurrentBalance {
+    pub(crate) amount: CreditCardAmount,
+    pub(crate) timestamp: Timestamp,
+}
+
+impl CreditCardCurrentBalance {
+    pub fn amount(&self) -> &CreditCardAmount {
+        &self.amount
+    }
+
+    pub fn timestamp(&self) -> Timestamp {
+        self.timestamp
+    }
+}
+
+/// One booked credit-card entry returned by G112 HIKKU.
+///
+/// Optional fields remain absent. The cash and foreign-use fee fields are
+/// bank-formatted display strings defined by G112, not parsed amounts. This
+/// private result intentionally provides no `Debug` implementation.
+pub struct CreditCardEntry {
+    pub(crate) card_number: String,
+    pub(crate) receipt_date: NaiveDate,
+    pub(crate) booking_date: NaiveDate,
+    pub(crate) statement_date: Option<NaiveDate>,
+    pub(crate) value_date: Option<NaiveDate>,
+    pub(crate) original_amount: Option<CreditCardAmount>,
+    pub(crate) exchange_rate: Option<(u128, u8)>,
+    pub(crate) booking_amount: CreditCardAmount,
+    pub(crate) description: Vec<String>,
+    pub(crate) country: Option<String>,
+    pub(crate) merchant_name: Option<String>,
+    pub(crate) terminal: Option<String>,
+    pub(crate) billed: Option<bool>,
+    pub(crate) booking_reference: Option<String>,
+    pub(crate) fee_code: Option<String>,
+    pub(crate) statement_marker: Option<String>,
+    pub(crate) cash_fee: Option<String>,
+    pub(crate) foreign_use_fee: Option<String>,
+}
+
+impl CreditCardEntry {
+    pub fn card_number(&self) -> &str {
+        &self.card_number
+    }
+    pub fn receipt_date(&self) -> NaiveDate {
+        self.receipt_date
+    }
+    pub fn booking_date(&self) -> NaiveDate {
+        self.booking_date
+    }
+    pub fn statement_date(&self) -> Option<NaiveDate> {
+        self.statement_date
+    }
+    pub fn value_date(&self) -> Option<NaiveDate> {
+        self.value_date
+    }
+    pub fn original_amount(&self) -> Option<&CreditCardAmount> {
+        self.original_amount.as_ref()
+    }
+    pub fn exchange_rate(&self) -> Option<(u128, u8)> {
+        self.exchange_rate
+    }
+    pub fn booking_amount(&self) -> &CreditCardAmount {
+        &self.booking_amount
+    }
+    pub fn description(&self) -> &[String] {
+        &self.description
+    }
+    pub fn country(&self) -> Option<&str> {
+        self.country.as_deref()
+    }
+    pub fn merchant_name(&self) -> Option<&str> {
+        self.merchant_name.as_deref()
+    }
+    pub fn terminal(&self) -> Option<&str> {
+        self.terminal.as_deref()
+    }
+    pub fn billed(&self) -> Option<bool> {
+        self.billed
+    }
+    pub fn booking_reference(&self) -> Option<&str> {
+        self.booking_reference.as_deref()
+    }
+    pub fn fee_code(&self) -> Option<&str> {
+        self.fee_code.as_deref()
+    }
+    pub fn statement_marker(&self) -> Option<&str> {
+        self.statement_marker.as_deref()
+    }
+    pub fn cash_fee(&self) -> Option<&str> {
+        self.cash_fee.as_deref()
+    }
+    pub fn foreign_use_fee(&self) -> Option<&str> {
+        self.foreign_use_fee.as_deref()
+    }
+}
+
+/// Exhaustively paginated G112 credit-card entries for one UPD account.
+///
+/// `reported_card_number` is absent when response code 3010 supplied no HIKKU
+/// segment; it is never copied from the request. This private result
+/// intentionally provides no `Debug` implementation.
+pub struct CreditCardTransactions {
+    pub(crate) account: Account,
+    pub(crate) reported_card_number: Option<String>,
+    pub(crate) reported_account_id: Option<String>,
+    pub(crate) current_balance: Option<CreditCardCurrentBalance>,
+    pub(crate) last_statement_date: Option<NaiveDate>,
+    pub(crate) next_statement_date: Option<NaiveDate>,
+    pub(crate) entries: Vec<CreditCardEntry>,
+}
+
+impl CreditCardTransactions {
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+    pub fn reported_card_number(&self) -> Option<&str> {
+        self.reported_card_number.as_deref()
+    }
+    pub fn reported_account_id(&self) -> Option<&str> {
+        self.reported_account_id.as_deref()
+    }
+    pub fn current_balance(&self) -> Option<&CreditCardCurrentBalance> {
+        self.current_balance.as_ref()
+    }
+    pub fn last_statement_date(&self) -> Option<NaiveDate> {
+        self.last_statement_date
+    }
+    pub fn next_statement_date(&self) -> Option<NaiveDate> {
+        self.next_statement_date
+    }
+    pub fn entries(&self) -> &[CreditCardEntry] {
+        &self.entries
+    }
+}
+
+/// G112 credit-card balance components, kept independent without reconciliation.
+///
+/// No component is derived from the booked entries. This private result
+/// intentionally provides no `Debug` implementation.
+pub struct CreditCardBalance {
+    pub(crate) account: Account,
+    pub(crate) reported_card_number: String,
+    pub(crate) reported_account_id: Option<String>,
+    pub(crate) current: CreditCardCurrentBalance,
+    pub(crate) available: Option<CreditCardAmount>,
+    pub(crate) open_authorizations: Option<Amount>,
+    pub(crate) credit_limit: Option<Amount>,
+    pub(crate) next_statement_date: Option<NaiveDate>,
+}
+
+impl CreditCardBalance {
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+    pub fn reported_card_number(&self) -> &str {
+        &self.reported_card_number
+    }
+    pub fn reported_account_id(&self) -> Option<&str> {
+        self.reported_account_id.as_deref()
+    }
+    pub fn current(&self) -> &CreditCardCurrentBalance {
+        &self.current
+    }
+    pub fn available(&self) -> Option<&CreditCardAmount> {
+        self.available.as_ref()
+    }
+    pub fn open_authorizations(&self) -> Option<&Amount> {
+        self.open_authorizations.as_ref()
+    }
+    pub fn credit_limit(&self) -> Option<&Amount> {
+        self.credit_limit.as_ref()
+    }
+    pub fn next_statement_date(&self) -> Option<NaiveDate> {
+        self.next_statement_date
+    }
 }
 
 /// A protocol timestamp whose time component may be absent.

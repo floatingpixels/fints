@@ -52,6 +52,19 @@ fn mt940_page(statement: u16, bank_reference: &str, account_number: &str) -> Vec
     .into_bytes()
 }
 
+fn mt535_page(page: u16, indicator: &str) -> Vec<u8> {
+    format!(
+        ":16R:GENL\r\n:28E:{page}/{indicator}\r\n:20C::SEME//NONREF\r\n\
+         :23G:NEWM\r\n:98A::STAT//20260728\r\n\
+         :22F::STTY//CUST\r\n\
+         :97A::SAFE//12345678/300001\r\n:17B::ACTI//Y\r\n:16S:GENL\r\n\
+         :16R:FIN\r\n:35B:ISIN DE000FINTS05\r\nFictional Security\r\n\
+         :93B::AGGR//UNIT/1,\r\n:16R:SUBBAL\r\n\
+         :93C::TAVI//UNIT/AVAI/1,\r\n:16S:SUBBAL\r\n:16S:FIN\r\n-"
+    )
+    .into_bytes()
+}
+
 fn now() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 7, 28)
         .unwrap()
@@ -927,6 +940,169 @@ fn missing_transaction_page_does_not_wedge_the_dialog() {
             .transaction_request(0, None, None, now().date(), now().time())
             .is_ok()
     );
+}
+
+// FinTS Messages 2022 C.4.3.1 and Formals B.6: the MT535 page indicator
+// and FinTS Aufsetzpunkt must agree, repeated points terminate only the
+// current request, and a fresh same-dialog request remains possible.
+#[test]
+fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
+    let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+    account.account_type = Some(30);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.depot_positions_advertised = true;
+    engine.state.depot_positions_supported = true;
+    engine.state.depot_positions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+
+    engine
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+    let first = binary_response(
+        "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
+        &mt535_page(1, "MORE"),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        engine.accept_depot_positions(&first, now()).unwrap(),
+        DepotPositionsResult::Continue
+    ));
+    engine
+        .next_depot_positions_page_request(now().date(), now().time())
+        .unwrap();
+
+    let repeated = binary_response(
+        "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
+        &mt535_page(2, "MORE"),
+        "'HNHBS:5:1+3'",
+        "dialog1",
+        3,
+    );
+    assert!(matches!(
+        engine.accept_depot_positions(&repeated, now()),
+        Err(Error::RepeatedContinuationPoint)
+    ));
+    assert!(
+        engine
+            .depot_positions_request(0, now().date(), now().time())
+            .is_ok()
+    );
+}
+
+// FinTS Messages 2022 C.4.3.1 and return codes 3040/3010: a terminal
+// no-entry page completes exhaustive pagination without erasing earlier pages.
+#[test]
+fn terminal_empty_depot_page_preserves_collected_positions() {
+    let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+    account.account_type = Some(30);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.depot_positions_advertised = true;
+    engine.state.depot_positions_supported = true;
+    engine.state.depot_positions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+
+    engine
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+    let first = binary_response(
+        "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
+        &mt535_page(1, "MORE"),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        engine.accept_depot_positions(&first, now()).unwrap(),
+        DepotPositionsResult::Continue
+    ));
+    engine
+        .next_depot_positions_page_request(now().date(), now().time())
+        .unwrap();
+
+    let empty = response(&["HIRMG:2:2+3010::no entries"], "dialog1", 3);
+    let result = match engine.accept_depot_positions(&empty, now()).unwrap() {
+        DepotPositionsResult::Complete(result) => result,
+        _ => panic!("expected a completed paginated result"),
+    };
+    assert_eq!(result.positions().len(), 1);
+    assert_eq!(
+        result.positions()[0].instrument().isin(),
+        Some("DE000FINTS05")
+    );
+}
+
+// G112 C.12.1 and return code 3010: an empty response contains no
+// bank-reported card identifier or transaction data. The requested UPD account
+// remains the result binding, but is never relabeled as response content.
+#[test]
+fn empty_credit_card_transactions_do_not_fabricate_reported_values() {
+    let mut account = transaction_account(
+        "DE40123456780000123456",
+        "444433******1111",
+        &[("HKKKU", 1)],
+    );
+    account.account_type = Some(50);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.credit_card_transactions_advertised = true;
+    engine.state.credit_card_transactions = Some(crate::model::CreditCardCapability {
+        account_required: false,
+        date_range_allowed: true,
+        entry_count_allowed: true,
+    });
+    engine.state.credit_card_transactions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    engine
+        .credit_card_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let empty = response(&["HIRMG:2:2+3010::no entries"], "dialog1", 2);
+    let result = match engine
+        .accept_credit_card_transactions(&empty, now())
+        .unwrap()
+    {
+        CreditCardTransactionsResult::Complete(result) => result,
+        _ => panic!("expected an empty completed result"),
+    };
+
+    assert_eq!(result.reported_card_number(), None);
+    assert_eq!(result.reported_account_id(), None);
+    assert!(result.current_balance().is_none());
+    assert!(result.entries().is_empty());
+
+    // G112 Data Dictionary "Kreditkartennummer": the institution chooses the
+    // response masking form, so it is preserved rather than compared with UPD.
+    engine
+        .credit_card_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let masked = response(
+        &["HIRMG:2:2+0010::accepted", "HIKKU:3:1:3+444433********11"],
+        "dialog1",
+        3,
+    );
+    let result = match engine
+        .accept_credit_card_transactions(&masked, now())
+        .unwrap()
+    {
+        CreditCardTransactionsResult::Complete(result) => result,
+        _ => panic!("expected a completed masked-card result"),
+    };
+    assert_eq!(result.reported_card_number(), Some("444433********11"));
 }
 
 // PIN/TAN correction T31 and FinTS PIN/TAN 2020-07-10, B.5.2:

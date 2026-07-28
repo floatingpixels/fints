@@ -38,23 +38,25 @@ or actual credentials.
 
 ## Current assignment
 
-Only Gate 3 is active: broaden compatibility of the completed cash balance and booked
-transaction operations through official advertisement, BPD/UPD, response-code, and
-account-layout variations demonstrated by four fictional institution profiles.
+Gate 4 is the active owner-review boundary. It adds only the scoped product reads:
+advertised HKWPD 6 depot positions, advertised HKWDU 5 booked securities
+transactions, and G112 HKKKU/HKKKS 1 credit-card transactions and balances.
 
-The Gate 3 close-out stays narrow:
+The Gate 4 handoff stays narrow:
 
-1. Keep capability and segment-version selection entirely advertisement-derived.
-2. Cover one Atruvia, one Finanz Informatik, and two independent-institution protocol
-   profiles with independently written fictional fixtures.
-3. Distinguish absent capabilities from advertised but unsupported versions.
-4. Reject a mismatched HIBPA institute identity before mutating reusable state.
-5. Accept specification-permitted non-account UPD records without fabricating accounts.
-6. Preserve actionable, redacted response and endpoint failures.
+1. Gate every operation on exact BPD advertisement, UPD authorization, account type,
+   signature count, and HIPINS TAN parameters.
+2. Parse MT535, MT536, and G112 response values only where the institution explicitly
+   supplies them; never synthesize fees, references, balances, or transactions.
+3. Exhaust opaque continuation points in the active dialog with repeated-point,
+   page-count, and aggregate-entry bounds.
+4. Keep all product results, challenges, and pagination state process-memory-only and
+   under the existing redaction contract.
+5. Return typed limitations for absent or unsupported capabilities. Never derive
+   securities transactions from position snapshots.
 
-Do not add another banking operation, institution registry, provider abstraction,
-endpoint directory, depots, credit cards, payments, or a universal public segment API.
-Gate 4 remains closed.
+No institution registry, provider abstraction, endpoint directory, payment operation,
+or universal public segment API is part of this gate.
 
 ## Cross-repository handoff
 

@@ -30,13 +30,18 @@ is 2026-07-28.
   (institute identity and communication parameters); E.3 and the HIUPD 6 Data
   Dictionary entry (account-bound and non-account-bound UPD records, including
   the published 35-character IBAN correction).
+- **Gate 4 sections:** B.6 (opaque pagination); E.3 and the HIUPD 6 Data
+  Dictionary entries for account type and account/depot number. Account types
+  30-39 identify securities depots and 50-59 identify credit-card accounts;
+  advertised allowed operations still authorize each concrete request.
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
   BPD/UPD handling, product fields, response envelopes, and protocol state
   numbering; and Gate 3 replacement of changed parameter sets, endpoint
   institute validation, and omission of non-account-bound UPD records from the
-  account list.
+  account list. For Gate 4 it authorizes discovering depot and credit-card
+  products from UPD without guessing from names or identifiers.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -124,6 +129,10 @@ is 2026-07-28.
   identifications), C.2.1.1.1, C.2.1.2.1-C.2.1.2.3, and C.2.3.1.1.1,
   covering the independently negotiable HKKAZ 6/7, HKSAL 6/7/8, and HKCAZ 1
   profiles and their BPD parameter segments.
+- **Gate 4 sections:** C.4.3.1 (HKWPD/HIWPD/HIWPDS version 6 depot
+  positions) and C.4.3.2 (HKWDU/HIWDU/HIWDUS version 5 booked depot
+  transactions), including the request fields, binary response payloads, BPD
+  parameters, and operation-specific pagination fields.
 - **Apply alongside:** G102/CR 525 is already incorporated into this Release
   2022 volume. The current return-code volume still applies.
 - **Authorizes:** negotiated Gate 1 balance requests and responses for segment
@@ -131,7 +140,9 @@ is 2026-07-28.
   optional-value semantics; and Gate 2 HKCAZ 1 or bounded HKKAZ 7/6 booked
   transaction retrieval, including the operation-specific continuation field.
   For Gate 3 it authorizes deterministic selection from the advertised
-  operation/version combinations, never institution-name dispatch.
+  operation/version combinations, never institution-name dispatch. For Gate 4
+  it authorizes only advertised and UPD-authorized HKWPD 6 and HKWDU 5 using
+  the specified MT535 and MT536 response formats.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -151,12 +162,16 @@ is 2026-07-28.
 - **Gate 3 sections:** B.1-B.4, especially 3050 and 3081 (parameter refresh),
   3076 (SCA not required), 9075 (strong authentication required), and 9185
   (unsupported or obsolete FinTS/HBCI version).
+- **Gate 4 sections:** B.1-B.4, especially 3010 (no entries or temporarily
+  unavailable information), 3040 (partial response with continuation point),
+  and 9210 (invalid account/depot binding).
 - **Apply alongside:** Formals B.6-B.7 and the operation-specific selected
   response-code examples. The online register has the same 2026-02-03 release
   date and must be checked for later changes before implementation.
 - **Authorizes:** typed Gate 1 through Gate 3 success, warning, error,
   pagination, SCA, synchronization, parameter-refresh, and unsupported-version
-  outcomes without exposing bank response text.
+  outcomes without exposing bank response text; and the same redacted,
+  bounded response treatment for Gate 4 reads.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 
@@ -206,7 +221,11 @@ requirement for payment accounts, and reject a bank-supplied BPD version zero.
 These corrections authorize protocol-level compatibility only; they do not
 authorize institution-specific branches.
 
-## Gate 2 financial-data documents
+Gate 4 additionally applies **G112** (2024-09-30), which defines the FinTS 3.0
+credit-card balance and booked-transaction operations. No correction-register
+entry changes the current HKWPD 6 or HKWDU 5 layouts.
+
+## Financial-data documents
 
 ### DFÜ-Abkommen, Anlage 3 — Spezifikation der Datenformate
 
@@ -226,9 +245,46 @@ authorize institution-specific branches.
   response payload returned by HICAZ, including exact amounts, booking/value
   dates, transaction references, counterpart data, and remittance information
   only where supplied.
+- **Gate 4 sections:** 4.3 (MT535 `Statement of Holdings`, SRG 1998) and
+  4.4 (MT536 `Statement of Transactions`, SRG 1998), including GENL/FIN,
+  SUBBAL, TRAN/TRANSDET, instrument identifiers, quantities, prices, position
+  values, structured cost-basis data, transaction amounts, dates, directions,
+  reversal status, references, and continuation indicators.
+- **Gate 4 authorizes:** bounded SWIFT MT535 parsing for explicitly supplied
+  depot positions and MT536 parsing for explicitly supplied booked securities
+  transactions. Free text is never reinterpreted as a missing typed amount,
+  fee, reference, or identifier.
 - **Access/redistribution:** the official PDF is rights-reserved and was
   downloaded only to ignored `local/` for research. It is not committed or
   redistributed.
+
+## Gate 4 credit-card extension
+
+### FinTS correction G112 — Salden- und Umsatzabfrage für Kreditkarten
+
+- **Protocol/release:** FinTS 3.0 Messages extension G112 / CR 538 Annex 1,
+  Final Version, 2024-09-30.
+- **Official source:** [FinTS correction and extension
+  register](https://www.fints.org/de/spezifikation/aenderungen), entry G112
+  (official filename
+  `CR0538_Anl1_Neue_GV_zur_Salden-_und_Umsatzabfrage_für_Kreditkarten_FV.pdf`).
+- **Research SHA-256:** `7a33aa90f4307f8d11bf7525c2f137fd0f82c84e8ed0fdbe30518803a8522d73`.
+- **Gate 4 sections:** B.8 `Betrag mit Soll/Haben-Kennung`; C.12.1
+  HKKKU/HIKKU/HIKKUS version 1; C.12.2 HKKKS/HIKKS/HIKKSS version 1; and
+  the extension Data Dictionary entries for card identity, conditional
+  international account binding, balances, dates, repeated booked entries,
+  exact signed amounts, descriptions, merchant data, fee codes, and
+  bank-supplied booking references.
+- **Apply alongside:** Formals B.6 pagination, HIUPD account types 50-59 and
+  allowed-operation entries, HIPINS TAN requirements, and the current
+  return-code definitions for 3010, 3040, and 9210.
+- **Authorizes:** advertised and UPD-authorized credit-card balance and booked
+  transaction retrieval with conditional account binding, exact optional-value
+  semantics, and exhaustive opaque continuation. A response balance is not
+  derived from or reconciled to the returned entries.
+- **Access/redistribution:** accessed 2026-07-28. Redistribution rights were
+  not reviewed; the research copy remains ignored under `local/` and is not
+  committed.
 
 ### DFÜ-Abkommen, Anlage 3 — Spezifikation der Datenformate (archived MT940 rules)
 

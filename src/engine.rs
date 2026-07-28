@@ -14,6 +14,8 @@ use crate::{
     segments::{self, SecurityContext},
 };
 
+mod products;
+
 const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
 const LOCAL_CONTINUATION_LIMIT: u16 = 20;
 const LOCAL_TRANSACTION_PAGE_LIMIT: u16 = 100;
@@ -31,6 +33,7 @@ pub(crate) struct Engine {
     last_responses: Vec<BankResponse>,
     requested_balance: Option<crate::model::Account>,
     transaction: Option<TransactionState>,
+    products: products::ProductStates,
     continuation_active: bool,
     dialog: Option<DialogState>,
 }
@@ -79,6 +82,11 @@ pub(crate) enum TransactionsResult {
     Challenge(Box<PendingChallenge>),
 }
 
+pub(crate) use products::{
+    CreditCardBalanceResult, CreditCardTransactionsResult, DepotPositionsResult,
+    SecuritiesTransactionsResult,
+};
+
 pub(crate) struct PendingChallenge {
     pub(crate) challenge: Challenge,
     pub(crate) method: TanMethod,
@@ -91,11 +99,15 @@ pub(crate) struct PendingChallenge {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PendingOperation {
+pub(super) enum PendingOperation {
     Synchronization,
     Initialization,
     Balance,
     Transactions,
+    DepotPositions,
+    SecuritiesTransactions,
+    CreditCardBalance,
+    CreditCardTransactions,
 }
 
 impl Engine {
@@ -118,6 +130,7 @@ impl Engine {
             last_responses: Vec::new(),
             requested_balance: None,
             transaction: None,
+            products: products::ProductStates::default(),
             continuation_active: false,
             dialog: None,
         })
@@ -909,6 +922,7 @@ impl Engine {
         self.continuation_active = false;
         self.requested_balance = None;
         self.transaction = None;
+        self.products.clear();
         Ok(())
     }
 
@@ -917,6 +931,7 @@ impl Engine {
         self.continuation_active = false;
         self.requested_balance = None;
         self.transaction = None;
+        self.products.clear();
     }
 
     fn accept_dialog_response(&mut self, input: &[u8]) -> Result<Response, Error> {

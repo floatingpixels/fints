@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-28** — Completed Gate 4 with advertised HKWPD 6 positions, HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1 credit-card reads.
+  Added bounded MT535/MT536 parsing, exact optional-value semantics, operation-bound TAN continuations, and exhaustive guarded pagination without derived product data.
+  The 77-test fictional network-independent stack is green; all product results remain private process-memory values and live verification remains owner-run.
+
 - **2026-07-28** — Completed Gate 3 with four fictional multibank profiles and deterministic advertised capability/version selection.
   Added pre-mutation HIBPA institute validation, non-account HIUPD handling, the official 35-character IBAN correction, and distinct typed capability/SCA failures.
   The 64-test network-independent stack is green with no institution registry, new operation, dependency, credential, or live capture.

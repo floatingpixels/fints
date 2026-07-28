@@ -45,6 +45,30 @@ pub enum Limitation {
     TransactionsNotAuthorized,
     #[error("the institution requires an unsupported booked-transaction format or version")]
     TransactionsVersion,
+    #[error("the institution does not advertise depot positions")]
+    DepotPositionsNotAdvertised,
+    #[error("the account is not authorized for depot positions")]
+    DepotPositionsNotAuthorized,
+    #[error("the institution requires an unsupported depot-position version")]
+    DepotPositionsVersion,
+    #[error("the institution does not advertise booked securities transactions")]
+    SecuritiesTransactionsNotAdvertised,
+    #[error("the account is not authorized for booked securities transactions")]
+    SecuritiesTransactionsNotAuthorized,
+    #[error("the institution requires an unsupported securities-transaction version")]
+    SecuritiesTransactionsVersion,
+    #[error("the institution does not advertise credit-card transactions")]
+    CreditCardTransactionsNotAdvertised,
+    #[error("the account is not authorized for credit-card transactions")]
+    CreditCardTransactionsNotAuthorized,
+    #[error("the institution requires an unsupported credit-card transaction version")]
+    CreditCardTransactionsVersion,
+    #[error("the institution does not advertise credit-card balances")]
+    CreditCardBalanceNotAdvertised,
+    #[error("the account is not authorized for credit-card balances")]
+    CreditCardBalanceNotAuthorized,
+    #[error("the institution requires an unsupported credit-card balance version")]
+    CreditCardBalanceVersion,
     #[error("the institution requires an unsupported TAN method")]
     TanMethod,
     #[error("the institution requires a different TAN medium")]
@@ -168,6 +192,8 @@ pub enum Error {
     RepeatedContinuationPoint,
     #[error("booked transaction data is malformed")]
     MalformedTransactionData,
+    #[error("securities data is malformed")]
+    MalformedSecuritiesData,
     #[error("the decoupled approval may not be polled again yet")]
     PollTooEarly,
     #[error("FinTS bank rejected or qualified the request with code {0:?}")]

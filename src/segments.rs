@@ -3,8 +3,8 @@ use chrono::{NaiveDate, NaiveTime};
 use crate::{
     error::{Error, Limitation},
     model::{
-        Account, Credentials, InstituteId, ProductIdentity, ReusableState, TanMethod,
-        TransactionFormat,
+        Account, Credentials, CreditCardCapability, InstituteId, ProductIdentity, ReusableState,
+        TanMethod, TransactionFormat,
     },
     wire::{Element, Message, Segment, Value, encode_segments},
 };
@@ -213,6 +213,146 @@ pub(crate) fn transaction_request(
             elements.pop();
         }
     }
+    let mut operations = vec![raw_segment(operation, version, elements)];
+    if let Some((method, medium_name)) = tan {
+        operations.push(raw_hktan(
+            method.hktan_version,
+            TanStep::Initial {
+                operation,
+                medium_name,
+            },
+        )?);
+    }
+    authenticated(context, operations, None)
+}
+
+pub(crate) fn depot_positions_request(
+    context: &SecurityContext<'_>,
+    account: &Account,
+    continuation_point: Option<&str>,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
+    // FinTS Messages 2022 C.4.3.1, HKWPD 6. Currency, price quality, and
+    // maximum-entry inputs are deliberately left unoccupied.
+    let mut elements = vec![
+        national_account(account, Limitation::DepotPositionsVersion)?,
+        text("")?,
+        text("")?,
+        text("")?,
+    ];
+    if let Some(point) = continuation_point {
+        elements.push(text(point)?);
+    } else {
+        while elements.last().is_some_and(element_is_empty) {
+            elements.pop();
+        }
+    }
+    authenticated_operation(context, "HKWPD", 6, elements, tan)
+}
+
+pub(crate) fn securities_transactions_request(
+    context: &SecurityContext<'_>,
+    account: &Account,
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    continuation_point: Option<&str>,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
+    // FinTS Messages 2022 C.4.3.2, HKWDU 5. No security filter and no
+    // maximum-entry input are invented.
+    let mut elements = vec![
+        national_account(account, Limitation::SecuritiesTransactionsVersion)?,
+        text("N")?,
+        text("")?,
+        optional_date(from)?,
+        optional_date(to)?,
+    ];
+    if let Some(point) = continuation_point {
+        elements.push(text("")?);
+        elements.push(text(point)?);
+    } else {
+        while elements.last().is_some_and(element_is_empty) {
+            elements.pop();
+        }
+    }
+    authenticated_operation(context, "HKWDU", 5, elements, tan)
+}
+
+pub(crate) fn credit_card_transactions_request(
+    context: &SecurityContext<'_>,
+    account: &Account,
+    capability: &CreditCardCapability,
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    continuation_point: Option<&str>,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
+    if (from.is_some() || to.is_some()) && !capability.date_range_allowed {
+        return Err(Limitation::CreditCardTransactionsVersion.into());
+    }
+    let mut elements = Vec::new();
+    if capability.account_required {
+        elements.push(international_account(
+            account,
+            Limitation::CreditCardTransactionsVersion,
+        )?);
+    } else {
+        elements.push(text("")?);
+    }
+    elements.push(text(
+        account
+            .account_number
+            .as_deref()
+            .ok_or(Limitation::CreditCardTransactionsVersion)?,
+    )?);
+    elements.push(text(account.subaccount.as_deref().unwrap_or(""))?);
+    elements.push(optional_date(from)?);
+    elements.push(optional_date(to)?);
+    if continuation_point.is_some() {
+        elements.push(text("")?);
+        elements.push(text(continuation_point.unwrap_or_default())?);
+    } else {
+        while elements.last().is_some_and(element_is_empty) {
+            elements.pop();
+        }
+    }
+    authenticated_operation(context, "HKKKU", 1, elements, tan)
+}
+
+pub(crate) fn credit_card_balance_request(
+    context: &SecurityContext<'_>,
+    account: &Account,
+    account_required: bool,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
+    let mut elements = Vec::new();
+    if account_required {
+        elements.push(international_account(
+            account,
+            Limitation::CreditCardBalanceVersion,
+        )?);
+    } else {
+        elements.push(text("")?);
+    }
+    elements.push(text(
+        account
+            .account_number
+            .as_deref()
+            .ok_or(Limitation::CreditCardBalanceVersion)?,
+    )?);
+    if let Some(subaccount) = account.subaccount.as_deref() {
+        elements.push(text(subaccount)?);
+    }
+    authenticated_operation(context, "HKKKS", 1, elements, tan)
+}
+
+fn authenticated_operation(
+    context: &SecurityContext<'_>,
+    operation: &'static str,
+    version: u16,
+    elements: Vec<Element>,
+    tan: Option<(&TanMethod, Option<&str>)>,
+) -> Result<Vec<u8>, Error> {
     let mut operations = vec![raw_segment(operation, version, elements)];
     if let Some((method, medium_name)) = tan {
         operations.push(raw_hktan(
@@ -583,5 +723,7 @@ fn element_is_empty(element: &Element) -> bool {
         .all(|value| value.as_text().is_some_and(|text| text.is_empty()))
 }
 
+#[cfg(test)]
+mod product_tests;
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,8 @@
 use crate::{
     error::Error,
     model::{
-        Account, CamtCapability, InstituteState, OperationPermission, ReusableState, TanMedium,
-        TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
+        Account, CamtCapability, CreditCardCapability, InstituteState, OperationPermission,
+        ReusableState, TanMedium, TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
     },
     wire::{Segment, Value},
 };
@@ -25,6 +25,18 @@ pub(super) fn apply(
     let mut balance_requires_tan = None;
     let mut camt_requires_tan = None;
     let mut legacy_transactions_require_tan = None;
+    let mut depot_positions_advertised = false;
+    let mut depot_positions_supported = false;
+    let mut depot_positions_requires_tan = None;
+    let mut securities_transactions_advertised = false;
+    let mut securities_transactions_supported = false;
+    let mut securities_transactions_requires_tan = None;
+    let mut credit_card_transactions_advertised = false;
+    let mut credit_card_transactions = None;
+    let mut credit_card_transactions_requires_tan = None;
+    let mut credit_card_balance_advertised = false;
+    let mut credit_card_balance_account_required = None;
+    let mut credit_card_balance_requires_tan = None;
 
     for segment in segments {
         let header = segment.header().ok_or(Error::InvalidResponse {
@@ -76,11 +88,52 @@ pub(super) fn apply(
                     received_legacy_transaction_versions.push(header.version);
                 }
             }
+            b"HIWPDS" => {
+                depot_positions_advertised = true;
+                if header.version == 6 {
+                    require_depot_position_parameters(segment)?;
+                    depot_positions_supported = true;
+                }
+            }
+            b"HIWDUS" => {
+                securities_transactions_advertised = true;
+                if header.version == 5 {
+                    require_depot_transaction_parameters(segment)?;
+                    securities_transactions_supported = true;
+                }
+            }
+            b"HIKKUS" => {
+                credit_card_transactions_advertised = true;
+                if header.version == 1 {
+                    if credit_card_transactions.is_some() {
+                        return Err(Error::InvalidResponse {
+                            structure: "duplicate HIKKUS version 1",
+                        });
+                    }
+                    credit_card_transactions = Some(parse_credit_card_parameters(segment)?);
+                }
+            }
+            b"HIKKSS" => {
+                credit_card_balance_advertised = true;
+                if header.version == 1 {
+                    if credit_card_balance_account_required.is_some() {
+                        return Err(Error::InvalidResponse {
+                            structure: "duplicate HIKKSS version 1",
+                        });
+                    }
+                    credit_card_balance_account_required =
+                        Some(parse_credit_card_balance_parameters(segment)?);
+                }
+            }
             b"HIPINS" => {
                 require_version(header.version, 1, "HIPINS")?;
                 balance_requires_tan = parse_tan_requirement(segment, "HKSAL")?;
                 camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
                 legacy_transactions_require_tan = parse_tan_requirement(segment, "HKKAZ")?;
+                depot_positions_requires_tan = parse_tan_requirement(segment, "HKWPD")?;
+                securities_transactions_requires_tan = parse_tan_requirement(segment, "HKWDU")?;
+                credit_card_transactions_requires_tan = parse_tan_requirement(segment, "HKKKU")?;
+                credit_card_balance_requires_tan = parse_tan_requirement(segment, "HKKKS")?;
             }
             b"HITANS" if (6..=7).contains(&header.version) => {
                 received_methods.extend(parse_tan_methods(segment, header.version)?);
@@ -114,6 +167,18 @@ pub(super) fn apply(
         state.legacy_transaction_versions = received_legacy_transaction_versions;
         state.camt_requires_tan = camt_requires_tan;
         state.legacy_transactions_require_tan = legacy_transactions_require_tan;
+        state.depot_positions_advertised = depot_positions_advertised;
+        state.depot_positions_supported = depot_positions_supported;
+        state.depot_positions_requires_tan = depot_positions_requires_tan;
+        state.securities_transactions_advertised = securities_transactions_advertised;
+        state.securities_transactions_supported = securities_transactions_supported;
+        state.securities_transactions_requires_tan = securities_transactions_requires_tan;
+        state.credit_card_transactions_advertised = credit_card_transactions_advertised;
+        state.credit_card_transactions = credit_card_transactions;
+        state.credit_card_transactions_requires_tan = credit_card_transactions_requires_tan;
+        state.credit_card_balance_advertised = credit_card_balance_advertised;
+        state.credit_card_balance_account_required = credit_card_balance_account_required;
+        state.credit_card_balance_requires_tan = credit_card_balance_requires_tan;
         state.tan_methods = received_methods;
     }
 
@@ -361,6 +426,90 @@ fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bo
         }
     }
     Ok(None)
+}
+
+fn parse_credit_card_parameters(segment: &Segment) -> Result<CreditCardCapability, Error> {
+    // G112 / CR 538 C.12.1 HIKKUS 1: storage period, maximum-entry input,
+    // date-range input, and conditional account binding.
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HIKKUS parameters",
+        })?
+        .components();
+    let storage_days = component(components, 0, "HIKKUS storage period")?
+        .parse::<u16>()
+        .map_err(|_| Error::InvalidValue {
+            field: "HIKKUS storage period",
+        })?;
+    if storage_days == 0 {
+        return Err(Error::InvalidValue {
+            field: "HIKKUS storage period",
+        });
+    }
+    Ok(CreditCardCapability {
+        entry_count_allowed: yn(components, 1, "HIKKUS maximum-entry input")?,
+        date_range_allowed: yn(components, 2, "HIKKUS date-range input")?,
+        account_required: yn(components, 3, "HIKKUS account binding")?,
+    })
+}
+
+fn require_depot_position_parameters(segment: &Segment) -> Result<(), Error> {
+    // Messages 2022 Data Dictionary, Parameter Depotaufstellung version 2.
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HIWPDS parameters",
+        })?
+        .components();
+    yn(components, 0, "HIWPDS maximum-entry input")?;
+    yn(components, 1, "HIWPDS currency selection")?;
+    yn(components, 2, "HIWPDS price-quality selection")?;
+    Ok(())
+}
+
+fn require_depot_transaction_parameters(segment: &Segment) -> Result<(), Error> {
+    // Messages 2022 Data Dictionary, Parameter Depotumsätze version 1.
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HIWDUS parameters",
+        })?
+        .components();
+    let storage_days = component(components, 0, "HIWDUS storage period")?
+        .parse::<u16>()
+        .map_err(|_| Error::InvalidValue {
+            field: "HIWDUS storage period",
+        })?;
+    if storage_days == 0 {
+        return Err(Error::InvalidValue {
+            field: "HIWDUS storage period",
+        });
+    }
+    Ok(())
+}
+
+fn parse_credit_card_balance_parameters(segment: &Segment) -> Result<bool, Error> {
+    // G112 / CR 538 C.12.2 HIKKSS 1.
+    let components = segment
+        .elements()
+        .get(4)
+        .ok_or(Error::MissingValue {
+            field: "HIKKSS parameters",
+        })?
+        .components();
+    yn(components, 0, "HIKKSS account binding")
+}
+
+fn yn(components: &[Value], index: usize, field: &'static str) -> Result<bool, Error> {
+    match component(components, index, field)?.as_str() {
+        "J" => Ok(true),
+        "N" => Ok(false),
+        _ => Err(Error::InvalidValue { field }),
+    }
 }
 
 fn parse_camt_descriptors(segment: &Segment) -> Result<Vec<String>, Error> {

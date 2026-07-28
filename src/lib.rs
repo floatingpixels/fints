@@ -15,15 +15,21 @@ mod wire;
 
 pub use client::{
     BalanceContinuation, BalanceRequest, BookedTransactionContinuation, BookedTransactionRequest,
-    Client, ContinuationKind, Initialization, InitializationContinuation, PollingMode,
-    Synchronization, SynchronizationContinuation,
+    Client, ContinuationKind, CreditCardBalanceContinuation, CreditCardBalanceRequest,
+    CreditCardTransactionContinuation, CreditCardTransactionRequest, DepotPositionContinuation,
+    DepotPositionRequest, Initialization, InitializationContinuation, PollingMode,
+    SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
+    SynchronizationContinuation,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
 pub use model::{
     Account, Amount, Balance, BookedEntry, BookedTransactionDetail, BookedTransactions, Challenge,
-    Credentials, CreditDebit, InstituteId, ProductIdentity, ReusableState, SignedAmount,
-    StatementPosition, Tan, TanMedium, TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
-    Timestamp,
+    Credentials, CreditCardAmount, CreditCardBalance, CreditCardCurrentBalance, CreditCardEntry,
+    CreditCardTransactions, CreditDebit, DepotPosition, DepotPositions, InstituteId, PriceQuality,
+    ProductIdentity, QuantityUnit, ReusableState, SecuritiesAmount, SecuritiesMovement,
+    SecuritiesQuantity, SecuritiesTransaction, SecuritiesTransactions, SecurityInstrument,
+    SecurityPrice, SignedAmount, StatementPosition, Tan, TanMedium, TanMediumClass,
+    TanMediumStatus, TanMethod, TanProcess, Timestamp,
 };
 pub use transport::TransportError;
 pub use wire::WireError;

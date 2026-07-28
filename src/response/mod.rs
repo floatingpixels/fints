@@ -5,7 +5,9 @@ use crate::{
 };
 
 mod balance;
+mod credit_card;
 mod parameters;
+mod securities;
 mod tan;
 mod transactions;
 
@@ -217,6 +219,34 @@ impl Response {
         transactions::parse(&self.segments, format)
     }
 
+    pub(crate) fn depot_positions(&self) -> Result<Option<securities::DepotPositionPage>, Error> {
+        securities::positions(&self.segments)
+    }
+
+    pub(crate) fn securities_transactions(
+        &self,
+    ) -> Result<Option<securities::SecuritiesTransactionPage>, Error> {
+        securities::transactions(&self.segments)
+    }
+
+    pub(crate) fn credit_card_transactions(
+        &self,
+    ) -> Result<Option<credit_card::CreditCardTransactionPage>, Error> {
+        credit_card::transactions(&self.segments)
+    }
+
+    pub(crate) fn credit_card_balance(
+        &self,
+    ) -> Result<Option<credit_card::CreditCardBalanceFields>, Error> {
+        credit_card::balance(&self.segments)
+    }
+
+    pub(crate) fn has_segment(&self, code: &[u8]) -> bool {
+        self.segments
+            .iter()
+            .any(|segment| segment.header().is_some_and(|header| header.code == code))
+    }
+
     pub(crate) fn continuation_point(&self, segment_number: u16) -> Result<Option<&str>, Error> {
         let mut points = self
             .continuation_points
@@ -293,6 +323,8 @@ fn recovery_for(code: u16) -> Option<Recovery> {
     }
 }
 
+#[cfg(test)]
+mod product_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

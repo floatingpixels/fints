@@ -13,7 +13,7 @@ The crate is intentionally independent of Finanzplaner, Tauri, persistence, UI, 
 institution directories. Consumers provide their own endpoint, registered product
 identity, credentials, and durable storage.
 
-## Gate 1 through Gate 3 API
+## Gate 1 through Gate 4 API
 
 `Client` is a concrete synchronous HTTPS client for one institute and one user. The
 caller supplies:
@@ -40,9 +40,9 @@ A new connection follows this bounded sequence:
    `select_tan_medium`.
 4. If `state().system_id()` is absent, call `synchronize`. Persist the state only
    after synchronization completes.
-5. Call `initialize` again. Once it returns `Connected`, call `balance` or
-   `booked_transactions` only for an account discovered through `accounts()`, then
-   call `terminate`.
+5. Call `initialize` again. Once it returns `Connected`, call only an advertised
+   operation authorized for an account discovered through `accounts()`, then call
+   `terminate`.
 
 `refresh_parameters` performs a separate anonymous BPD refresh and closes its dialog.
 It is the recovery path when 3920 supplies no usable method; the client does not
@@ -57,9 +57,9 @@ early poll, expired challenge, or exhausted poll bound fails explicitly. Droppin
 continuation does not serialize it; call `terminate` to cancel the active dialog.
 A rejected TAN deliberately ends the Gate 1 flow: terminate when possible, then
 restart the complete dialog instead of retrying the TAN inside the existing dialog.
-The same operation-bound continuation contract applies to booked transactions.
-After a transaction TAN or decoupled approval completes, the client automatically
-exhausts any remaining same-dialog pages before returning the result.
+The same operation-bound continuation contract applies to every Gate 2 and Gate 4
+read. After a TAN or decoupled approval completes, the client automatically exhausts
+any remaining same-dialog pages before returning the result.
 
 The most recently parsed bank response codes are available through
 `last_responses()`. They retain only the numeric code, optional segment reference,
@@ -136,6 +136,38 @@ log them.
 Gate 3 adds no institution registry, provider abstraction, endpoint discovery, new
 operation, or dependency. Stale or wrong endpoint selection remains caller-owned;
 the crate reports the typed protocol or transport evidence it can verify.
+
+## Supported Gate 4 products
+
+- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 6
+  for account types 30-39. Its bounded MT535 parser preserves supplied
+  instrument identifiers, quantities and signs, market or indicative prices,
+  currencies, dates, market values, and amount- or percentage-denominated cost
+  basis.
+- `securities_transactions` uses only advertised and UPD-authorized
+  `HKWDU`/`HIWDU` 5 for account types 30-39. Its bounded MT536 parser preserves
+  supplied references, instruments, quantities, prices, amounts, accrued
+  interest, movement types, dates, reversal status, and free text. The protocol
+  sentinel `NONREF` and an omitted optional transaction-detail block remain
+  missing values. MT536 has no typed fee field, so free text is never interpreted
+  as a fee or transaction identity.
+- `credit_card_transactions` and `credit_card_balance` use G112
+  `HKKKU`/`HIKKU`/`HIKKUS` 1 and `HKKKS`/`HIKKS`/`HIKKSS` 1 only for account
+  types 50-59. The conditional international account binding and optional date
+  range come exclusively from BPD; UPD must independently authorize the
+  operation. Institution-defined card-number masking is preserved as returned,
+  and current-balance dates and optional times are preserved exactly. A card
+  balance is neither derived from nor reconciled to returned entries.
+- FinTS continuation points are exhausted in the active dialog with the same
+  repeated-point, 100-page, and 10,000-entry bounds as Gate 2. `HIPINS` decides
+  whether each operation requires TAN handling.
+- Unsupported versions and unadvertised or unauthorized operations are typed
+  `Limitation` values. The crate never derives securities transactions from
+  position snapshots and never fills an absent response field from request data.
+
+All Gate 4 position, transaction, card, balance, and continuation types contain
+private financial data, deliberately omit `Debug`, remain process-memory values,
+and must never be logged or serialized as reusable state.
 
 ## Development
 
