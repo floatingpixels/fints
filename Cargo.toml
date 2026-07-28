@@ -1,0 +1,12 @@
+[package]
+name = "fints"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Product-neutral FinTS 3.0 PIN/TAN client"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

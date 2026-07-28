@@ -1,0 +1,13 @@
+# Rust
+/target
+
+# Nix / direnv
+/.direnv
+
+# Local tools and operating systems
+.DS_Store
+.env
+.env.*
+
+# Credentials, live protocol captures, and personal test data
+/local
