@@ -618,7 +618,7 @@ impl Engine {
         }
         let transaction = self.transaction.as_ref().ok_or(Error::InconsistentState)?;
         if transaction.pages_requested >= LOCAL_TRANSACTION_PAGE_LIMIT {
-            return Err(Error::PaginationLimitReached);
+            return self.fail_transaction(Error::PaginationLimitReached);
         }
         let continuation_point = transaction
             .continuation_point
@@ -650,11 +650,19 @@ impl Engine {
                     .map(|(method, medium)| (method, medium.as_deref())),
             )?
         };
-        let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
-        transaction.pages_requested = transaction
+        let next_page = self
+            .transaction
+            .as_ref()
+            .ok_or(Error::InconsistentState)?
             .pages_requested
-            .checked_add(1)
-            .ok_or(Error::PaginationLimitReached)?;
+            .checked_add(1);
+        let Some(next_page) = next_page else {
+            return self.fail_transaction(Error::PaginationLimitReached);
+        };
+        self.transaction
+            .as_mut()
+            .ok_or(Error::InconsistentState)?
+            .pages_requested = next_page;
         Ok(message)
     }
 
@@ -1096,7 +1104,10 @@ impl Engine {
             .ok_or(Error::InconsistentState)?
             .format
             .clone();
-        let page = response.transactions(&format)?;
+        let page = match response.transactions(&format) {
+            Ok(page) => page,
+            Err(error) => return self.fail_transaction(error),
+        };
         let method = self.active_method().ok().cloned();
         let tan_response = method
             .as_ref()
@@ -1110,12 +1121,12 @@ impl Engine {
                 .as_ref()
                 .is_some_and(|transaction| transaction.requires_tan)
         {
-            return Err(Error::InvalidResponse {
+            return self.fail_transaction(Error::InvalidResponse {
                 structure: "unsolicited transaction TAN challenge",
             });
         }
         if page.is_some() && tan_response.is_some() {
-            return Err(Error::InvalidResponse {
+            return self.fail_transaction(Error::InvalidResponse {
                 structure: "transaction result and TAN challenge together",
             });
         }
@@ -1146,39 +1157,60 @@ impl Engine {
             return Ok(TransactionsResult::Challenge(Box::new(next)));
         }
 
-        let continuation_point = response.continuation_point(3)?.map(str::to_owned);
+        let continuation_point = match response.continuation_point(3) {
+            Ok(point) => point.map(str::to_owned),
+            Err(error) => return self.fail_transaction(error),
+        };
         let no_entries = response
             .responses()
             .iter()
             .any(|response| response.code() == 3010);
         if page.is_none() && !no_entries && continuation_point.is_none() {
-            return Err(Error::MissingValue {
+            return self.fail_transaction(Error::MissingValue {
                 field: "booked transaction response",
             });
         }
         if let Some(page) = page {
-            let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
             if let Some(account) = page.account
-                && !transaction.account.same_identity(&account)
+                && !self
+                    .transaction
+                    .as_ref()
+                    .ok_or(Error::InconsistentState)?
+                    .account
+                    .same_identity(&account)
             {
-                return Err(Error::InconsistentState);
+                return self.fail_transaction(Error::InconsistentState);
             }
-            if transaction
+            if self
+                .transaction
+                .as_ref()
+                .ok_or(Error::InconsistentState)?
                 .entries
                 .len()
                 .checked_add(page.entries.len())
                 .is_none_or(|count| count > LOCAL_TRANSACTION_ENTRY_LIMIT)
             {
-                return Err(Error::PaginationLimitReached);
+                return self.fail_transaction(Error::PaginationLimitReached);
             }
-            transaction.entries.extend(page.entries);
+            self.transaction
+                .as_mut()
+                .ok_or(Error::InconsistentState)?
+                .entries
+                .extend(page.entries);
         }
         self.continuation_active = false;
         if let Some(point) = continuation_point {
-            let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
-            if !transaction.seen_continuation_points.insert(point.clone()) {
-                return Err(Error::RepeatedContinuationPoint);
+            if self
+                .transaction
+                .as_ref()
+                .ok_or(Error::InconsistentState)?
+                .seen_continuation_points
+                .contains(&point)
+            {
+                return self.fail_transaction(Error::RepeatedContinuationPoint);
             }
+            let transaction = self.transaction.as_mut().ok_or(Error::InconsistentState)?;
+            transaction.seen_continuation_points.insert(point.clone());
             transaction.continuation_point = Some(point);
             return Ok(TransactionsResult::Continue);
         }
@@ -1187,6 +1219,12 @@ impl Engine {
             account: transaction.account,
             entries: transaction.entries,
         })))
+    }
+
+    fn fail_transaction<T>(&mut self, error: Error) -> Result<T, Error> {
+        self.transaction = None;
+        self.continuation_active = false;
+        Err(error)
     }
 }
 

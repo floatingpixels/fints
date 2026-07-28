@@ -5,10 +5,12 @@ use crate::{
     model::{Amount, BookedEntry, BookedTransactionDetail, CreditDebit, StatementPosition},
 };
 
-const MAX_MT940_ENTRIES: usize = 5_000;
+use super::MAX_TRANSACTION_PAGE_ENTRIES;
 
 pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
     let text = encoding_rs::mem::decode_latin1(input);
+    // DK Anlage 3 v3.8, 8.1 requires CRLF separators and the final "-" record.
+    // A trailing CRLF after that terminator stays a strict live-compat watch item.
     if !text.starts_with("\r\n") || !text.ends_with("\r\n-") {
         return Err(Error::MalformedTransactionData);
     }
@@ -43,7 +45,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
     let mut entries = Vec::new();
     for statement in statements {
         entries.extend(parse_statement(&statement)?);
-        if entries.len() > MAX_MT940_ENTRIES {
+        if entries.len() > MAX_TRANSACTION_PAGE_ENTRIES {
             return Err(Error::MalformedTransactionData);
         }
     }
@@ -133,7 +135,7 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
                 bank_transaction_code: None,
                 proprietary_transaction_code: structured.transaction_code,
                 counterparty_name: structured.counterparty_name,
-                counterparty_iban: structured.counterparty_iban,
+                counterparty_account: structured.counterparty_account,
                 remittance_information: structured.remittance_information,
             }],
         });
@@ -202,6 +204,9 @@ fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
         .ok_or(Error::MalformedTransactionData)?
         .to_owned();
     rest = rest.get(3..).ok_or(Error::MalformedTransactionData)?;
+    // DK Anlage 3 v3.8, 8.2.3 defines a possible supplementary second line
+    // after subfield 9. Gate 2 deliberately preserves only the first-line
+    // customer and bank references that have typed result fields.
     let first_line = rest.split('\n').next().unwrap_or_default();
     let (customer_reference, bank_reference) = match first_line.split_once("//") {
         Some((customer, bank)) => {
@@ -236,7 +241,7 @@ struct StructuredInformation {
     mandate_reference: Option<String>,
     creditor_reference: Option<String>,
     counterparty_name: Option<String>,
-    counterparty_iban: Option<String>,
+    counterparty_account: Option<String>,
     remittance_information: Vec<String>,
 }
 
@@ -255,13 +260,18 @@ fn parse_information(value: &str) -> Result<StructuredInformation, Error> {
         transaction_code: Some(transaction_code.to_owned()),
         ..StructuredInformation::default()
     };
-    let fields = split_control_fields(compact.get(3..).ok_or(Error::MalformedTransactionData)?)?;
+    let subfields = compact.get(3..).ok_or(Error::MalformedTransactionData)?;
+    if !subfields.starts_with('?') {
+        result.remittance_information.push(value.to_owned());
+        return Ok(result);
+    }
+    let fields = split_control_fields(subfields)?;
     let mut remittance = String::new();
     let mut names = String::new();
     for (code, value) in fields {
         match code {
             20..=29 | 60..=63 => remittance.push_str(value),
-            31 => result.counterparty_iban = nonempty_optional(value),
+            31 => result.counterparty_account = nonempty_optional(value),
             32 | 33 => names.push_str(value),
             _ => {}
         }
@@ -303,11 +313,13 @@ fn split_control_fields(value: &str) -> Result<Vec<(u8, &str)>, Error> {
 fn extract_labeled(value: &str, label: &str) -> Option<String> {
     let start = value.find(label)? + label.len();
     let tail = &value[start..];
-    let end = ["MREF+", "CRED+", "DEBT+", "SVWZ+", "ABWA+", "ABWE+"]
-        .iter()
-        .filter_map(|next| tail.find(next))
-        .min()
-        .unwrap_or(tail.len());
+    let end = [
+        "EREF+", "KREF+", "MREF+", "CRED+", "DEBT+", "COAM+", "OAMT+", "SVWZ+", "ABWA+", "ABWE+",
+    ]
+    .iter()
+    .filter_map(|next| tail.find(next))
+    .min()
+    .unwrap_or(tail.len());
     nonempty_optional(tail[..end].trim())
 }
 
@@ -353,6 +365,8 @@ fn parse_short_date(value: &str) -> Result<NaiveDate, Error> {
     if value.len() != 6 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(Error::MalformedTransactionData);
     }
+    // DK Anlage 3 v3.8, 8.2.1 encodes the year as two-digit JJ. The fixed
+    // 80/79 pivot makes that underspecified wire value deterministic.
     let year: i32 = value[..2]
         .parse()
         .map_err(|_| Error::MalformedTransactionData)?;
@@ -377,6 +391,8 @@ fn parse_month_day(value: &str, value_date: NaiveDate) -> Result<NaiveDate, Erro
         .ok_or(Error::MalformedTransactionData)?
         .parse()
         .map_err(|_| Error::MalformedTransactionData)?;
+    // DK Anlage 3 v3.8, 8.2.1 supplies the optional booking date as MMTT.
+    // Resolve only the adjacent Dec/Jan rollover relative to the full value date.
     let year = match (value_date.month(), month) {
         (12, 1) => value_date.year() + 1,
         (1, 12) => value_date.year() - 1,

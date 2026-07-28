@@ -11,10 +11,11 @@ use crate::{
     model::{Amount, BookedEntry, BookedTransactionDetail, CreditDebit},
 };
 
+use super::MAX_TRANSACTION_PAGE_ENTRIES;
+
 const CAMT_NAMESPACE: &[u8] = b"urn:iso:std:iso:20022:tech:xsd:camt.052.001.08";
 const MAX_XML_DEPTH: usize = 64;
 const MAX_XML_NODES: usize = 20_000;
-const MAX_BOOKED_ENTRIES: usize = 5_000;
 
 pub(super) struct CamtPayload {
     pub(super) iban: Option<String>,
@@ -61,18 +62,21 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                         return Err(Error::MalformedTransactionData);
                     }
                     state.saw_message = true;
-                } else if local == "Rpt" && ends_with(&stack, &["BkToCstmrAcctRpt"]) {
+                } else if local == "Rpt" {
+                    if !ends_with(&stack, &["BkToCstmrAcctRpt"]) {
+                        return Err(Error::MalformedTransactionData);
+                    }
                     state.reports = state
                         .reports
                         .checked_add(1)
                         .ok_or(Error::MalformedTransactionData)?;
-                } else if local == "Ntry" && ends_with(&stack, &["Rpt"]) {
-                    if state.entry.is_some() {
+                } else if local == "Ntry" {
+                    if !ends_with(&stack, &["Rpt"]) || state.entry.is_some() {
                         return Err(Error::MalformedTransactionData);
                     }
                     state.entry = Some(EntryBuilder::default());
-                } else if local == "TxDtls" && contains(&stack, "Ntry") {
-                    if state.detail.is_some() {
+                } else if local == "TxDtls" {
+                    if !ends_with(&stack, &["Ntry", "NtryDtls"]) || state.detail.is_some() {
                         return Err(Error::MalformedTransactionData);
                     }
                     state.detail = Some(DetailBuilder::default());
@@ -100,6 +104,8 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 let text = text
                     .xml10_content()
                     .map_err(|_| Error::MalformedTransactionData)?;
+                let text = quick_xml::escape::unescape(&text)
+                    .map_err(|_| Error::MalformedTransactionData)?;
                 if let Some(current) = stack.last_mut() {
                     current.text.push_str(&text);
                 } else if !text.trim().is_empty() {
@@ -108,21 +114,22 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
             }
             Event::CData(text) => {
                 let current = stack.last_mut().ok_or(Error::MalformedTransactionData)?;
-                current.text.push_str(
-                    &text
-                        .xml10_content()
-                        .map_err(|_| Error::MalformedTransactionData)?,
-                );
+                // CDATA is already literal character data; entity-looking text must
+                // not pass through the normal text-node unescaper.
+                current
+                    .text
+                    .push_str(&text.decode().map_err(|_| Error::MalformedTransactionData)?);
             }
             Event::GeneralRef(reference) => {
                 let current = stack.last_mut().ok_or(Error::MalformedTransactionData)?;
-                current.text.push('&');
+                let reference = reference
+                    .decode()
+                    .map_err(|_| Error::MalformedTransactionData)?;
+                let escaped = format!("&{reference};");
                 current.text.push_str(
-                    &reference
-                        .decode()
+                    &quick_xml::escape::unescape(&escaped)
                         .map_err(|_| Error::MalformedTransactionData)?,
                 );
-                current.text.push(';');
             }
             Event::End(end) => {
                 require_camt_namespace(namespace)?;
@@ -133,11 +140,9 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 if node.local != local {
                     return Err(Error::MalformedTransactionData);
                 }
-                let text = quick_xml::escape::unescape(node.text.trim())
-                    .map_err(|_| Error::MalformedTransactionData)?
-                    .into_owned();
+                let text = node.text.trim().to_owned();
                 state.finish_node(&stack, node.local, text, node.currency)?;
-                if state.entries.len() > MAX_BOOKED_ENTRIES {
+                if state.entries.len() > MAX_TRANSACTION_PAGE_ENTRIES {
                     return Err(Error::MalformedTransactionData);
                 }
             }
@@ -359,22 +364,23 @@ impl EntryBuilder {
         Ok(Some(BookedEntry {
             amount,
             direction,
-            booking_date: Some(self.booking_date.ok_or(Error::MalformedTransactionData)?),
-            value_date: Some(self.value_date.ok_or(Error::MalformedTransactionData)?),
+            // Anlage 3 v3.9, 7.2.6 makes both dates optional for camt.052
+            // BOOK entries. Missing values remain absent.
+            booking_date: self.booking_date,
+            value_date: self.value_date,
             reversal: self.reversal,
             entry_reference: self.entry_reference,
             account_servicer_reference: Some(
                 self.account_servicer_reference
                     .ok_or(Error::MalformedTransactionData)?,
             ),
-            bank_transaction_code: Some(
-                transaction_code(
-                    self.bank_transaction_domain,
-                    self.bank_transaction_family,
-                    self.bank_transaction_subfamily,
-                )?
-                .ok_or(Error::MalformedTransactionData)?,
-            ),
+            // Anlage 3 v3.9, 7.1.8.5.1 permits an empty entry-level BkTxCd;
+            // the required BTC is preserved from each TxDtls instead.
+            bank_transaction_code: transaction_code(
+                self.bank_transaction_domain,
+                self.bank_transaction_family,
+                self.bank_transaction_subfamily,
+            )?,
             proprietary_transaction_code: self.proprietary_transaction_code,
             statement_position: None,
             details: self.details,
@@ -462,7 +468,7 @@ impl DetailBuilder {
         entry_direction: Option<CreditDebit>,
     ) -> Result<BookedTransactionDetail, Error> {
         let direction = self.direction;
-        let (counterparty_name, counterparty_iban) = match direction.or(entry_direction) {
+        let (counterparty_name, counterparty_account) = match direction.or(entry_direction) {
             Some(CreditDebit::Credit) => (self.debtor_name, self.debtor_iban),
             Some(CreditDebit::Debit) => (self.creditor_name, self.creditor_iban),
             None => (None, None),
@@ -483,7 +489,7 @@ impl DetailBuilder {
             bank_transaction_code,
             proprietary_transaction_code: self.proprietary_transaction_code,
             counterparty_name,
-            counterparty_iban,
+            counterparty_account,
             remittance_information: self.remittance_information,
         })
     }
@@ -628,8 +634,4 @@ fn ends_with(stack: &[Node], expected: &[&str]) -> bool {
             .iter()
             .map(|node| node.local.as_str())
             .eq(expected.iter().copied())
-}
-
-fn contains(stack: &[Node], expected: &str) -> bool {
-    stack.iter().any(|node| node.local == expected)
 }

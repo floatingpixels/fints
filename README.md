@@ -95,6 +95,9 @@ containing private query data, or serialized reusable state.
 - `booked_transactions` prefers advertised and UPD-authorized `HKCAZ`/`HICAZ` 1
   with `camt.052.001.08`, then falls back only to advertised `HKKAZ`/`HIKAZ` 7
   or 6.
+  This deterministic fallback also applies when `HIPINS` is silent on advertised
+  `HKCAZ`, or when `HKCAZ` requires multiple signatures while `HKKAZ` requires one;
+  a failed request never triggers fallback.
 - Only `BOOK` entries are returned. Pending camt entries and MT942 data are outside
   Gate 2; unsupported descriptors, segment versions, and missing account permission
   are typed limitations.
@@ -103,7 +106,10 @@ containing private query data, or serialized reusable state.
   or more than 10,000 aggregate entries fail explicitly without a partial result.
 - camt XML is parsed as bounded, namespace-aware UTF-8. The legacy MT940 fallback
   uses its specified Latin-1 form and preserves either the supplied bank reference
-  or the exact statement number, page number, and entry position.
+  or the exact statement number, page number, and entry position. Gate 2 does not
+  compare MT940 `:25:` with the requested UPD account because deployed formats vary;
+  the result remains bound to the UPD account used for the request. This limitation
+  is revisited with Gate 3 fixtures.
 - Amounts, directions, dates, reversal status, references, transaction codes,
   counterpart data, and remittance information are returned only where the
   institution supplies them. No transaction fingerprint is synthesized.

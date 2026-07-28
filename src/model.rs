@@ -515,7 +515,7 @@ pub struct BookedTransactionDetail {
     pub(crate) bank_transaction_code: Option<String>,
     pub(crate) proprietary_transaction_code: Option<String>,
     pub(crate) counterparty_name: Option<String>,
-    pub(crate) counterparty_iban: Option<String>,
+    pub(crate) counterparty_account: Option<String>,
     pub(crate) remittance_information: Vec<String>,
 }
 
@@ -560,8 +560,13 @@ impl BookedTransactionDetail {
         self.counterparty_name.as_deref()
     }
 
-    pub fn counterparty_iban(&self) -> Option<&str> {
-        self.counterparty_iban.as_deref()
+    /// Account identifier supplied for the counterparty.
+    ///
+    /// camt normally supplies an IBAN, while legacy MT940 subfield `?31` may
+    /// contain either an IBAN or a national account number. The value is not
+    /// normalized or reinterpreted.
+    pub fn counterparty_account(&self) -> Option<&str> {
+        self.counterparty_account.as_deref()
     }
 
     pub fn remittance_information(&self) -> &[String] {

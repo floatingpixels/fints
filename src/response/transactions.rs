@@ -9,6 +9,8 @@ use super::optional_component;
 mod camt;
 mod mt940;
 
+const MAX_TRANSACTION_PAGE_ENTRIES: usize = 5_000;
+
 pub(crate) struct TransactionPage {
     pub(crate) account: Option<Account>,
     pub(crate) entries: Vec<BookedEntry>,
@@ -59,35 +61,29 @@ fn parse_camt(
         }
         account = Some(parsed_account);
         let descriptor = single_text(segment, 2, "HICAZ camt descriptor")?;
+        // Messages 2022 echoes the negotiated camt descriptor in HICAZ. A
+        // differently normalized value is deliberately not treated as equivalent.
         if descriptor != expected_descriptor {
             return Err(Error::InvalidValue {
                 field: "HICAZ camt descriptor",
             });
         }
-        let booked = single_binary(segment, 3, "HICAZ booked camt payload")?;
-        let payload = camt::parse(booked)?;
-        let account = account.as_ref().ok_or(Error::InconsistentState)?;
-        let iban_match = match (account.iban.as_deref(), payload.iban.as_deref()) {
-            (Some(left), Some(right)) => Some(left == right),
-            _ => None,
-        };
-        let account_number_match = match (
-            account.account_number.as_deref(),
-            payload.other_account_id.as_deref(),
-        ) {
-            (Some(left), Some(right)) => Some(left == right),
-            _ => None,
-        };
-        if iban_match == Some(false)
-            || account_number_match == Some(false)
-            || !matches!(
-                (iban_match, account_number_match),
-                (Some(true), _) | (_, Some(true))
-            )
-        {
-            return Err(Error::InconsistentState);
+        // Messages 2022 Data Dictionary, "Gebuchte camt-Umsätze":
+        // "camt-Umsätze gebucht" has repetition M n, normally one binary camt.052
+        // document per booking day. G97 additionally requires accepting a single
+        // document that itself covers multiple booking days.
+        for booked in binary_components(segment, 3, "HICAZ booked camt payload")? {
+            let payload = camt::parse(booked)?;
+            ensure_camt_account(account.as_ref().ok_or(Error::InconsistentState)?, &payload)?;
+            if entries
+                .len()
+                .checked_add(payload.entries.len())
+                .is_none_or(|count| count > MAX_TRANSACTION_PAGE_ENTRIES)
+            {
+                return Err(Error::MalformedTransactionData);
+            }
+            entries.extend(payload.entries);
         }
-        entries.extend(payload.entries);
     }
     Ok(found.then_some(TransactionPage { account, entries }))
 }
@@ -113,7 +109,15 @@ fn parse_mt940(
             });
         }
         let booked = single_binary(segment, 1, "HIKAZ booked MT940 payload")?;
-        entries.extend(mt940::parse(booked)?);
+        let parsed = mt940::parse(booked)?;
+        if entries
+            .len()
+            .checked_add(parsed.len())
+            .is_none_or(|count| count > MAX_TRANSACTION_PAGE_ENTRIES)
+        {
+            return Err(Error::MalformedTransactionData);
+        }
+        entries.extend(parsed);
     }
     Ok(found.then_some(TransactionPage {
         account: None,
@@ -170,6 +174,31 @@ fn parse_international_account(components: &[Value]) -> Result<Account, Error> {
     })
 }
 
+fn ensure_camt_account(account: &Account, payload: &camt::CamtPayload) -> Result<(), Error> {
+    let iban_match = match (account.iban.as_deref(), payload.iban.as_deref()) {
+        (Some(left), Some(right)) => Some(left == right),
+        _ => None,
+    };
+    let account_number_match = match (
+        account.account_number.as_deref(),
+        payload.other_account_id.as_deref(),
+    ) {
+        (Some(left), Some(right)) => Some(left == right),
+        _ => None,
+    };
+    if iban_match == Some(false)
+        || account_number_match == Some(false)
+        || !matches!(
+            (iban_match, account_number_match),
+            (Some(true), _) | (_, Some(true))
+        )
+    {
+        Err(Error::InconsistentState)
+    } else {
+        Ok(())
+    }
+}
+
 fn single_text(segment: &Segment, index: usize, field: &'static str) -> Result<String, Error> {
     let components = segment
         .elements()
@@ -182,6 +211,25 @@ fn single_text(segment: &Segment, index: usize, field: &'static str) -> Result<S
         });
     }
     optional_component(components, 0).ok_or(Error::MissingValue { field })
+}
+
+fn binary_components<'a>(
+    segment: &'a Segment,
+    index: usize,
+    field: &'static str,
+) -> Result<Vec<&'a [u8]>, Error> {
+    let components = segment
+        .elements()
+        .get(index)
+        .ok_or(Error::MissingValue { field })?
+        .components();
+    if components.is_empty() {
+        return Err(Error::MissingValue { field });
+    }
+    components
+        .iter()
+        .map(|component| component.as_binary().ok_or(Error::InvalidValue { field }))
+        .collect()
 }
 
 fn single_binary<'a>(

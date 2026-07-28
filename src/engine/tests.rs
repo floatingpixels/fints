@@ -41,9 +41,9 @@ fn binary_response(
     wire
 }
 
-fn mt940_page(statement: u16, bank_reference: &str) -> Vec<u8> {
+fn mt940_page(statement: u16, bank_reference: &str, account_number: &str) -> Vec<u8> {
     format!(
-        "\r\n:20:FICTIONAL{statement}\r\n:25:12345678/123456\r\n\
+        "\r\n:20:FICTIONAL{statement}\r\n:25:12345678/{account_number}\r\n\
          :28C:{statement}/1\r\n:60F:C260727EUR100,00\r\n\
          :61:2607280728C1,00NTRFFICTREF//{bank_reference}\r\n\
          :86:166?20SVWZ+Fictional page {statement}\r\n\
@@ -724,7 +724,7 @@ fn booked_transactions_exhaust_pagination_and_keep_accounts_distinct() {
         .unwrap();
     let first_page = binary_response(
         "HIRMS:3:2:3+3040::more:fictional-next'HIKAZ:4:7:3+@",
-        &mt940_page(1, "FICTBANKREF1"),
+        &mt940_page(1, "FICTBANKREF1", "654321"),
         "'HNHBS:5:1+2'",
         "dialog1",
         2,
@@ -754,7 +754,7 @@ fn booked_transactions_exhaust_pagination_and_keep_accounts_distinct() {
 
     let second_page = binary_response(
         "HIKAZ:3:7:3+@",
-        &mt940_page(2, "FICTBANKREF2"),
+        &mt940_page(2, "FICTBANKREF2", "654321"),
         "'HNHBS:4:1+3'",
         "dialog1",
         3,
@@ -788,7 +788,7 @@ fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
         .unwrap();
     let first = binary_response(
         "HIRMS:3:2:3+3040::more:fictional-repeat'HIKAZ:4:7:3+@",
-        &mt940_page(1, "FICTBANKREF1"),
+        &mt940_page(1, "FICTBANKREF1", "123456"),
         "'HNHBS:5:1+2'",
         "dialog1",
         2,
@@ -799,7 +799,7 @@ fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
         .unwrap();
     let second = binary_response(
         "HIRMS:3:2:3+3040::more:fictional-repeat'HIKAZ:4:7:3+@",
-        &mt940_page(2, "FICTBANKREF2"),
+        &mt940_page(2, "FICTBANKREF2", "123456"),
         "'HNHBS:5:1+3'",
         "dialog1",
         3,
@@ -808,6 +808,11 @@ fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
         repeated.accept_transactions(&second, now()),
         Err(Error::RepeatedContinuationPoint)
     ));
+    assert!(
+        repeated
+            .transaction_request(0, None, None, now().date(), now().time())
+            .is_ok()
+    );
 
     let mut bounded =
         connected_transaction_engine(vec![account], false, vec![7], None, Some(false));
@@ -820,6 +825,36 @@ fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
         bounded.next_transaction_page_request(now().date(), now().time()),
         Err(Error::PaginationLimitReached)
     ));
+    assert!(
+        bounded
+            .transaction_request(0, None, None, now().date(), now().time())
+            .is_ok()
+    );
+}
+
+// FinTS Messages 2022-04-15, C.2.1.1.2 and C.2.3.1.2: an accepted
+// transaction response without the booked response segment is malformed.
+// A terminal pagination error releases only the current operation, not the dialog.
+#[test]
+fn missing_transaction_page_does_not_wedge_the_dialog() {
+    let account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+    let mut engine = connected_transaction_engine(vec![account], false, vec![7], None, Some(false));
+    engine
+        .transaction_request(0, None, None, now().date(), now().time())
+        .unwrap();
+
+    let missing = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 2);
+    assert!(matches!(
+        engine.accept_transactions(&missing, now()),
+        Err(Error::MissingValue {
+            field: "booked transaction response"
+        })
+    ));
+    assert!(
+        engine
+            .transaction_request(0, None, None, now().date(), now().time())
+            .is_ok()
+    );
 }
 
 // PIN/TAN correction T31 and FinTS PIN/TAN 2020-07-10, B.5.2:
@@ -859,7 +894,7 @@ fn booked_transaction_tan_continuation_is_typed_and_operation_bound() {
         .unwrap();
     let completion = binary_response(
         "HIKAZ:3:7:3+@",
-        &mt940_page(1, "FICTBANKREF1"),
+        &mt940_page(1, "FICTBANKREF1", "123456"),
         "'HNHBS:4:1+3'",
         "dialog1",
         3,
