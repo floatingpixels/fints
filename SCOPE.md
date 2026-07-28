@@ -64,7 +64,8 @@ product.
   advertised.
 - Booked cash transactions use advertised `HKCAZ`, with `HKKAZ` only as the explicitly
   bounded fallback introduced by Gate 2.
-- Securities use advertised `HKWPD` only.
+- Securities positions use advertised `HKWPD` only; booked securities
+  transactions use advertised `HKWDU` only.
 - Credit-card balances and booked transactions use advertised `HKKKU` and related typed
   operations only.
 - Values are returned only when explicitly supplied by the institution. Missing values
@@ -116,9 +117,16 @@ integration and owner-run live balance verification.
 
 - Advertised `HKWPD` returns positions, quantities, prices, market values, currencies,
   and cost basis only where explicitly present.
+- Advertised `HKWDU` returns booked securities transactions with their dates,
+  instruments, quantities, prices, amounts, fees, and references only where
+  explicitly present. Bank-supplied references are preserved without inventing
+  transaction identity. Pagination and continuation follow the same exhaustion,
+  repeated-point, and safety-bound rules as Gate 2.
 - Advertised credit-card operations including `HKKKU` return balances and booked
   transactions without fabrication.
 - Unsupported or insufficiently typed product data remains an explicit limitation.
+  Institutions that do not advertise `HKWDU` return the normal typed limitation; the
+  crate never derives securities transactions from position snapshots.
 
 ## Explicitly out of scope
 
