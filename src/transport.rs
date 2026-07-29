@@ -1,5 +1,8 @@
 use std::{io::Read, time::Duration};
 
+#[cfg(test)]
+use std::{cell::RefCell, collections::VecDeque};
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Url, blocking::Client, header::CONTENT_TYPE, redirect::Policy};
 use thiserror::Error;
@@ -19,6 +22,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) struct Transport {
     endpoint: Url,
     client: Client,
+    #[cfg(test)]
+    fixture: Option<FixtureTransport>,
+}
+
+#[cfg(test)]
+struct FixtureTransport {
+    responses: RefCell<VecDeque<Vec<u8>>>,
+    requests: RefCell<Vec<Vec<u8>>>,
 }
 
 /// Failures in the bounded HTTPS transport.
@@ -56,10 +67,25 @@ impl Transport {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| TransportError::Client)?;
-        Ok(Self { endpoint, client })
+        Ok(Self {
+            endpoint,
+            client,
+            #[cfg(test)]
+            fixture: None,
+        })
     }
 
     pub(crate) fn send(&self, message: &[u8]) -> Result<Vec<u8>, TransportError> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            fixture.requests.borrow_mut().push(message.to_vec());
+            return fixture
+                .responses
+                .borrow_mut()
+                .pop_front()
+                .ok_or(TransportError::Request);
+        }
+
         let body = encode_body(message);
         let mut response = self
             .client
@@ -86,6 +112,33 @@ impl Transport {
             .read_to_end(&mut encoded)
             .map_err(|_| TransportError::Request)?;
         decode_body(&encoded)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(responses: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        let mut transport =
+            Self::new("https://fictional.invalid/fints").expect("fictional HTTPS endpoint");
+        transport.fixture = Some(FixtureTransport {
+            responses: RefCell::new(responses.into_iter().collect()),
+            requests: RefCell::new(Vec::new()),
+        });
+        transport
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_requests(&self) -> Vec<Vec<u8>> {
+        self.fixture
+            .as_ref()
+            .map(|fixture| fixture.requests.borrow().clone())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_responses_remaining(&self) -> usize {
+        self.fixture
+            .as_ref()
+            .map(|fixture| fixture.responses.borrow().len())
+            .unwrap_or_default()
     }
 }
 

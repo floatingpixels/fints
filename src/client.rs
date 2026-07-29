@@ -187,10 +187,10 @@ impl Client {
 
     /// Refreshes anonymous BPD and always closes the anonymous dialog.
     pub fn refresh_parameters(&mut self, now: NaiveDateTime) -> Result<(), Error> {
-        let request = self.engine.anonymous_initialization_request()?;
-        let response = self.send(&request)?;
-        self.engine.accept_anonymous_initialization(&response)?;
-        self.terminate(now)
+        let Self { engine, transport } = self;
+        refresh_parameters_with_send(engine, now, |request| {
+            transport.send(request).map_err(Error::from)
+        })
     }
 
     /// Obtains a new assigned system ID and closes the synchronization dialog.
@@ -215,13 +215,13 @@ impl Client {
     /// Opens the personalized dialog used for subsequent supported operations.
     ///
     /// If no selected method is usable, the method-discovery dialog is closed before
-    /// `ChooseTanMethod` is returned.
+    /// `ChooseTanMethod` is returned. If a BPD-less function-999 discovery is globally
+    /// terminated without mandatory response 3920, the client performs one anonymous
+    /// BPD-zero refresh and one fresh discovery attempt. A repeated omission fails
+    /// explicitly and is never retried in a loop.
     pub fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
-        let request = self.engine.initialization_request(now.date(), now.time())?;
-        let response = self.send(&request)?;
-        let result = self.engine.accept_initialization(&response, now)?;
         let Self { engine, transport } = self;
-        finish_initialization_with_send(engine, result, now, |request| {
+        initialize_with_send(engine, now, |request| {
             transport.send(request).map_err(Error::from)
         })
     }
@@ -822,13 +822,73 @@ fn continuation_kind(pending: &PendingChallenge) -> ContinuationKind {
 fn map_initialization(result: InitializationResult) -> Result<Initialization, Error> {
     match result {
         InitializationResult::Connected => Ok(Initialization::Connected),
-        InitializationResult::ChooseTanMethod | InitializationResult::RefreshParameters => {
-            Err(Error::InconsistentState)
-        }
+        InitializationResult::ChooseTanMethod
+        | InitializationResult::RefreshParameters
+        | InitializationResult::RefreshAndRediscover => Err(Error::InconsistentState),
         InitializationResult::Challenge(pending) => Ok(Initialization::Challenge(Box::new(
             InitializationContinuation { pending: *pending },
         ))),
     }
+}
+
+fn initialize_with_send(
+    engine: &mut Engine,
+    now: NaiveDateTime,
+    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<Initialization, Error> {
+    let result = request_initialization_with_send(engine, now, &mut send)?;
+    if matches!(result, InitializationResult::RefreshAndRediscover) {
+        // PIN/TAN B.4.3.1 requires current anonymous BPD before function-999
+        // discovery. Repair the missing prerequisite once, close that anonymous
+        // dialog exactly once, and repeat discovery from a fresh dialog.
+        refresh_parameters_with_send(engine, now, &mut send)?;
+        let repeated = match request_initialization_with_send(engine, now, &mut send) {
+            Err(Error::MissingValue {
+                field: "3920 TAN method response",
+            }) => {
+                return Err(Error::MissingValue {
+                    field: "3920 TAN method response after anonymous BPD refresh",
+                });
+            }
+            result => result?,
+        };
+        if matches!(repeated, InitializationResult::RefreshAndRediscover) {
+            return Err(Error::MissingValue {
+                field: "3920 TAN method response after anonymous BPD refresh",
+            });
+        }
+        return finish_initialization_with_send(engine, repeated, now, send);
+    }
+    finish_initialization_with_send(engine, result, now, send)
+}
+
+fn request_initialization_with_send(
+    engine: &mut Engine,
+    now: NaiveDateTime,
+    send: &mut impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<InitializationResult, Error> {
+    let request = engine.initialization_request(now.date(), now.time())?;
+    let response = send(&request).inspect_err(|_error| {
+        engine.abort_dialog();
+    })?;
+    engine.accept_initialization(&response, now)
+}
+
+fn refresh_parameters_with_send(
+    engine: &mut Engine,
+    now: NaiveDateTime,
+    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<(), Error> {
+    let request = engine.anonymous_initialization_request()?;
+    let response = send(&request).inspect_err(|_error| {
+        engine.abort_dialog();
+    })?;
+    engine.accept_anonymous_initialization(&response)?;
+    let request = engine.termination_request(now.date(), now.time())?;
+    let response = send(&request).inspect_err(|_error| {
+        engine.abort_dialog();
+    })?;
+    engine.accept_termination(&response)
 }
 
 fn finish_initialization_with_send(
@@ -841,6 +901,7 @@ fn finish_initialization_with_send(
         InitializationResult::Connected => return Ok(Initialization::Connected),
         InitializationResult::ChooseTanMethod => Initialization::ChooseTanMethod,
         InitializationResult::RefreshParameters => Initialization::RefreshParameters,
+        InitializationResult::RefreshAndRediscover => return Err(Error::InconsistentState),
         InitializationResult::Challenge(pending) => {
             return Ok(Initialization::Challenge(Box::new(
                 InitializationContinuation { pending: *pending },
@@ -906,7 +967,7 @@ mod tests {
     use chrono::{NaiveDate, NaiveTime};
 
     use super::*;
-    use crate::{model::TanProcess, wire::Message};
+    use crate::{model::TanProcess, transport::Transport, wire::Message};
 
     fn now() -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 7, 29)
@@ -943,6 +1004,19 @@ mod tests {
         .unwrap()
     }
 
+    fn fresh_client(responses: impl IntoIterator<Item = Vec<u8>>) -> Client {
+        Client {
+            engine: Engine::new(
+                InstituteId::new("280", "12345678").unwrap(),
+                ProductIdentity::new("PROD123", "1.0").unwrap(),
+                Credentials::new("fictional-user", None, "private-pin").unwrap(),
+                ReusableState::new(),
+            )
+            .unwrap(),
+            transport: Transport::fixture(responses),
+        }
+    }
+
     fn secured_response(inner: &[u8], message_number: u16, trailer_number: u16) -> Vec<u8> {
         let mut wire = format!(
             "HNHBK:1:3+000000000000+300+dialog1+{message_number}+dialog1:1'\
@@ -972,6 +1046,230 @@ mod tests {
         let length = format!("{:012}", wire.len());
         wire.replace_range(10..22, &length);
         wire.into_bytes()
+    }
+
+    fn global_missing_3920_response() -> Vec<u8> {
+        // Independently assembled PIN/TAN response: all three response elements
+        // are global HIRMG facts. The unpublished 99xx has no assigned meaning.
+        secured_response(
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional bank termination",
+                "+9952::fictional unpublished companion'"
+            )
+            .as_bytes(),
+            1,
+            3,
+        )
+    }
+
+    fn anonymous_bpd_response() -> Vec<u8> {
+        plain_response(
+            &[
+                "HIRMG:2:2+0010::accepted",
+                "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300",
+                concat!(
+                    "HITANS:4:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                    "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1"
+                ),
+            ],
+            "anonymous-refresh",
+            1,
+        )
+    }
+
+    fn assert_security_function(request: &[u8], expected: &str) {
+        let payload = Message::parse(request).unwrap().payload_segments().unwrap();
+        let hnshk = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HNSHK")
+            .expect("personalized request has HNSHK");
+        assert_eq!(
+            hnshk.elements()[2].components()[0].as_text().unwrap(),
+            expected
+        );
+    }
+
+    fn initialization_error(result: Result<Initialization, Error>) -> Error {
+        match result {
+            Err(error) => error,
+            Ok(_) => panic!("fictional initialization unexpectedly succeeded"),
+        }
+    }
+
+    // PIN/TAN 2020 B.4.3.1 makes current anonymous BPD a prerequisite for
+    // function-999 discovery and requires 3920 to carry the user methods.
+    // T8 repairs missing usable parameters through an active BPD-zero refresh.
+    // The no-3920 bank deviation receives one bounded prerequisite repair only.
+    #[test]
+    fn initialize_repairs_bpd_once_before_repeating_global_method_discovery() {
+        let rediscovery = secured_response(
+            b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942:943'",
+            1,
+            4,
+        );
+        let responses = [
+            global_missing_3920_response(),
+            anonymous_bpd_response(),
+            plain_response(
+                &["HIRMG:2:2+0100::anonymous terminated"],
+                "anonymous-refresh",
+                2,
+            ),
+            rediscovery,
+            secured_response(b"HIRMG:2:2+0100::discovery terminated'", 2, 3),
+        ];
+        let mut client = fresh_client(responses);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::ChooseTanMethod
+        ));
+        assert_eq!(client.state().bpd_version(), 58);
+        assert_eq!(client.tan_methods().len(), 1);
+        assert_eq!(client.tan_methods()[0].security_function(), "942");
+        assert_eq!(client.allowed_tan_methods(), ["942", "943"]);
+        assert!(matches!(
+            client.select_tan_method("943"),
+            Err(Error::Unsupported(crate::Limitation::TanMethod))
+        ));
+        client.select_tan_method("942").unwrap();
+
+        let requests = client.transport.fixture_requests();
+        assert_eq!(requests.len(), 5);
+        assert_security_function(&requests[0], "999");
+
+        let anonymous = Message::parse(&requests[1])
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        assert!(
+            anonymous
+                .iter()
+                .all(|segment| segment.header().unwrap().code != b"HNSHK")
+        );
+        let hkvvb = anonymous
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKVVB")
+            .unwrap();
+        assert_eq!(hkvvb.elements()[1].components()[0].as_text().unwrap(), "0");
+
+        for index in [2, 4] {
+            let payload = Message::parse(&requests[index])
+                .unwrap()
+                .payload_segments()
+                .unwrap();
+            assert_eq!(
+                payload
+                    .iter()
+                    .filter(|segment| segment.header().unwrap().code == b"HKEND")
+                    .count(),
+                1
+            );
+        }
+        assert_security_function(&requests[3], "999");
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+    }
+
+    // The bounded recovery is not a loop: after a successful anonymous refresh,
+    // another global termination without mandatory 3920 is a redacted typed error.
+    #[test]
+    fn initialize_stops_after_second_missing_3920() {
+        let responses = [
+            global_missing_3920_response(),
+            anonymous_bpd_response(),
+            plain_response(
+                &["HIRMG:2:2+0100::anonymous terminated"],
+                "anonymous-refresh",
+                2,
+            ),
+            global_missing_3920_response(),
+        ];
+        let mut client = fresh_client(responses);
+
+        let error = initialization_error(client.initialize(now()));
+        assert!(matches!(
+            error,
+            Error::MissingValue {
+                field: "3920 TAN method response after anonymous BPD refresh"
+            }
+        ));
+        assert_eq!(client.transport.fixture_requests().len(), 4);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+        assert!(client.allowed_tan_methods().is_empty());
+        assert_eq!(
+            client
+                .last_responses()
+                .iter()
+                .map(|response| (response.code(), response.segment_number()))
+                .collect::<Vec<_>>(),
+            [(9050, None), (9800, None), (9952, None)]
+        );
+        let rendered = format!("{error:?}");
+        assert!(!rendered.contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    // Placement is part of the narrow classification. A segment-referenced
+    // unpublished companion without 3920 is not the exact global prerequisite
+    // failure and therefore does not start an anonymous network sequence.
+    #[test]
+    fn initialize_does_not_refresh_for_segment_referenced_missing_3920() {
+        let response = secured_response(
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination'",
+                "HIRMS:3:2:4+9952::fictional segment companion'"
+            )
+            .as_bytes(),
+            1,
+            4,
+        );
+        let mut client = fresh_client([response]);
+
+        let error = initialization_error(client.initialize(now()));
+        assert!(matches!(
+            error,
+            Error::MissingValue {
+                field: "3920 TAN method response"
+            }
+        ));
+        assert_eq!(client.transport.fixture_requests().len(), 1);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+    }
+
+    // Rückmeldungscodes 2026 A/B.4: unpublished 99xx values remain
+    // uninterpreted, while published credential errors and selected-method
+    // authentication failures are never absorbed by BPD recovery.
+    #[test]
+    fn initialize_recovery_does_not_absorb_fatal_or_selected_method_errors() {
+        let fatal = secured_response(
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional companion",
+                "+9942::fictional credential error'"
+            )
+            .as_bytes(),
+            1,
+            3,
+        );
+        let mut client = fresh_client([fatal]);
+        let error = initialization_error(client.initialize(now()));
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(client.transport.fixture_requests().len(), 1);
+        assert!(!format!("{error:?}").contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+
+        let mut selected = Client {
+            engine: synchronization_engine(),
+            transport: Transport::fixture([global_missing_3920_response()]),
+        };
+        let error = initialization_error(selected.initialize(now()));
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        let requests = selected.transport.fixture_requests();
+        assert_eq!(requests.len(), 1);
+        assert_security_function(&requests[0], "942");
     }
 
     // PIN/TAN B.6.1 and correction T8: a bank-terminated function-999

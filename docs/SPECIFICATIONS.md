@@ -44,7 +44,9 @@ access date for each source below is 2026-07-28.
   `unbekannt` and `9999` sentinels); C.3.2.2 and F.2 process condition [IF3]
   (dialog-transient BPD version zero and version wrap-around); E.2 and the HIUPA
   Data Dictionary entry (`UPD-Verwendung` values 0 and 1); and the message,
-  segment, and HIUPD `Erlaubte GV` repetition maxima.
+  segment, and HIUPD `Erlaubte GV` repetition maxima. C.5-C.5.1 defines the
+  unsigned anonymous dialog that retrieves current BPD; HKVVB sends BPD version
+  zero when none are retained.
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -159,10 +161,12 @@ access date for each source below is 2026-07-28.
   TAN-media discovery); D (two-step method parameters); F.1-F.2 (message
   composition and examples).
 - **Gate 4 live-interoperability sections:** B.1 (personalized PIN/TAN messages
-  retain the security and encryption segments); B.4.3.1 (function-999 method
-  discovery and its prohibition on UPD); B.6.1 response 3920 (allowed-method
-  parameters and 9800 dialog termination); B.8.2 (9955 termination when
-  one-step TAN is unavailable, with the supported methods supplied by 3920);
+  retain the security and encryption segments); B.4.3.1 (current anonymous BPD
+  is a prerequisite for strong-authentication discovery; function 999 must return
+  the user's methods through 3920 and may not return UPD); B.6.1 response 3920
+  (allowed-method parameters and 9800 dialog termination); B.8.2 (9955
+  termination when one-step TAN is unavailable, with the supported methods
+  supplied by 3920);
   correction T8 (active anonymous BPD refresh using client version zero per
   Formals C.3.2.2/P26 when 3920 cannot be matched to a usable method
   description);
@@ -184,6 +188,11 @@ access date for each source below is 2026-07-28.
   9050/9800/9955/3920 response set as completed method discovery without a
   client-side HKEND. T8 additionally authorizes a typed anonymous-parameter
   refresh when valid 3920 identifiers lack matching HITANS descriptions.
+  If a BPD-zero client instead receives the exact global
+  9050/9800/unpublished-9952 termination without mandatory 3920, B.4.3.1 and T8
+  support one bounded repair of the missing anonymous-BPD prerequisite followed
+  by one fresh function-999 attempt. The absent 3920 remains a protocol
+  deviation, and the unpublished companion receives no inferred meaning.
   Unpublished 99xx companions receive no standalone meaning and known errors
   retain their normal meaning. It further
   authorizes strict inbound PIN/TAN security-control occupancy while accepting

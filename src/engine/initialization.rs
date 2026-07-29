@@ -129,6 +129,21 @@ impl Engine {
             requested_method.is_none() && response.is_bank_terminated_tan_method_discovery();
         let unclassified_terminated_discovery = requested_method.is_none()
             && response.is_unclassified_bank_terminated_tan_method_discovery();
+        let refresh_before_rediscovery = requested_method.is_none()
+            && self.state.bpd_version == 0
+            && self.state.upd_version == 0
+            && self.parameters().tan_methods.is_empty()
+            && response.is_global_bpdless_tan_method_discovery_abort();
+        if refresh_before_rediscovery {
+            // B.4.3.1 makes anonymous BPD a prerequisite for function-999
+            // discovery. Repair that prerequisite once at the Client layer;
+            // never infer a method from HITANS without a subsequent 3920.
+            self.dialog = None;
+            self.continuation_active = false;
+            self.allowed_tan_methods.clear();
+            self.allowed_tan_methods_known = false;
+            return Ok(InitializationResult::RefreshAndRediscover);
+        }
         if bank_terminated_discovery || unclassified_terminated_discovery {
             if !response.has_tan_method_response() {
                 return Err(Error::MissingValue {

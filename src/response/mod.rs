@@ -228,6 +228,34 @@ impl Response {
             })
     }
 
+    pub(crate) fn is_global_bpdless_tan_method_discovery_abort(&self) -> bool {
+        // PIN/TAN B.4.3.1 requires current anonymous BPD before function-999
+        // discovery and requires that discovery to return 3920. A response
+        // containing exactly global 9050/9800 plus unpublished 9952 is
+        // classified only as a bank-terminated attempt that did not reach the
+        // mandatory method result. The unpublished code receives no meaning.
+        !self.has_tan_method_response
+            && self.responses.len() == 3
+            && self.responses.iter().all(|response| {
+                response.class() == ResponseClass::Error
+                    && response.segment_number().is_none()
+                    && (matches!(response.code(), 9050 | 9800)
+                        || (response.code() == 9952 && is_unpublished_99xx(response.code())))
+            })
+            && self
+                .responses
+                .iter()
+                .any(|response| response.code() == 9050)
+            && self
+                .responses
+                .iter()
+                .any(|response| response.code() == 9800)
+            && self
+                .responses
+                .iter()
+                .any(|response| response.code() == 9952 && is_unpublished_99xx(response.code()))
+    }
+
     pub(crate) fn first_error(&self) -> Option<BankResponse> {
         self.responses
             .iter()

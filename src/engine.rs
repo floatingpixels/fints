@@ -66,6 +66,7 @@ pub(crate) enum InitializationResult {
     Connected,
     ChooseTanMethod,
     RefreshParameters,
+    RefreshAndRediscover,
     Challenge(Box<PendingChallenge>),
 }
 
