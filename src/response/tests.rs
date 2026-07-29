@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{CreditDebit, TanProcess};
+use crate::wire::{Element, Value};
 use chrono::{NaiveDate, NaiveTime};
 
 fn message(segments: &[String], dialog_id: &str, message_number: u16) -> Vec<u8> {
@@ -23,17 +24,88 @@ fn secured_message(
     outer_trailer_number: u16,
     trailer_message_number: u16,
 ) -> Vec<u8> {
-    let mut wire = concat!(
-        "HNHBK:1:3+000000000000+300+dialog1+1+dialog1:1'",
-        "HNVSK:998:3+PIN:2+998+1+1::fictional-system",
-        "+1:20260729:120000+2:2:13:@8@"
+    let encryption_header = fictional_encryption_header(EncryptionHeaderFixture::default());
+    secured_message_with_encryption_header(
+        inner,
+        outer_trailer_number,
+        trailer_message_number,
+        &encryption_header,
     )
-    .as_bytes()
-    .to_vec();
-    wire.extend_from_slice(&[0; 8]);
-    wire.extend_from_slice(
-        concat!(":5:1+280:12345678:fictional-bank:V:0:0+0'", "HNVSD:999:1+@").as_bytes(),
+}
+
+struct EncryptionHeaderFixture<'a> {
+    profile: &'a str,
+    security_function: &'a str,
+    security_role: &'a str,
+    security_identity: &'a str,
+    security_timestamp: &'a str,
+    algorithm_codes: [&'a str; 3],
+    key_filler: &'a [u8],
+    key_identifier: &'a str,
+    iv_identifier: &'a str,
+    iv: Option<&'a [u8]>,
+    compression: &'a str,
+}
+
+impl Default for EncryptionHeaderFixture<'static> {
+    fn default() -> Self {
+        Self {
+            profile: "PIN:2",
+            security_function: "998",
+            security_role: "1",
+            security_identity: "1::fictional-system",
+            security_timestamp: "1:20260729:120000",
+            algorithm_codes: ["2", "2", "13"],
+            key_filler: &[0; 8],
+            key_identifier: "5",
+            iv_identifier: "1",
+            iv: None,
+            compression: "0",
+        }
+    }
+}
+
+fn fictional_encryption_header(fixture: EncryptionHeaderFixture<'_>) -> Vec<u8> {
+    let mut header = format!(
+        concat!("HNVSK:998:3+{}+{}+{}+{}+{}", "+{}:{}:{}:@{}@"),
+        fixture.profile,
+        fixture.security_function,
+        fixture.security_role,
+        fixture.security_identity,
+        fixture.security_timestamp,
+        fixture.algorithm_codes[0],
+        fixture.algorithm_codes[1],
+        fixture.algorithm_codes[2],
+        fixture.key_filler.len()
+    )
+    .into_bytes();
+    header.extend_from_slice(fixture.key_filler);
+    header.extend_from_slice(
+        format!(":{}:{}", fixture.key_identifier, fixture.iv_identifier).as_bytes(),
     );
+    if let Some(iv) = fixture.iv {
+        header.extend_from_slice(format!(":@{}@", iv.len()).as_bytes());
+        header.extend_from_slice(iv);
+    }
+    header.extend_from_slice(
+        format!(
+            "+280:12345678:fictional-bank:V:0:0+{}'",
+            fixture.compression
+        )
+        .as_bytes(),
+    );
+    header
+}
+
+fn secured_message_with_encryption_header(
+    inner: &[u8],
+    outer_trailer_number: u16,
+    trailer_message_number: u16,
+    encryption_header: &[u8],
+) -> Vec<u8> {
+    let mut wire = b"HNHBK:1:3+000000000000+300+dialog1+1+dialog1:1'".to_vec();
+    wire.extend_from_slice(encryption_header);
+    wire.extend_from_slice(b"HNVSD:999:1+@");
     wire.extend_from_slice(inner.len().to_string().as_bytes());
     wire.push(b'@');
     wire.extend_from_slice(inner);
@@ -57,6 +129,28 @@ fn patch_fixture_length(fixture: &mut [u8]) {
     fixture[10..22].copy_from_slice(length.as_bytes());
 }
 
+fn assert_redacted_encryption_error(error: Error, expected: &'static str) {
+    assert!(matches!(
+        &error,
+        Error::InvalidResponse { structure } if *structure == expected
+    ));
+    assert_eq!(
+        error.to_string(),
+        format!("FinTS response has an invalid {expected} structure")
+    );
+    assert!(!error.to_string().contains("fictional-system"));
+}
+
+fn assert_encryption_header_error(header: Vec<u8>, expected: &'static str) {
+    let fixture =
+        secured_message_with_encryption_header(b"HIRMG:2:2+0010::accepted'", 3, 1, &header);
+    let error = match Response::parse(&fixture) {
+        Ok(_) => panic!("malformed fictional encryption header must fail"),
+        Err(error) => error,
+    };
+    assert_redacted_encryption_error(error, expected);
+}
+
 // FinTS Formals B.7.1 and B.8; PIN/TAN 2020 B.1, B.9.4-B.9.10,
 // and F.2: the optional bank-side HNSHK/HNSHA control pair surrounds the
 // response segments restored from HNVSD. It carries no bank signature.
@@ -77,7 +171,17 @@ fn authenticated_response_security_controls_precede_hirmg_and_apply_parameters()
         "HNSHA:9:2+fictional-ref'"
     )
     .as_bytes();
-    let fixture = secured_message(inner, 10, 1);
+    // PIN/TAN B.9 defines the key value and key-parameter identifier as
+    // processing-irrelevant FinTS filler values; HBCI DD defines role 3.
+    let encryption_header = fictional_encryption_header(EncryptionHeaderFixture {
+        security_role: "3",
+        security_identity: "2::fictional-system",
+        security_timestamp: "1",
+        key_filler: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        key_identifier: "6",
+        ..EncryptionHeaderFixture::default()
+    });
+    let fixture = secured_message_with_encryption_header(inner, 10, 1, &encryption_header);
     let mut state = ReusableState::new();
 
     let response = Response::parse(&fixture).unwrap();
@@ -259,27 +363,172 @@ fn authenticated_response_rejects_incomplete_or_misordered_outer_controls() {
     }
 }
 
-// HBCI Security B.5.3 and PIN/TAN B.9.1/B.9.8-B.9.9 define the complete
-// PIN/TAN HNVSK occupancy; a recognized outer envelope is not enough.
+// PIN/TAN B.9.9 and its FinTS-Füllwert definition make the concrete key bytes
+// and key-parameter identifier irrelevant. HBCI DD defines roles 1, 3, and 4
+// without authorizing clients to interpret their business meaning.
 #[test]
-fn authenticated_response_rejects_malformed_encryption_header_values() {
+fn authenticated_response_accepts_filler_variants_and_all_defined_security_roles() {
     let inner = b"HIRMG:2:2+0010::accepted'";
-    let mut wrong_profile = secured_message(inner, 3, 1);
-    let profile = fixture_offset(&wrong_profile, b"+PIN:2+998");
-    wrong_profile[profile + 1..profile + 4].copy_from_slice(b"RAH");
+    let cases = [
+        ("1", "1::fictional-system", "1:20260729:120000"),
+        ("3", "2::fictional-system", "1"),
+        ("4", "2::fictional-system", "1:20260729"),
+    ];
 
-    let mut wrong_function = secured_message(inner, 3, 1);
-    let function = fixture_offset(&wrong_function, b"+PIN:2+998");
-    wrong_function[function + 7..function + 10].copy_from_slice(b"997");
-
-    for fixture in [wrong_profile, wrong_function] {
-        assert!(matches!(
-            Response::parse(&fixture),
-            Err(Error::InvalidResponse {
-                structure: "authenticated response encryption header"
-            })
-        ));
+    for (role, identity, timestamp) in cases {
+        let header = fictional_encryption_header(EncryptionHeaderFixture {
+            security_role: role,
+            security_identity: identity,
+            security_timestamp: timestamp,
+            key_filler: &[0xA5; 16],
+            key_identifier: "6",
+            ..EncryptionHeaderFixture::default()
+        });
+        assert!(
+            Response::parse(&secured_message_with_encryption_header(
+                inner, 3, 1, &header
+            ))
+            .is_ok()
+        );
     }
+
+    let mut explicitly_unoccupied_certificate =
+        fictional_encryption_header(EncryptionHeaderFixture::default());
+    explicitly_unoccupied_certificate.pop();
+    explicitly_unoccupied_certificate.extend_from_slice(b"+'");
+    assert!(
+        Response::parse(&secured_message_with_encryption_header(
+            inner,
+            3,
+            1,
+            &explicitly_unoccupied_certificate
+        ))
+        .is_ok()
+    );
+}
+
+// HBCI Security B.5.3/DD and PIN/TAN B.9.1/B.9.8-B.9.9: fixed values,
+// field formats, filler bounds, and forbidden IV occupancy remain strict.
+// Every error exposes only a stable constant structural category.
+#[test]
+fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific() {
+    let malformed_segment_header = Segment::new(vec![Element::new(vec![
+        Value::text("HNVSK").unwrap(),
+        Value::text("998").unwrap(),
+        Value::text("2").unwrap(),
+    ])]);
+    assert_redacted_encryption_error(
+        validate_encryption_header(&malformed_segment_header).unwrap_err(),
+        "encryption_header.segment_header",
+    );
+
+    let cases = [
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                profile: "PIN:2:extra",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.element_shape",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                profile: "RAH:2",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.security_profile",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                security_function: "997",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.security_function",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                security_role: "2",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.security_role",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                security_identity: "3::fictional-system",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.security_identity_shape",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                security_timestamp: "1:2026072X:120000",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.security_timestamp_shape",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                algorithm_codes: ["2", "18", "13"],
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.algorithm_codes",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                key_filler: &[7; 513],
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.key_filler_shape",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                key_identifier: "1234",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.key_identifier_shape",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                iv: Some(&[1]),
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.iv_occupancy",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                iv_identifier: "2",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.iv_occupancy",
+        ),
+        (
+            fictional_encryption_header(EncryptionHeaderFixture {
+                compression: "1",
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.compression_function",
+        ),
+    ];
+    for (header, expected) in cases {
+        assert_encryption_header_error(header, expected);
+    }
+
+    let mut text_key_filler = fictional_encryption_header(EncryptionHeaderFixture::default());
+    let filler = fixture_offset(&text_key_filler, b"@8@");
+    text_key_filler.splice(filler..filler + 11, b"not-a-value".iter().copied());
+    assert_encryption_header_error(text_key_filler, "encryption_header.key_filler_shape");
+
+    let mut occupied_certificate = fictional_encryption_header(EncryptionHeaderFixture::default());
+    occupied_certificate.pop();
+    occupied_certificate.extend_from_slice(b"+certificate'");
+    assert_encryption_header_error(occupied_certificate, "encryption_header.element_shape");
+
+    assert_encryption_header_error(
+        fictional_encryption_header(EncryptionHeaderFixture {
+            security_role: "1234",
+            ..EncryptionHeaderFixture::default()
+        }),
+        "encryption_header.security_role",
+    );
 }
 
 // FinTS Formals B.5.2-B.5.3 and B.8 retain continuous inner numbering,

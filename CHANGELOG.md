@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Corrected authenticated HNVSK validation after the next owner-run live initialization reached the encryption-header boundary.
+  Accepts format-valid FinTS filler variants, all defined roles and party directions, and optional timestamps while retaining fixed codes, bounds, and forbidden IV occupancy.
+  Added constant-only field diagnostics and independent fictional variants; the 92-test network-independent stack is green.
+
 - **2026-07-29** — Accepted the specified optional HNSHK/HNSHA control pair around HIRMG and response data inside authenticated HNVSD responses, prompted by an owner-run live initialization.
   Added strict inner and outer security-framing validation with independent fictional parameter, ordering, numbering, and malformed-control fixtures.
   The 91-test network-independent stack is green; raw response data remains neither captured nor exposed.

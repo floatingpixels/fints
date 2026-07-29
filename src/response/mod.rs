@@ -273,9 +273,12 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
     let payload = message.payload_segments()?;
     let security_enveloped = message.is_security_enveloped();
     if security_enveloped {
-        validate_encryption_header(message.segments().get(1).ok_or(Error::InvalidResponse {
-            structure: "authenticated response encryption header",
-        })?)?;
+        validate_encryption_header(
+            message
+                .segments()
+                .get(1)
+                .ok_or_else(|| invalid_encryption_header("encryption_header.segment_header"))?,
+        )?;
     }
     let signature_headers = payload
         .iter()
@@ -319,64 +322,159 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
 
 // HBCI Security B.5.3 supplies the shared HNVSK 3 layout; PIN/TAN
 // B.9.1 and B.9.8-B.9.9 constrain it to the cleartext-over-TLS profile.
+// The PIN/TAN definition of FinTS-Füllwert makes the key bytes and key
+// parameter identifier processing-irrelevant: only format and restrictions are checked.
 fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
-    let header = segment.header().ok_or(Error::InvalidResponse {
-        structure: "authenticated response encryption header",
-    })?;
+    let header = segment
+        .header()
+        .ok_or_else(|| invalid_encryption_header("encryption_header.segment_header"))?;
     if header.code != b"HNVSK"
         || header.number != 998
         || header.version != 3
         || header.reference.is_some()
-        || !(9..=10).contains(&segment.elements().len())
+    {
+        return Err(invalid_encryption_header(
+            "encryption_header.segment_header",
+        ));
+    }
+
+    if !(9..=10).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 2)
         || !(2..=3).all(|index| element_has_components(segment, index, 1))
-        || !(4..=5).all(|index| element_has_components(segment, index, 3))
-        || !element_has_components(segment, 6, 6)
+        || !element_has_components(segment, 4, 3)
+        || segment
+            .element(5)
+            .is_none_or(|element| !(1..=3).contains(&element.components().len()))
+        || segment
+            .element(6)
+            .is_none_or(|element| !(6..=7).contains(&element.components().len()))
         || !element_has_components(segment, 7, 6)
         || !element_has_components(segment, 8, 1)
         || segment
             .element(9)
             .is_some_and(|element| !element_is_empty(element))
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response encryption header",
-        });
+        return Err(invalid_encryption_header("encryption_header.element_shape"));
     }
 
     let profile = segment.elements()[1].components();
-    let security_identity = segment.elements()[4].components();
-    let security_time = segment.elements()[5].components();
-    let encryption = segment.elements()[6].components();
     if profile[0].as_text().as_deref() != Some("PIN")
         || !matches!(profile[1].as_text().as_deref(), Some("1" | "2"))
-        || required_segment_text(segment, 2, "authenticated response encryption function")? != "998"
-        || !matches!(
-            required_segment_text(segment, 3, "authenticated response security role")?.as_str(),
-            "1" | "4"
-        )
-        || security_identity[0].as_text().as_deref() != Some("1")
+    {
+        return Err(invalid_encryption_header(
+            "encryption_header.security_profile",
+        ));
+    }
+
+    if segment.elements()[2].components()[0].as_text().as_deref() != Some("998") {
+        return Err(invalid_encryption_header(
+            "encryption_header.security_function",
+        ));
+    }
+
+    // The HBCI Security Data Dictionary says the role is not to be interpreted
+    // currently. All three defined code values remain syntactically valid.
+    if !matches!(
+        segment.elements()[3].components()[0].as_text().as_deref(),
+        Some("1" | "3" | "4")
+    ) {
+        return Err(invalid_encryption_header("encryption_header.security_role"));
+    }
+
+    let security_identity = segment.elements()[4].components();
+    // The shared Data Dictionary defines 1 (sender) and 2 (receiver), while
+    // PIN/TAN B.9.3 forbids CID and requires the customer system identifier.
+    if !matches!(security_identity[0].as_text().as_deref(), Some("1" | "2"))
         || security_identity[1].as_text().as_deref() != Some("")
         || security_identity[2]
             .as_text()
             .is_none_or(|value| value.is_empty())
-        || security_time[0].as_text().as_deref() != Some("1")
-        || !text_is_ascii_digits(&security_time[1], 8)
-        || !text_is_ascii_digits(&security_time[2], 6)
-        || encryption[0].as_text().as_deref() != Some("2")
+    {
+        return Err(invalid_encryption_header(
+            "encryption_header.security_identity_shape",
+        ));
+    }
+
+    if !valid_security_timestamp(segment.elements()[5].components()) {
+        return Err(invalid_encryption_header(
+            "encryption_header.security_timestamp_shape",
+        ));
+    }
+
+    let encryption = segment.elements()[6].components();
+    if encryption[0].as_text().as_deref() != Some("2")
         || encryption[1].as_text().as_deref() != Some("2")
         || encryption[2].as_text().as_deref() != Some("13")
-        || encryption[3]
-            .as_binary()
-            .is_none_or(|value| value != [0; 8])
-        || encryption[4].as_text().as_deref() != Some("5")
-        || encryption[5].as_text().as_deref() != Some("1")
-        || required_segment_text(segment, 8, "authenticated response compression function")? != "0"
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response encryption header",
-        });
+        return Err(invalid_encryption_header(
+            "encryption_header.algorithm_codes",
+        ));
+    }
+    if encryption[3]
+        .as_binary()
+        .is_none_or(|value| value.len() > 512)
+    {
+        return Err(invalid_encryption_header(
+            "encryption_header.key_filler_shape",
+        ));
+    }
+    if !valid_key_identifier_filler(&encryption[4]) {
+        return Err(invalid_encryption_header(
+            "encryption_header.key_identifier_shape",
+        ));
+    }
+    if encryption[5].as_text().as_deref() != Some("1")
+        || encryption
+            .get(6)
+            .is_some_and(|value| value.as_text().is_none_or(|value| !value.is_empty()))
+    {
+        return Err(invalid_encryption_header("encryption_header.iv_occupancy"));
+    }
+    if segment.elements()[8].components()[0].as_text().as_deref() != Some("0") {
+        return Err(invalid_encryption_header(
+            "encryption_header.compression_function",
+        ));
     }
     Ok(())
+}
+
+fn invalid_encryption_header(structure: &'static str) -> Error {
+    Error::InvalidResponse { structure }
+}
+
+fn valid_security_timestamp(components: &[crate::wire::Value]) -> bool {
+    if components
+        .first()
+        .and_then(crate::wire::Value::as_text)
+        .as_deref()
+        != Some("1")
+    {
+        return false;
+    }
+    let date = components.get(1);
+    let time = components.get(2);
+    match date {
+        None => time.is_none(),
+        Some(date) => {
+            let Some(date) = date.as_text() else {
+                return false;
+            };
+            if date.is_empty() {
+                return time.is_none_or(|time| time.as_text().is_some_and(|time| time.is_empty()));
+            }
+            chrono::NaiveDate::parse_from_str(&date, "%Y%m%d").is_ok()
+                && time.is_none_or(|time| {
+                    time.as_text().is_some_and(|time| {
+                        time.is_empty()
+                            || chrono::NaiveTime::parse_from_str(&time, "%H%M%S").is_ok()
+                    })
+                })
+        }
+    }
+}
+
+fn valid_key_identifier_filler(value: &crate::wire::Value) -> bool {
+    matches!(value.as_text().as_deref(), Some("5" | "6"))
 }
 
 fn validate_signature_header(segment: &Segment) -> Result<(), Error> {
@@ -504,12 +602,6 @@ fn element_is_empty(element: &crate::wire::Element) -> bool {
         .components()
         .iter()
         .all(|value| value.as_text().is_some_and(|value| value.is_empty()))
-}
-
-fn text_is_ascii_digits(value: &crate::wire::Value, length: usize) -> bool {
-    value.as_text().is_some_and(|value| {
-        value.len() == length && value.bytes().all(|byte| byte.is_ascii_digit())
-    })
 }
 
 fn required_message_text(

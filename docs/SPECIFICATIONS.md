@@ -37,7 +37,8 @@ is 2026-07-28.
 - **Gate 4 live-interoperability sections:** B.7.1 (an institute response places
   optional HNSHK 4 before its mandatory HIRMG 2 and optional HNSHA 2 before
   HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
-  segment sequence, including any security controls, with continuous numbering).
+  segment sequence, including any security controls, with continuous numbering);
+  B.4.1-B.4.2 (`bin`, `code`, `dat`, and `tim` format and restriction rules).
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -117,17 +118,21 @@ is 2026-07-28.
   TAN-media discovery); D (two-step method parameters); F.1-F.2 (message
   composition and examples).
 - **Gate 4 live-interoperability sections:** B.1 (personalized PIN/TAN messages
-  retain the security and encryption segments); B.9.1-B.9.10 (PIN/TAN occupancy
-  of HNSHK, HNSHA, HNVSK, and cleartext-binary HNVSD); F.2 (each institute
-  response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and
-  response data).
+  retain the security and encryption segments); the introductory
+  `FinTS-Füllwert` definition immediately before B.1 (a filler is any value
+  satisfying the field's format, restrictions, and occupancy and is irrelevant
+  to processing); B.9.1-B.9.10 (PIN/TAN occupancy of HNSHK, HNSHA, HNVSK, and
+  cleartext-binary HNVSD, including B.9.9's non-normative filler examples); F.2
+  (each institute response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair
+  around HIRMG and response data).
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
   HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. It also
-  authorizes strict inbound PIN/TAN security-control occupancy without
-  accepting a raw or loosely searched response sequence.
+  authorizes strict inbound PIN/TAN security-control occupancy while accepting
+  format-valid filler contents without evaluating their concrete values; it
+  does not authorize a raw or loosely searched response sequence.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions as the Formals PDF. No PDF is committed.
 
@@ -143,11 +148,16 @@ is 2026-07-28.
   normatively reuses.
 - **Gate 4 live-interoperability sections:** B.5.1-B.5.4, limited to the shared
   segment layouts and the placement of HNSHK/HNSHA inside the encrypted HNVSD
-  sequence; PIN/TAN B.9 remains the authority for their field occupancy.
+  sequence; Data Dictionary entries `Rolle des Sicherheitslieferanten, kodiert`
+  (codes 1, 3, and 4; currently not to be interpreted), `Bezeichner für
+  Sicherheitspartei` (codes 1 and 2), `Sicherheitsdatum und -uhrzeit` (optional
+  date and conditional time), and `Verschlüsselungsalgorithmus` (component
+  formats, 512-byte binary bound, identifiers 5/6 and 1, and unoccupied IV
+  value). PIN/TAN B.9 remains the authority for profile-specific occupancy.
 - **Apply alongside:** the PIN/TAN volume's B.9 occupancy rules. HBCI
   key/card security profiles are not in Gate 1.
-- **Authorizes:** only the shared envelope segment layouts needed to encode the
-  and validate the PIN/TAN profile; it does not authorize implementing an HBCI
+- **Authorizes:** only the shared envelope segment layouts and field restrictions
+  needed to encode and validate the PIN/TAN profile; it does not authorize an HBCI
   security profile.
 - **Access/redistribution:** the PDF contains the same implementation grant and
   unchanged, free-redistribution conditions. No PDF is committed.

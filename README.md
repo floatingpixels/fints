@@ -88,7 +88,9 @@ transport errors. Any transport failure discards the uncertain local dialog; the
 caller starts a fresh initialization instead of replaying a message number.
 Authenticated institute responses accept only the specified HNVSK/HNVSD envelope and
 an optional matched HNSHK/HNSHA control pair around HIRMG and response data; arbitrary
-prefix segments and incomplete security framing remain typed response errors.
+prefix segments and incomplete security framing remain typed response errors. FinTS
+filler values are format-checked but not semantically interpreted; structural failures
+expose only stable field categories, never received values.
 
 Secret-bearing and private-data-bearing types intentionally omit `Debug`. Callers
 must not log credentials, continuations, challenges, accounts, balances, endpoints
