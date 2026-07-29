@@ -118,7 +118,11 @@ is 2026-07-28.
   TAN-media discovery); D (two-step method parameters); F.1-F.2 (message
   composition and examples).
 - **Gate 4 live-interoperability sections:** B.1 (personalized PIN/TAN messages
-  retain the security and encryption segments); the introductory
+  retain the security and encryption segments); B.4.3.1 (function-999 method
+  discovery and its prohibition on UPD); B.6.1 response 3920 (allowed-method
+  parameters and 9800 dialog termination); B.8.2 (9955 termination when
+  one-step TAN is unavailable, with the supported methods supplied by 3920);
+  the introductory
   `FinTS-Füllwert` definition immediately before B.1 (a filler is any value
   satisfying the field's format, restrictions, and occupancy and is irrelevant
   to processing); B.9.1-B.9.10 (PIN/TAN occupancy of HNSHK, HNSHA, HNVSK, and
@@ -130,6 +134,10 @@ is 2026-07-28.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
   HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. It also
+  authorizes treating the specification-defined function-999
+  9050/9800/9955/3920 response set as completed method discovery without a
+  client-side HKEND, while unrelated errors retain their normal meaning. It
+  further
   authorizes strict inbound PIN/TAN security-control occupancy while accepting
   format-valid filler contents without evaluating their concrete values; it
   does not authorize a raw or loosely searched response sequence.
@@ -209,8 +217,8 @@ is 2026-07-28.
 - **Research SHA-256:** `f0ab2a40c93921a31b715c6006e683ebd9ca7a4d3a842120b8c75d2d535c7b2d`.
 - **Gate 1 sections:** A and B.1-B.4, especially status classes and codes 0020,
   0030, 0100, 3010, 3040, 3050, 3072, 3075, 3076, 3081, 3920, 3955-3958,
-  9000, 9075, 9078, 9110, 9130, 9185, 9210, 9380, 9391, 9800, 9942, 9951,
-  and 9997.
+  9000, 9050, 9075, 9078, 9110, 9130, 9185, 9210, 9380, 9391, 9800, 9942,
+  9951, 9955, and 9997.
 - **Gate 2 sections:** B.1-B.4, especially code 3040 and its mandatory
   Aufsetzpunkt parameter, plus 9210 for a rejected continuation point.
 - **Gate 3 sections:** B.1-B.4, especially 3050 and 3081 (parameter refresh),

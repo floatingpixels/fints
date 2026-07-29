@@ -409,6 +409,21 @@ impl Engine {
         let response = Response::parse(input)?;
         self.record_responses(&response);
         self.apply_parameters(&response)?;
+        let bank_terminated_discovery =
+            requested_method.is_none() && response.is_bank_terminated_tan_method_discovery();
+        if bank_terminated_discovery {
+            if response.allowed_tan_methods().is_empty() {
+                return Err(Error::MissingValue {
+                    field: "valid 3920 TAN method parameter",
+                });
+            }
+            // PIN/TAN 2020 B.6.1 and B.8.2: 9800/9955 terminates the
+            // function-999 discovery dialog at the institute. It must not be
+            // retained locally or followed by HKEND.
+            self.dialog = None;
+            self.continuation_active = false;
+            return Ok(InitializationResult::ChooseTanMethod);
+        }
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
         }
@@ -432,10 +447,17 @@ impl Engine {
             method: requested_method.clone(),
             anonymous: false,
         });
-        if requested_method.is_none() && !response.has_tan_method_response() {
-            return Err(Error::MissingValue {
-                field: "3920 TAN method response",
-            });
+        if requested_method.is_none() {
+            if !response.has_tan_method_response() {
+                return Err(Error::MissingValue {
+                    field: "3920 TAN method response",
+                });
+            }
+            if response.allowed_tan_methods().is_empty() {
+                return Err(Error::MissingValue {
+                    field: "valid 3920 TAN method parameter",
+                });
+            }
         }
         let selected = self.state.selected_tan_method.as_deref();
         if selected.is_none()
@@ -974,6 +996,10 @@ impl Engine {
         } else {
             Err(Error::InconsistentState)
         }
+    }
+
+    pub(crate) fn has_active_dialog(&self) -> bool {
+        self.dialog.is_some()
     }
 
     fn ensure_pending_dialog(&self, pending: &PendingChallenge) -> Result<(), Error> {

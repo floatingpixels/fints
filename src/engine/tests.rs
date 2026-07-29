@@ -222,6 +222,184 @@ fn personalized_method_discovery_retains_only_safe_method_identifiers() {
     assert_eq!(engine.last_responses()[1].code(), 3920);
     assert_eq!(engine.last_responses()[1].class(), ResponseClass::Warning);
     engine.choose_tan_method("942").unwrap();
+
+    let termination = engine
+        .termination_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&termination)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert_eq!(
+        payload
+            .iter()
+            .filter(|segment| segment.header().unwrap().code == b"HKEND")
+            .count(),
+        1
+    );
+    let terminated = response(
+        &["HIRMG:2:2+0100::fictional termination"],
+        "method-dialog",
+        2,
+    );
+    engine.accept_termination(&terminated).unwrap();
+    assert!(matches!(
+        engine.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+}
+
+// FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1, B.6.1 response 3920,
+// and B.8.2 response 9955. This independently assembled response represents
+// function-999 discovery that the institute terminates without returning UPD.
+#[test]
+fn bank_terminated_method_discovery_applies_bpd_without_sending_hkend() {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.tan_methods.clear();
+    engine.state.selected_tan_method = None;
+    let fixture = response(
+        &[
+            "HIRMG:2:2+9050::fictional partial-error summary+9800::fictional termination",
+            "HIRMS:3:2:4+9955::fictional one-step result+3920::fictional methods:942",
+            "HIBPA:4:3:4+57+280:12345678+Fictional Bank+9+1+300",
+            concat!(
+                "HITANS:5:6:4+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1"
+            ),
+        ],
+        "terminated-discovery",
+        1,
+    );
+
+    let result = engine.accept_initialization(&fixture, now()).unwrap();
+
+    assert!(matches!(result, InitializationResult::ChooseTanMethod));
+    assert_eq!(engine.state().bpd_version(), 57);
+    assert_eq!(engine.state().upd_version(), 0);
+    assert_eq!(engine.state().tan_methods().len(), 1);
+    assert_eq!(engine.state().tan_methods()[0].security_function(), "942");
+    assert_eq!(engine.allowed_tan_methods(), ["942"]);
+    assert_eq!(
+        engine
+            .last_responses()
+            .iter()
+            .map(|response| (response.code(), response.class(), response.segment_number()))
+            .collect::<Vec<_>>(),
+        vec![
+            (9050, ResponseClass::Error, None),
+            (9800, ResponseClass::Error, None),
+            (9955, ResponseClass::Error, Some(4)),
+            (3920, ResponseClass::Warning, Some(4)),
+        ]
+    );
+    let redacted = format!("{:?}", engine.last_responses());
+    assert!(!redacted.contains("fictional partial-error summary"));
+    assert!(!redacted.contains("fictional methods"));
+
+    // The institute already ended this dialog, so no HKEND request can be built.
+    assert!(matches!(
+        engine.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+
+    engine.choose_tan_method("942").unwrap();
+    let next = engine
+        .initialization_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&next)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert_eq!(
+        payload[0].elements()[2].components()[0].as_text().unwrap(),
+        "942"
+    );
+    assert!(
+        payload
+            .iter()
+            .any(|segment| segment.header().unwrap().code == b"HKTAN")
+    );
+}
+
+// PIN/TAN B.6.1 and B.8.2 define a response set, not an ordering rule.
+#[test]
+fn bank_terminated_method_discovery_is_order_independent() {
+    let fixtures = [
+        [
+            "HIRMG:2:2+9050::summary+9800::termination",
+            "HIRMS:3:2:4+9955::one-step result+3920::methods:942",
+        ],
+        [
+            "HIRMG:2:2+9800::termination+9050::summary",
+            "HIRMS:3:2:4+3920::methods:942+9955::one-step result",
+        ],
+    ];
+
+    for segments in fixtures {
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        engine.state.selected_tan_method = None;
+        let fixture = response(&segments, "terminated-discovery", 1);
+
+        assert!(matches!(
+            engine.accept_initialization(&fixture, now()).unwrap(),
+            InitializationResult::ChooseTanMethod
+        ));
+        assert!(matches!(
+            engine.termination_request(now().date(), now().time()),
+            Err(Error::InconsistentState)
+        ));
+    }
+}
+
+// PIN/TAN B.6.1 limits 3920 parameters to 900-997 and 999. B.8.2 does not
+// permit an unrelated credential error to be absorbed by method discovery.
+#[test]
+fn method_discovery_requires_usable_methods_and_rejects_unrelated_errors() {
+    let mut invalid_methods = engine_with_method(TanProcess::ProcessVariantTwo);
+    invalid_methods.state.selected_tan_method = None;
+    let fixture = response(
+        &[
+            "HIRMG:2:2+9050::summary+9800::termination",
+            "HIRMS:3:2:4+9955::one-step result+3920::methods:899:998:not-a-code",
+        ],
+        "terminated-discovery",
+        1,
+    );
+    assert!(matches!(
+        invalid_methods.accept_initialization(&fixture, now()),
+        Err(Error::MissingValue {
+            field: "valid 3920 TAN method parameter"
+        })
+    ));
+    assert!(matches!(
+        invalid_methods.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+
+    let mut unrelated = engine_with_method(TanProcess::ProcessVariantTwo);
+    unrelated.state.selected_tan_method = None;
+    let fixture = response(
+        &[
+            "HIRMG:2:2+9050::summary+9800::termination+9942::credential error",
+            "HIRMS:3:2:4+9955::one-step result+3920::methods:942",
+        ],
+        "rejected-discovery",
+        1,
+    );
+    assert!(matches!(
+        unrelated.accept_initialization(&fixture, now()),
+        Err(Error::Bank(response)) if response.code() == 9050
+    ));
+    assert!(
+        unrelated
+            .last_responses()
+            .iter()
+            .any(|response| response.code() == 9942)
+    );
+    assert!(matches!(
+        unrelated.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
 }
 
 // FinTS 3.0 Formals 2017-10-06, C.8.1-C.8.2: HISYN 4 can complete

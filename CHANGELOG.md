@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Recognized specification-defined bank-terminated function-999 TAN-method discovery after the next owner-run live initialization.
+  BPD and valid 3920 method identifiers now survive the 9050/9800/9955 response set without retaining the ended dialog or sending HKEND.
+  Added independent fictional ordering, lifecycle, invalid-method, unrelated-error, redaction, and fresh-initialization regressions.
+
 - **2026-07-29** — Corrected authenticated HNVSK validation after the next owner-run live initialization reached the encryption-header boundary.
   Accepts format-valid FinTS filler variants, all defined roles and party directions, and optional timestamps while retaining fixed codes, bounds, and forbidden IV occupancy.
   Added constant-only field diagnostics and independent fictional variants; the 92-test network-independent stack is green.

@@ -133,10 +133,7 @@ impl Response {
                                     .iter()
                                     .skip(3)
                                     .filter_map(|value| value.as_text())
-                                    .filter(|value| {
-                                        value.len() == 3
-                                            && value.bytes().all(|byte| byte.is_ascii_digit())
-                                    })
+                                    .filter(|value| is_tan_security_function(value))
                                     .map(|value| value.into_owned()),
                             );
                         }
@@ -180,6 +177,23 @@ impl Response {
 
     pub(crate) fn has_tan_method_response(&self) -> bool {
         self.has_tan_method_response
+    }
+
+    pub(crate) fn is_bank_terminated_tan_method_discovery(&self) -> bool {
+        // PIN/TAN 2020 B.4.3.1, B.6.1 (3920), and B.8.2 (9955):
+        // function-999 discovery may be deliberately ended with 9800 and/or
+        // 9955. Code 9050 is only the message-level partial-error summary.
+        // This response-set classification is deliberately order-independent
+        // and does not change the general meaning of any individual code.
+        self.has_tan_method_response
+            && self.responses.iter().any(|response| {
+                response.class() == ResponseClass::Error && matches!(response.code(), 9800 | 9955)
+            })
+            && self
+                .responses
+                .iter()
+                .filter(|response| response.class() == ResponseClass::Error)
+                .all(|response| matches!(response.code(), 9050 | 9800 | 9955))
     }
 
     pub(crate) fn first_error(&self) -> Option<BankResponse> {
@@ -264,6 +278,14 @@ impl Response {
     pub(crate) fn tan(&self, expected_version: u16) -> Result<Option<tan::TanResponse>, Error> {
         tan::parse(&self.segments, expected_version)
     }
+}
+
+fn is_tan_security_function(value: &str) -> bool {
+    value.len() == 3
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value
+            .parse::<u16>()
+            .is_ok_and(|value| (900..=997).contains(&value) || value == 999)
 }
 
 // FinTS Formals B.7.1 and B.8 restore the logical institute-response order

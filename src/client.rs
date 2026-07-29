@@ -226,7 +226,9 @@ impl Client {
         match self.engine.accept_initialization(&response, now)? {
             InitializationResult::Connected => Ok(Initialization::Connected),
             InitializationResult::ChooseTanMethod => {
-                self.terminate(now)?;
+                if self.engine.has_active_dialog() {
+                    self.terminate(now)?;
+                }
                 Ok(Initialization::ChooseTanMethod)
             }
             InitializationResult::Challenge(pending) => Ok(Initialization::Challenge(Box::new(
