@@ -59,14 +59,40 @@ is 2026-07-28.
 - **Apply alongside:** FinTS 3.0 Formals Data Dictionary `Filterfunktion`
   (`MIM` = MIME Base 64; complete-message filtering) and the HIKOM 4 occupancy
   rule that leaves `Filterfunktion` unoccupied for communication service 3
-  (HTTPS).
+  (HTTPS). MIME Base64 decoding follows
+  [RFC 2045 section 6.8](https://www.rfc-editor.org/rfc/rfc2045.html#section-6.8):
+  folded lines and transport whitespace are ignored; other non-alphabet
+  characters remain rejectable transmission errors.
 - **Authorizes:** the inherited interoperable HTTPS body mapping: send the complete
   FinTS message Base64-encoded as the HTTP POST request body and Base64-decode the
-  complete response body before FinTS parsing. A response that is not valid Base64
-  is a transport error; it is never retried as raw FinTS.
+  complete response body before FinTS parsing. The bounded decoder accepts MIME
+  folding (`SP`, `HTAB`, `CR`, and `LF`) but rejects malformed Base64, HTML, and
+  non-whitespace transport garbage; raw FinTS is never a fallback.
 - **Access/redistribution:** accessed from the official archive on 2026-07-28.
   Redistribution rights for this historical PDF have not been reviewed, so the
   research copy remains ignored under `local/` and is not committed.
+
+### IETF — RFC 2045, MIME Part One
+
+- **Protocol/release:** Internet Standards Track RFC 2045, *Multipurpose Internet
+  Mail Extensions (MIME) Part One: Format of Internet Message Bodies*, November
+  1996.
+- **Official source:** [RFC Editor canonical
+  publication](https://www.rfc-editor.org/rfc/rfc2045.html).
+- **Research SHA-256:** not applicable; the canonical RFC remains available from
+  the RFC Editor in stable text, HTML, XML, and PDF representations.
+- **Gate 4 live-interoperability section:** 6.8, Base64 Content-Transfer-Encoding,
+  especially the 76-character folding rule, decoder handling of line breaks and
+  whitespace, canonical padding, and permission to reject other non-alphabet
+  characters as transmission errors.
+- **Apply alongside:** HBCI 2.2 PIN/TAN VI.7 `MIM` and the FinTS 3.0 Formals
+  `Filterfunktion` definition. It changes only HTTPS-body decoding, never FinTS
+  message syntax or dialog behavior.
+- **Authorizes:** accepting bounded MIME-folded and transport-whitespace-wrapped
+  Base64 responses while retaining strict rejection of malformed Base64, HTML,
+  non-whitespace transport garbage, and raw FinTS fallback.
+- **Access/redistribution:** accessed 2026-07-29. RFC 2045 permits unlimited
+  distribution; this repository links to the canonical publication.
 
 ### FinTS — Financial Transaction Services, Schnittstellenspezifikation, Sicherheitsverfahren PIN/TAN
 
@@ -432,7 +458,8 @@ and correspond to the direct dependency versions selected for the supported gate
 - [`base64` 0.22.1 general-purpose
   engine](https://docs.rs/base64/0.22.1/base64/engine/general_purpose/index.html):
   implements the complete-message Base64 encoding inherited from the historical
-  HBCI PIN/TAN HTTPS mapping; decoding failure remains an explicit transport error.
+  HBCI PIN/TAN HTTPS mapping after bounded removal of RFC 2045 MIME folding
+  whitespace; canonical decoding failure remains an explicit transport error.
 - [`quick-xml` 0.41.0
   `NsReader`](https://docs.rs/quick-xml/0.41.0/quick_xml/reader/struct.NsReader.html):
   provides streaming namespace-aware XML events for bounded camt.052 parsing,

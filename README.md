@@ -82,9 +82,10 @@ messages are not retained.
 Missing capabilities, unsupported parameter combinations, and multiple required
 signers return `Limitation`; the client never invents account or balance data.
 Redirects are disabled, response size is bounded, and complete HTTPS bodies use the
-officially inherited Base64 mapping. A non-Base64 response is a transport error, not
-a raw-message fallback. Any transport failure discards the uncertain local dialog;
-the caller starts a fresh initialization instead of replaying a message number.
+officially inherited MIME Base64 mapping. Bounded MIME folding whitespace is accepted;
+malformed Base64, HTML, non-whitespace transport garbage, and raw FinTS remain
+transport errors. Any transport failure discards the uncertain local dialog; the
+caller starts a fresh initialization instead of replaying a message number.
 
 Secret-bearing and private-data-bearing types intentionally omit `Debug`. Callers
 must not log credentials, continuations, challenges, accounts, balances, endpoints
