@@ -17,7 +17,7 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
         return Ok(None);
     };
     let version = segment.header().expect("header checked").version;
-    if !(6..=8).contains(&version) {
+    if !(5..=8).contains(&version) {
         return Err(Error::UnsupportedSegment {
             code: "HISAL",
             version,
@@ -44,15 +44,39 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
     let already_drawn = optional_element(elements, 8)
         .map(parse_amount)
         .transpose()?;
-    let overdraft = optional_element(elements, 9)
-        .map(parse_amount)
-        .transpose()?;
-    let booking_time = optional_element(elements, 10)
-        .map(parse_timestamp)
-        .transpose()?;
-    let due_date = optional_element(elements, 11)
-        .map(|components| parse_date(&component(components, 0, "balance due date")?))
-        .transpose()?;
+    let (overdraft, booking_time, due_date) = if version == 5 {
+        let booking_date = optional_single_element(elements, 9, "booking date")?
+            .map(|value| parse_date(&value))
+            .transpose()?;
+        let booking_clock = optional_single_element(elements, 10, "booking time")?
+            .map(|value| parse_time(&value))
+            .transpose()?;
+        let booking_time = match (booking_date, booking_clock) {
+            (Some(date), time) => Some(Timestamp::new(date, time)),
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(Error::InvalidResponse {
+                    structure: "HISAL 5 booking time without date",
+                });
+            }
+        };
+        let due_date = optional_single_element(elements, 11, "balance due date")?
+            .map(|value| parse_date(&value))
+            .transpose()?;
+        (None, booking_time, due_date)
+    } else {
+        (
+            optional_element(elements, 9)
+                .map(parse_amount)
+                .transpose()?,
+            optional_element(elements, 10)
+                .map(parse_timestamp)
+                .transpose()?,
+            optional_single_element(elements, 11, "balance due date")?
+                .map(|value| parse_date(&value))
+                .transpose()?,
+        )
+    };
     let garnishable_after_month_end = (version == 8)
         .then(|| optional_element(elements, 12))
         .flatten()
@@ -76,7 +100,12 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
 }
 
 fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
-    if version == 6 {
+    if version <= 6 {
+        if components.len() != 4 {
+            return Err(Error::InvalidResponse {
+                structure: "national account",
+            });
+        }
         let account_number = component(components, 0, "account number")?;
         let subaccount = optional_component(components, 1);
         let country_code = component(components, 2, "account country code")?;
@@ -135,6 +164,11 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
 }
 
 fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
+    if !(4..=5).contains(&components.len()) {
+        return Err(Error::InvalidResponse {
+            structure: "balance amount",
+        });
+    }
     let direction = match component(components, 0, "credit/debit sign")?.as_str() {
         "C" => CreditDebit::Credit,
         "D" => CreditDebit::Debit,
@@ -144,7 +178,7 @@ fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
             });
         }
     };
-    let amount = parse_amount(&components[1..])?;
+    let amount = parse_amount(&components[1..3])?;
     let date = parse_date(&component(components, 3, "balance date")?)?;
     let time = optional_component(components, 4)
         .map(|value| parse_time(&value))
@@ -153,6 +187,11 @@ fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
 }
 
 fn parse_amount(components: &[Value]) -> Result<Amount, Error> {
+    if components.len() != 2 {
+        return Err(Error::InvalidResponse {
+            structure: "amount",
+        });
+    }
     let value = component(components, 0, "amount value")?;
     let currency = parse_currency(&component(components, 1, "amount currency")?)?;
     if value.len() > 15 {
@@ -191,6 +230,11 @@ fn parse_currency(value: &str) -> Result<String, Error> {
 }
 
 fn parse_timestamp(components: &[Value]) -> Result<Timestamp, Error> {
+    if !(1..=2).contains(&components.len()) {
+        return Err(Error::InvalidResponse {
+            structure: "timestamp",
+        });
+    }
     let date = parse_date(&component(components, 0, "booking date")?)?;
     let time = optional_component(components, 1)
         .map(|value| parse_time(&value))
@@ -228,4 +272,18 @@ fn optional_element(elements: &[crate::wire::Element], index: usize) -> Option<&
                 .and_then(|value| value.as_text())
                 .is_none_or(|value| !value.is_empty())
         })
+}
+
+fn optional_single_element(
+    elements: &[crate::wire::Element],
+    index: usize,
+    field: &'static str,
+) -> Result<Option<String>, Error> {
+    let Some(components) = optional_element(elements, index) else {
+        return Ok(None);
+    };
+    if components.len() != 1 {
+        return Err(Error::InvalidResponse { structure: field });
+    }
+    Ok(Some(component(components, 0, field)?))
 }

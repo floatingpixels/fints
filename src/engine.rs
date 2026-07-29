@@ -115,8 +115,18 @@ impl Engine {
         institute: InstituteId,
         product: ProductIdentity,
         credentials: Credentials,
-        state: ReusableState,
+        mut state: ReusableState,
     ) -> Result<Self, Error> {
+        if !state.advertised_balance_versions.is_empty() {
+            state.balance_versions = state
+                .advertised_balance_versions
+                .iter()
+                .copied()
+                .filter(|version| (5..=8).contains(version))
+                .collect();
+            state.balance_versions.sort_unstable_by(|a, b| b.cmp(a));
+            state.balance_versions.dedup();
+        }
         validate_reusable_state(&state)?;
         Ok(Self {
             institute,
@@ -526,7 +536,7 @@ impl Engine {
             .balance_versions
             .iter()
             .copied()
-            .find(|version| (6..=8).contains(version))
+            .find(|version| (5..=8).contains(version))
             .ok_or(if self.state.balance_capability_advertised {
                 Limitation::BalanceVersion
             } else {

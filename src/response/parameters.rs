@@ -13,6 +13,16 @@ pub(super) fn apply(
     segments: &[Segment],
     state: &mut ReusableState,
 ) -> Result<Option<Vec<Account>>, Error> {
+    let received_bpd_version = bpd_version(segments)?;
+    if received_bpd_version.is_some_and(|version| version < state.bpd_version) {
+        return Err(Error::InvalidResponse {
+            structure: "stale BPD version",
+        });
+    }
+    // FinTS Formals C.3.2.2 and correction P26: a relevant BPD change has a
+    // new version and the transmitted BPD are complete. A same-version HIBPA
+    // therefore does not replace retained capabilities with an incomplete set.
+    let replace_bpd = received_bpd_version.is_some_and(|version| version > state.bpd_version);
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
@@ -22,7 +32,6 @@ pub(super) fn apply(
     let mut received_legacy_transaction_versions = Vec::new();
     let mut transaction_capability_advertised = false;
     let mut received_upd_version = None;
-    let mut received_bpd_version = None;
     let mut balance_requires_tan = None;
     let mut camt_requires_tan = None;
     let mut legacy_transactions_require_tan = None;
@@ -44,16 +53,7 @@ pub(super) fn apply(
             structure: "segment header",
         })?;
         match header.code {
-            b"HIBPA" => {
-                require_version(header.version, 3, "HIBPA")?;
-                let version = parse_element_u16(segment, 1, "BPD version")?;
-                if version == 0 || version > 999 {
-                    return Err(Error::InvalidValue {
-                        field: "BPD version",
-                    });
-                }
-                received_bpd_version = Some(version);
-            }
+            b"HIBPA" => {}
             b"HIUPA" => {
                 require_version(header.version, 4, "HIUPA")?;
                 let version = parse_element_u16(segment, 2, "UPD version")?;
@@ -70,27 +70,30 @@ pub(super) fn apply(
                     received_accounts.push(account);
                 }
             }
-            b"HISALS" => {
+            b"HISALS" if replace_bpd => {
                 balance_capability_advertised = true;
                 advertised_balance_versions.push(header.version);
-                if (6..=8).contains(&header.version) {
+                if header.version == 5 {
+                    require_legacy_balance_parameters(segment)?;
+                    received_balance_versions.push(header.version);
+                } else if (6..=8).contains(&header.version) {
                     received_balance_versions.push(header.version);
                 }
             }
-            b"HICAZS" => {
+            b"HICAZS" if replace_bpd => {
                 transaction_capability_advertised = true;
                 if header.version == 1 {
                     received_camt_descriptors.extend(parse_camt_descriptors(segment)?);
                 }
             }
-            b"HIKAZS" => {
+            b"HIKAZS" if replace_bpd => {
                 transaction_capability_advertised = true;
                 if (6..=7).contains(&header.version) {
                     require_transaction_parameters(segment)?;
                     received_legacy_transaction_versions.push(header.version);
                 }
             }
-            b"HIWPDS" => {
+            b"HIWPDS" if replace_bpd => {
                 depot_positions_advertised = true;
                 if header.version == 6 {
                     if depot_positions_supported {
@@ -102,7 +105,7 @@ pub(super) fn apply(
                     depot_positions_supported = true;
                 }
             }
-            b"HIWDUS" => {
+            b"HIWDUS" if replace_bpd => {
                 securities_transactions_advertised = true;
                 if header.version == 5 {
                     if securities_transactions_supported {
@@ -114,7 +117,7 @@ pub(super) fn apply(
                     securities_transactions_supported = true;
                 }
             }
-            b"HIKKUS" => {
+            b"HIKKUS" if replace_bpd => {
                 credit_card_transactions_advertised = true;
                 if header.version == 1 {
                     if credit_card_transactions.is_some() {
@@ -125,7 +128,7 @@ pub(super) fn apply(
                     credit_card_transactions = Some(parse_credit_card_parameters(segment)?);
                 }
             }
-            b"HIKKSS" => {
+            b"HIKKSS" if replace_bpd => {
                 credit_card_balance_advertised = true;
                 if header.version == 1 {
                     if credit_card_balance_account_required.is_some() {
@@ -137,7 +140,7 @@ pub(super) fn apply(
                         Some(parse_credit_card_balance_parameters(segment)?);
                 }
             }
-            b"HIPINS" => {
+            b"HIPINS" if replace_bpd => {
                 require_version(header.version, 1, "HIPINS")?;
                 balance_requires_tan = parse_tan_requirement(segment, "HKSAL")?;
                 camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
@@ -147,14 +150,14 @@ pub(super) fn apply(
                 credit_card_transactions_requires_tan = parse_tan_requirement(segment, "HKKKU")?;
                 credit_card_balance_requires_tan = parse_tan_requirement(segment, "HKKKS")?;
             }
-            b"HITANS" if (6..=7).contains(&header.version) => {
+            b"HITANS" if replace_bpd && (6..=7).contains(&header.version) => {
                 received_methods.extend(parse_tan_methods(segment, header.version)?);
             }
             _ => {}
         }
     }
 
-    if let Some(version) = received_bpd_version {
+    if let Some(version) = received_bpd_version.filter(|_| replace_bpd) {
         state.bpd_version = version;
         received_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
         received_balance_versions.dedup();
@@ -207,6 +210,34 @@ pub(super) fn apply(
         }
     }
     Ok(transient_accounts)
+}
+
+fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
+    let mut received = None;
+    for segment in segments {
+        let Some(header) = segment.header() else {
+            return Err(Error::InvalidResponse {
+                structure: "segment header",
+            });
+        };
+        if header.code != b"HIBPA" {
+            continue;
+        }
+        if received.is_some() {
+            return Err(Error::InvalidResponse {
+                structure: "duplicate HIBPA",
+            });
+        }
+        require_version(header.version, 3, "HIBPA")?;
+        let version = parse_element_u16(segment, 1, "BPD version")?;
+        if version == 0 || version > 999 {
+            return Err(Error::InvalidValue {
+                field: "BPD version",
+            });
+        }
+        received = Some(version);
+    }
+    Ok(received)
 }
 
 pub(super) fn bpd_institute(segments: &[Segment]) -> Result<Option<InstituteState>, Error> {
@@ -441,6 +472,30 @@ fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bo
         }
     }
     Ok(None)
+}
+
+fn require_legacy_balance_parameters(segment: &Segment) -> Result<(), Error> {
+    // HBCI 2.2 VII.2.2: HISALS 5 is a "Geschäftsvorfall ohne
+    // Parameter" containing only maximum orders and minimum signatures.
+    let elements = segment.elements();
+    if elements.len() != 3 {
+        return Err(Error::InvalidResponse {
+            structure: "HISALS 5 parameters",
+        });
+    }
+    let maximum_orders = parse_element_u16(segment, 1, "HISALS maximum orders")?;
+    if maximum_orders == 0 || maximum_orders > 999 {
+        return Err(Error::InvalidValue {
+            field: "HISALS maximum orders",
+        });
+    }
+    let signatures = parse_element_u16(segment, 2, "HISALS minimum signatures")?;
+    if signatures > 3 {
+        return Err(Error::InvalidValue {
+            field: "HISALS minimum signatures",
+        });
+    }
+    Ok(())
 }
 
 fn parse_credit_card_parameters(segment: &Segment) -> Result<CreditCardCapability, Error> {

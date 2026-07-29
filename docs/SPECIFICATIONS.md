@@ -6,8 +6,8 @@ extension register: a newer-looking PDF does not by itself supersede later entri
 that register.
 
 Specification PDFs were downloaded only into the ignored `local/` directory for this
-research pass. They are not part of the repository. Access date for every source below
-is 2026-07-28.
+research pass. They are not part of the repository. Unless stated otherwise, the
+access date for each source below is 2026-07-28.
 
 ## FinTS normative documents
 
@@ -25,11 +25,12 @@ is 2026-07-28.
   G (data dictionary, including HNHBK, HNHBS, HKIDN, HKVVB, HKSYN/HISYN,
   HKEND, HIRMG/HIRMS, HIBPA, HIUPA, and HIUPD); H.1 (wire syntax); I.2
   (message order); I.3 (character-set overview); I.4 (transport-specific rules).
-- **Gate 3 sections:** C.3.2.2-C.3.2.3 (complete replacement when BPD/UPD
-  versions change); D.1-D.3 and the HIBPA/HIKOM Data Dictionary entries
-  (institute identity and communication parameters); E.3 and the HIUPD 6 Data
-  Dictionary entry (account-bound and non-account-bound UPD records, including
-  the published 35-character IBAN correction).
+- **Gate 3 sections:** C.3.2.2-C.3.2.3 (retain same-version BPD/UPD and
+  completely replace them when their versions change); D.1-D.3 and the
+  HIBPA/HIKOM Data Dictionary entries (institute identity and communication
+  parameters); E.3 and the HIUPD 6 Data Dictionary entry (account-bound and
+  non-account-bound UPD records, including the published 35-character IBAN
+  correction).
 - **Gate 4 sections:** B.6 (opaque pagination); E.3 and the HIUPD 6 Data
   Dictionary entries for account type and account/depot number. Account types
   30-39 identify securities depots and 50-59 identify credit-card accounts;
@@ -53,6 +54,39 @@ is 2026-07-28.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
+
+### HBCI — Homebanking-Computer-Interface, Schnittstellenspezifikation, Teil A: Grundsätzliche Festlegungen
+
+- **Protocol/release:** Version 2.2, Final Version, 2000-05-10.
+- **Official source:** [official FinTS specification
+  archive](https://www.fints.org/de/spezifikation/archiv), archive filename
+  `HBCI_V2.x_FV.zip`, contained research filename `HBCI22 Final.pdf`.
+- **Research SHA-256:** PDF
+  `df1e375d54b1c1a1530787bb9d3f62bea88634aceec656b4b216300f725357e8`;
+  containing archive
+  `4adb3b0b5778aa82cb5e36ef1163e5a08cadca4defb5a1e594aa9c4517611ebc`.
+- **Balance-version-5 sections:** II.5.3.1 (`btg` amount), II.5.3.3 (`ktv`
+  national account), II.5.3.4 (`sdo` signed balance and transfer timestamp),
+  II.8.4 (response version matches request version), IV.6 (operation
+  advertisement by parameter-segment version), and VII.2.2
+  (HKSAL/HISAL/HISALS version 5 request, response, optional fields, and
+  parameter segment without operation-specific parameters).
+- **Retained-BPD sections:** III.3.2.2 (BPD are returned when the supplied
+  version differs and, when returned, must be complete) and IV.1-IV.2
+  (changed BPD become immediately active and receive a new BPD version).
+- **Apply alongside:** FinTS 3.0 Formals C.3.2.2 and D.2, correction P26,
+  FinTS 3.0 PIN/TAN including T31, and the current Messages definitions for
+  the later HKSAL/HISAL/HISALS versions 6-8. The current change register's
+  G102 adds version 8 without changing the archived version-5 contract.
+- **Authorizes:** advertised HKSAL/HISAL/HISALS 5 using its exact national
+  account request and legacy response layout, mapped into the existing typed
+  balance without fabricating absent optional values. It also authorizes
+  retaining complete same-version BPD and atomically replacing all retained
+  capabilities only when a changed complete BPD version is supplied.
+- **Access/redistribution:** accessed 2026-07-29. The PDF grants implementation
+  use and permits only free, unchanged redistribution with all notices and
+  conditions retained. No archive or PDF is committed; owner approval remains
+  required before redistribution.
 
 ### ZKA — HBCI 2.2 Erweiterung PIN/TAN
 
@@ -205,12 +239,13 @@ is 2026-07-28.
   versions 6-8 and their typed account, amount, currency, sign, date/time, and
   optional-value semantics. The HISALS segment-header version is the generic
   advertised-version fact used for negotiation, including when the version is
-  outside the implemented 6-8 range. It also authorizes Gate 2 HKCAZ 1 or
+  outside the 6-8 range defined by this document; the archived HBCI source
+  above separately authorizes version 5. It also authorizes Gate 2 HKCAZ 1 or
   bounded HKKAZ 7/6 booked transaction retrieval, including the
-  operation-specific continuation field. For Gate 3 it authorizes deterministic
-  selection from the advertised operation/version combinations, never
-  institution-name dispatch. For Gate 4 it authorizes only advertised and
-  UPD-authorized HKWPD 6 and HKWDU 5 using the specified MT535 and MT536
+  operation-specific continuation field. For Gate 3 it authorizes
+  deterministic selection from the advertised operation/version combinations,
+  never institution-name dispatch. For Gate 4 it authorizes only advertised
+  and UPD-authorized HKWPD 6 and HKWDU 5 using the specified MT535 and MT536
   response formats.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.

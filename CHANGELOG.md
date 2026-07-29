@@ -1,7 +1,11 @@
 # Changelog
 
+- **2026-07-29** — Added archive-sourced HKSAL/HISAL/HISALS 5 negotiation, national request encoding, and typed legacy balance parsing after owner-run capability evidence.
+  Same-version HIBPA responses now preserve all retained BPD capabilities; changed complete BPD still replace them atomically.
+  Added independent version-5 wire, sparse/complete/malformed, TAN, identity, serialization, replacement, and redaction regressions.
+
 - **2026-07-29** — Preserved every advertised HISALS version as a redacted generic capability fact after an owner-run balance limitation.
-  HKSAL negotiation remains restricted to versions 6-8; unsupported-only advertisements still return the typed `BalanceVersion` limitation.
+  HKSAL negotiation remained restricted to versions 6-8 at that revision; unsupported-only advertisements returned the typed `BalanceVersion` limitation.
   Added fictional mixed-version, BPD-replacement, limitation, redaction, and reusable-state migration regressions.
 
 - **2026-07-29** — Accepted HNSHK security timestamps with omitted optional date/time after the next owner-run synchronization reached dialog termination.

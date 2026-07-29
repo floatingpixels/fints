@@ -481,9 +481,14 @@ impl ReusableState {
         &self.advertised_balance_versions
     }
 
-    /// Whether an advertised HISALS version is supported for HKSAL requests.
+    /// Whether a HISALS version is implemented for HKSAL requests.
+    ///
+    /// State written before advertised-version facts existed falls back to its
+    /// retained supported-version list.
     pub fn supports_balance_version(&self, version: u16) -> bool {
-        self.balance_versions.contains(&version)
+        (self.advertised_balance_versions.contains(&version) && (5..=8).contains(&version))
+            || (self.advertised_balance_versions.is_empty()
+                && self.balance_versions.contains(&version))
     }
 
     pub fn accounts(&self) -> &[Account] {
@@ -1370,6 +1375,7 @@ mod tests {
         self, IntoDeserializer, Visitor,
         value::{Error as ValueError, MapDeserializer, SeqDeserializer},
     };
+    use serde::ser::{self, Impossible, SerializeSeq, SerializeStruct};
 
     use super::*;
 
@@ -1377,6 +1383,7 @@ mod tests {
         U16(u16),
         None,
         EmptySequence,
+        Sequence(Vec<PreviousValue>),
     }
 
     impl<'de> IntoDeserializer<'de, ValueError> for PreviousValue {
@@ -1403,6 +1410,9 @@ mod tests {
                     >(
                     )))
                 }
+                Self::Sequence(values) => {
+                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(values.into_iter()))
+                }
             }
         }
 
@@ -1426,6 +1436,9 @@ mod tests {
                         PreviousValue,
                     >(
                     )))
+                }
+                Self::Sequence(values) => {
+                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(values.into_iter()))
                 }
                 _ => Err(de::Error::custom("expected previous-state sequence")),
             }
@@ -1460,5 +1473,446 @@ mod tests {
         assert_eq!(state.bpd_version(), 57);
         assert_eq!(state.upd_version(), 1);
         assert!(state.advertised_balance_versions().is_empty());
+    }
+
+    #[derive(Debug)]
+    struct ProjectionError;
+
+    impl std::fmt::Display for ProjectionError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("unsupported test projection")
+        }
+    }
+
+    impl std::error::Error for ProjectionError {}
+
+    impl ser::Error for ProjectionError {
+        fn custom<T>(_message: T) -> Self
+        where
+            T: std::fmt::Display,
+        {
+            Self
+        }
+    }
+
+    struct ProjectionSerializer;
+
+    impl ser::Serializer for ProjectionSerializer {
+        type Ok = Vec<(String, PreviousValue)>;
+        type Error = ProjectionError;
+        type SerializeSeq = Impossible<Self::Ok, Self::Error>;
+        type SerializeTuple = Impossible<Self::Ok, Self::Error>;
+        type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+        type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+        type SerializeMap = Impossible<Self::Ok, Self::Error>;
+        type SerializeStruct = ProjectionFields;
+        type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+
+        fn serialize_struct(
+            self,
+            _name: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeStruct, Self::Error> {
+            Ok(ProjectionFields { fields: Vec::new() })
+        }
+
+        fn serialize_bool(self, _value: bool) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i8(self, _value: i8) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i16(self, _value: i16) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i32(self, _value: i32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i64(self, _value: i64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u8(self, _value: u8) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u16(self, _value: u16) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u32(self, _value: u32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u64(self, _value: u64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_f32(self, _value: f32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_f64(self, _value: f64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_char(self, _value: char) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_str(self, _value: &str) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_bytes(self, _value: &[u8]) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_some<T>(self, _value: &T) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+        ) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_newtype_struct<T>(
+            self,
+            _name: &'static str,
+            _value: &T,
+        ) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_newtype_variant<T>(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _value: &T,
+        ) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_seq(self, _length: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple(self, _length: usize) -> Result<Self::SerializeTuple, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple_struct(
+            self,
+            _name: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_map(self, _length: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_struct_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeStructVariant, Self::Error> {
+            Err(ProjectionError)
+        }
+    }
+
+    struct ProjectionFields {
+        fields: Vec<(String, PreviousValue)>,
+    }
+
+    impl SerializeStruct for ProjectionFields {
+        type Ok = Vec<(String, PreviousValue)>;
+        type Error = ProjectionError;
+
+        fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            if matches!(
+                key,
+                "bpd_version" | "upd_version" | "balance_versions" | "advertised_balance_versions"
+            ) {
+                self.fields
+                    .push((key.to_owned(), value.serialize(PreviousValueSerializer)?));
+            }
+            Ok(())
+        }
+
+        fn end(self) -> Result<Self::Ok, Self::Error> {
+            Ok(self.fields)
+        }
+    }
+
+    struct PreviousValueSerializer;
+
+    impl ser::Serializer for PreviousValueSerializer {
+        type Ok = PreviousValue;
+        type Error = ProjectionError;
+        type SerializeSeq = PreviousSequence;
+        type SerializeTuple = Impossible<Self::Ok, Self::Error>;
+        type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+        type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+        type SerializeMap = Impossible<Self::Ok, Self::Error>;
+        type SerializeStruct = Impossible<Self::Ok, Self::Error>;
+        type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+
+        fn serialize_u16(self, value: u16) -> Result<Self::Ok, Self::Error> {
+            Ok(PreviousValue::U16(value))
+        }
+
+        fn serialize_seq(self, length: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+            Ok(PreviousSequence {
+                values: Vec::with_capacity(length.unwrap_or(0)),
+            })
+        }
+
+        fn serialize_bool(self, _value: bool) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i8(self, _value: i8) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i16(self, _value: i16) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i32(self, _value: i32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_i64(self, _value: i64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u8(self, _value: u8) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u32(self, _value: u32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_u64(self, _value: u64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_f32(self, _value: f32) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_f64(self, _value: f64) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_char(self, _value: char) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_str(self, _value: &str) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_bytes(self, _value: &[u8]) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_some<T>(self, _value: &T) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_unit_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+        ) -> Result<Self::Ok, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_newtype_struct<T>(
+            self,
+            _name: &'static str,
+            _value: &T,
+        ) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_newtype_variant<T>(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _value: &T,
+        ) -> Result<Self::Ok, Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple(self, _length: usize) -> Result<Self::SerializeTuple, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple_struct(
+            self,
+            _name: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_tuple_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_map(self, _length: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_struct(
+            self,
+            _name: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeStruct, Self::Error> {
+            Err(ProjectionError)
+        }
+
+        fn serialize_struct_variant(
+            self,
+            _name: &'static str,
+            _variant_index: u32,
+            _variant: &'static str,
+            _length: usize,
+        ) -> Result<Self::SerializeStructVariant, Self::Error> {
+            Err(ProjectionError)
+        }
+    }
+
+    struct PreviousSequence {
+        values: Vec<PreviousValue>,
+    }
+
+    impl SerializeSeq for PreviousSequence {
+        type Ok = PreviousValue;
+        type Error = ProjectionError;
+
+        fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+        where
+            T: ?Sized + Serialize,
+        {
+            self.values.push(value.serialize(PreviousValueSerializer)?);
+            Ok(())
+        }
+
+        fn end(self) -> Result<Self::Ok, Self::Error> {
+            Ok(PreviousValue::Sequence(self.values))
+        }
+    }
+
+    // Serde is caller-format-neutral, so this focused test format projects the
+    // persisted version fields through the actual derived Serialize/Deserialize
+    // implementations without adding a direct dev dependency.
+    #[test]
+    fn advertised_balance_five_survives_serde_round_trip() {
+        let mut original = ReusableState::new();
+        original.bpd_version = 57;
+        original.upd_version = 1;
+        original.advertised_balance_versions = vec![5];
+
+        let projected = original.serialize(ProjectionSerializer).unwrap();
+        let mut fields = vec![
+            ("system_id".to_owned(), PreviousValue::None),
+            ("balance_requires_tan".to_owned(), PreviousValue::None),
+            ("tan_methods".to_owned(), PreviousValue::EmptySequence),
+            ("accounts".to_owned(), PreviousValue::EmptySequence),
+            ("selected_tan_method".to_owned(), PreviousValue::None),
+            ("selected_tan_medium".to_owned(), PreviousValue::None),
+        ];
+        fields.extend(projected);
+        let restored =
+            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
+                .unwrap();
+
+        assert_eq!(restored.bpd_version(), 57);
+        assert_eq!(restored.upd_version(), 1);
+        assert!(restored.balance_versions.is_empty());
+        assert_eq!(restored.advertised_balance_versions(), [5]);
+        assert!(restored.supports_balance_version(5));
     }
 }

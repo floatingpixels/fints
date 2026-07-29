@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{CreditDebit, TanProcess};
+use crate::model::{CamtCapability, CreditCardCapability, CreditDebit, TanMethod, TanProcess};
 use crate::wire::{Element, Value};
 use chrono::{NaiveDate, NaiveTime};
 
@@ -862,6 +862,117 @@ fn permitted_unsecured_response_still_parses_without_security_controls() {
     assert!(Response::parse(&fixture).is_ok());
 }
 
+// HBCI 2.2 VII.2.2 and II.5.3.1/3/4: HISAL 5 uses the national
+// account group, legacy balance groups, separate optional booking date/time,
+// and no overdraft field. The complete fixture is independently assembled.
+#[test]
+fn hisal_five_complete_and_sparse_fixtures_preserve_only_supplied_values() {
+    let complete = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            concat!(
+                "HISAL:3:5:4+654321:EUR:280:12345678",
+                "+Fictional legacy checking+EUR",
+                "+C:1234,56:EUR:20260729:101112",
+                "+D:45,6:EUR:20260729",
+                "+5000,:EUR+4500,:EUR+500,:EUR",
+                "+20260728+131415+20260801"
+            )
+            .into(),
+        ],
+        "dialog1",
+        2,
+    );
+    let balance = Response::parse(&complete)
+        .unwrap()
+        .balance()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(balance.account().account_number(), Some("654321"));
+    assert_eq!(balance.account().subaccount(), Some("EUR"));
+    assert_eq!(balance.product_name(), "Fictional legacy checking");
+    assert_eq!(balance.account_currency(), "EUR");
+    assert_eq!(balance.booked().direction(), CreditDebit::Credit);
+    assert_eq!(balance.booked().amount().coefficient(), 123_456);
+    assert_eq!(
+        balance.booked().time(),
+        Some(NaiveTime::from_hms_opt(10, 11, 12).unwrap())
+    );
+    assert_eq!(balance.pending().unwrap().direction(), CreditDebit::Debit);
+    assert_eq!(balance.credit_line().unwrap().coefficient(), 5_000);
+    assert_eq!(balance.available().unwrap().coefficient(), 4_500);
+    assert_eq!(balance.already_drawn().unwrap().coefficient(), 500);
+    assert!(balance.overdraft().is_none());
+    assert_eq!(
+        balance.booking_time().unwrap().date(),
+        NaiveDate::from_ymd_opt(2026, 7, 28).unwrap()
+    );
+    assert_eq!(
+        balance.booking_time().unwrap().time(),
+        Some(NaiveTime::from_hms_opt(13, 14, 15).unwrap())
+    );
+    assert_eq!(balance.due_date(), NaiveDate::from_ymd_opt(2026, 8, 1));
+    assert!(balance.garnishable_after_month_end().is_none());
+
+    let sparse = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            concat!(
+                "HISAL:3:5:4+654321::280:12345678",
+                "+Fictional sparse account+EUR+D:7,:EUR:20260729"
+            )
+            .into(),
+        ],
+        "dialog2",
+        2,
+    );
+    let balance = Response::parse(&sparse)
+        .unwrap()
+        .balance()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(balance.booked().direction(), CreditDebit::Debit);
+    assert!(balance.booked().time().is_none());
+    assert!(balance.pending().is_none());
+    assert!(balance.credit_line().is_none());
+    assert!(balance.available().is_none());
+    assert!(balance.already_drawn().is_none());
+    assert!(balance.booking_time().is_none());
+    assert!(balance.due_date().is_none());
+}
+
+// HBCI 2.2 VII.2.2 and II.5.3.1/3/4: positional national identity,
+// amount, balance date/time, and optional legacy groups remain strict.
+#[test]
+fn malformed_hisal_five_fields_fail_with_redacted_typed_errors() {
+    let malformed = [
+        "HISAL:3:5:4+PRIVATE654321::280+Fictional+EUR+C:1,:EUR:20260729",
+        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729:101112:EXTRA",
+        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260230",
+        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++1,",
+        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++++++131415",
+        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729+++++20260728+246000",
+    ];
+
+    for segment in malformed {
+        let fixture = message(
+            &["HIRMG:2:2+0010::accepted".into(), segment.into()],
+            "dialog1",
+            2,
+        );
+        let error = match Response::parse(&fixture).unwrap().balance() {
+            Ok(_) => panic!("malformed HISAL 5 fixture parsed"),
+            Err(error) => error,
+        };
+        let redacted = format!("{error:?} {error}");
+        assert!(!redacted.contains("PRIVATE654321"));
+        assert!(!redacted.contains("20260230"));
+        assert!(!redacted.contains("246000"));
+    }
+}
+
 // FinTS Messages 2022-04-15, C.2.1.2.3 and B.1/B.4/B.6.
 #[test]
 fn hisal_eight_preserves_explicit_balance_metadata() {
@@ -1119,16 +1230,17 @@ fn gate3_finanz_informatik_profile_deduplicates_negotiated_versions() {
     assert_eq!(response.responses()[1].code(), 3076);
 }
 
-// FinTS Formals D and Messages 2022 C.2.1.2: every HISALS header version is
+// HBCI 2.2 VII.2.2, FinTS Formals D, and Messages 2022 C.2.1.2:
+// every HISALS header version is
 // a safe generic capability fact, while request negotiation remains limited to
-// the independently implemented HKSAL/HISAL versions 6-8.
+// the independently implemented HKSAL/HISAL versions 5-8.
 #[test]
 fn balance_advertisements_preserve_unsupported_versions_without_selecting_them() {
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+31+280:12345678+Fictional Bank+9+1+300".into(),
-            "HISALS:4:5:3+fictional unsupported parameters".into(),
+            "HISALS:4:4:3+fictional unsupported parameters".into(),
             "HISALS:5:8:3+1+1+0+N".into(),
             "HISALS:6:9:3+fictional unsupported parameters".into(),
             "HISALS:7:6:3+1+1+0+N".into(),
@@ -1147,7 +1259,7 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
         .apply_parameters(&mut state)
         .unwrap();
 
-    assert_eq!(state.advertised_balance_versions(), [9, 8, 6, 5]);
+    assert_eq!(state.advertised_balance_versions(), [9, 8, 6, 4]);
     assert_eq!(state.balance_versions, [8, 6]);
     assert!(state.supports_balance_version(8));
     assert!(!state.supports_balance_version(9));
@@ -1156,7 +1268,7 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+32+280:12345678+Fictional Bank+9+1+300".into(),
-            "HISALS:4:5:3+fictional unsupported parameters".into(),
+            "HISALS:4:4:3+fictional unsupported parameters".into(),
         ],
         "dialog2",
         1,
@@ -1165,8 +1277,209 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert_eq!(state.advertised_balance_versions(), [4]);
     assert!(state.balance_versions.is_empty());
+}
+
+// HBCI 2.2 VII.2.2 defines HISALS 5 as a parameter segment containing only
+// maximum orders and minimum signatures. FinTS Formals D makes its header
+// version the advertised operation version.
+#[test]
+fn hisals_five_is_validated_and_selected_deterministically() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+1+1".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert_eq!(state.balance_versions, [5]);
+    assert!(state.supports_balance_version(5));
+
+    let mixed = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+1+1".into(),
+            "HISALS:5:8:3+1+1+0+N".into(),
+            "HISALS:6:6:3+1+1+0+N".into(),
+        ],
+        "dialog2",
+        1,
+    );
+    Response::parse(&mixed)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.advertised_balance_versions(), [8, 6, 5]);
+    assert_eq!(state.balance_versions, [8, 6, 5]);
+
+    for parameters in ["0+1", "1+4", "1+1+0"] {
+        let malformed = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                "HIBPA:3:3:3+59+280:12345678+Fictional Bank+9+1+300".into(),
+                format!("HISALS:4:5:3+{parameters}"),
+            ],
+            "dialog3",
+            1,
+        );
+        assert!(
+            Response::parse(&malformed)
+                .unwrap()
+                .apply_parameters(&mut state)
+                .is_err()
+        );
+        assert_eq!(state.bpd_version(), 58);
+        assert_eq!(state.balance_versions, [8, 6, 5]);
+    }
+}
+
+// FinTS Formals C.3.2.2 and correction P26: changed BPD receive a new,
+// higher version and a transmitted BPD set is complete. A same-version HIBPA
+// without repeated business parameter segments must preserve every retained
+// capability; a malformed new set must not partially mutate it.
+#[test]
+fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
+    let mut state = ReusableState::new();
+    state.bpd_version = 57;
+    state.balance_versions = vec![5];
+    state.advertised_balance_versions = vec![5];
+    state.balance_capability_advertised = true;
+    state.balance_requires_tan = Some(false);
+    state.transaction_capability_advertised = true;
+    state.camt_capability = Some(CamtCapability {
+        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
+    });
+    state.legacy_transaction_versions = vec![7];
+    state.camt_requires_tan = Some(false);
+    state.legacy_transactions_require_tan = Some(true);
+    state.depot_positions_advertised = true;
+    state.depot_positions_supported = true;
+    state.depot_positions_requires_tan = Some(false);
+    state.securities_transactions_advertised = true;
+    state.securities_transactions_supported = true;
+    state.securities_transactions_requires_tan = Some(false);
+    state.credit_card_transactions_advertised = true;
+    state.credit_card_transactions = Some(CreditCardCapability {
+        account_required: true,
+        date_range_allowed: true,
+        entry_count_allowed: true,
+    });
+    state.credit_card_transactions_requires_tan = Some(false);
+    state.credit_card_balance_advertised = true;
+    state.credit_card_balance_account_required = Some(true);
+    state.credit_card_balance_requires_tan = Some(false);
+    state.tan_methods.push(TanMethod {
+        security_function: "942".to_owned(),
+        hktan_version: 6,
+        process: TanProcess::ProcessVariantTwo,
+        technical_id: "fictional-method".to_owned(),
+        display_name: "Fictional approval".to_owned(),
+        dk_method: None,
+        max_tan_length: Some(6),
+        tan_format: Some("1".to_owned()),
+        medium_name_required: false,
+        hhd_response_required: false,
+        max_decoupled_polls: None,
+        first_poll_delay_seconds: None,
+        next_poll_delay_seconds: None,
+        manual_polling_allowed: false,
+        automatic_polling_allowed: false,
+    });
+
+    let unchanged = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    Response::parse(&unchanged)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.balance_versions, [5]);
+    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert_eq!(
+        state.camt_capability.as_ref().unwrap().descriptor,
+        "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
+    );
+    assert_eq!(state.legacy_transaction_versions, [7]);
+    assert!(state.depot_positions_supported);
+    assert!(state.securities_transactions_supported);
+    assert!(state.credit_card_transactions.is_some());
+    assert_eq!(state.credit_card_balance_account_required, Some(true));
+    assert_eq!(state.tan_methods().len(), 1);
+
+    let stale = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+56+280:12345678+Fictional Bank+9+1+300".into(),
+        ],
+        "dialog2",
+        1,
+    );
+    assert!(
+        Response::parse(&stale)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .is_err()
+    );
+    assert_eq!(state.bpd_version(), 57);
+
+    let malformed_new = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+0+1".into(),
+        ],
+        "dialog3",
+        1,
+    );
+    assert!(
+        Response::parse(&malformed_new)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .is_err()
+    );
+    assert_eq!(state.bpd_version(), 57);
+    assert!(state.depot_positions_supported);
+    assert_eq!(state.tan_methods().len(), 1);
+
+    let complete_new = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+1+1".into(),
+            "HIPINS:5:1:3+1+1+0+4:6:6:::HKSAL:N".into(),
+        ],
+        "dialog4",
+        1,
+    );
+    Response::parse(&complete_new)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.bpd_version(), 58);
+    assert_eq!(state.balance_versions, [5]);
+    assert_eq!(state.balance_requires_tan, Some(false));
+    assert!(!state.transaction_capability_advertised);
+    assert!(!state.depot_positions_advertised);
+    assert!(!state.securities_transactions_advertised);
+    assert!(!state.credit_card_transactions_advertised);
+    assert!(!state.credit_card_balance_advertised);
+    assert!(state.tan_methods().is_empty());
 }
 
 // Gate 3 fictional independent-institution legacy profile. FinTS Messages

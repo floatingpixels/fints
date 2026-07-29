@@ -137,10 +137,10 @@ pub(crate) fn balance_request(
     version: u16,
     tan: Option<(&TanMethod, Option<&str>)>,
 ) -> Result<Vec<u8>, Error> {
-    if !(6..=8).contains(&version) {
+    if !(5..=8).contains(&version) {
         return Err(Limitation::BalanceVersion.into());
     }
-    let account_element = if version == 6 {
+    let account_element = if version <= 6 {
         national_account(account, Limitation::BalanceVersion)?
     } else {
         international_account(account, Limitation::BalanceVersion)?

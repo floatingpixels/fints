@@ -176,6 +176,29 @@ fn malformed_reusable_state_is_rejected_before_transport_use() {
     assert!(matches!(error, Error::Input(InputError::ReusableState)));
 }
 
+// Gate 4.6 persisted version 5 as an advertised generic fact before it became
+// implemented. Reconstruct supported versions from that retained fact when the
+// state enters the newer engine.
+#[test]
+fn gate46_state_reclassifies_advertised_balance_five_as_supported() {
+    let mut state = ReusableState::new();
+    state.bpd_version = 57;
+    state.advertised_balance_versions = vec![5];
+    assert!(state.balance_versions.is_empty());
+    assert!(state.supports_balance_version(5));
+
+    let engine = Engine::new(
+        InstituteId::new("280", "12345678").unwrap(),
+        ProductIdentity::new("PROD123", "1.0").unwrap(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        state,
+    )
+    .unwrap();
+
+    assert_eq!(engine.state.balance_versions, [5]);
+    assert_eq!(engine.state().advertised_balance_versions(), [5]);
+}
+
 // FinTS 3.0 Formals 2017-10-06, C.5.1 and C.5.3.
 #[test]
 fn anonymous_parameter_dialog_uses_unsecured_termination_fixture() {
@@ -851,7 +874,7 @@ fn balance_request_requires_advertised_version_and_account_permission() {
 // into the unsupported-version limitation.
 #[test]
 fn supported_balance_advertisements_select_each_implemented_version() {
-    for version in 6..=8 {
+    for version in 5..=8 {
         let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
         engine.state.balance_versions = vec![version];
         engine.state.advertised_balance_versions = vec![version];
@@ -890,6 +913,106 @@ fn supported_balance_advertisements_select_each_implemented_version() {
     }
 }
 
+// HBCI 2.2 VII.2.2 supplies the HKSAL/HISAL 5 business layout; FinTS
+// PIN/TAN T31 and B.8.1 keep TAN applicability advertisement-derived.
+#[test]
+fn legacy_balance_five_uses_existing_tan_paths_and_strict_account_binding() {
+    for requires_tan in [false, true] {
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        engine.state.advertised_balance_versions = vec![5];
+        engine.state.balance_versions = vec![5];
+        engine.state.balance_capability_advertised = true;
+        engine.state.balance_requires_tan = Some(requires_tan);
+        engine.state.accounts.push(transaction_account(
+            "DE40123456780000123456",
+            "123456",
+            &[("HKSAL", 1)],
+        ));
+        let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine.accept_initialization(&initialized, now()).unwrap(),
+            InitializationResult::Connected
+        ));
+
+        let request = engine
+            .balance_request(0, now().date(), now().time())
+            .unwrap();
+        let payload = crate::wire::Message::parse(&request)
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        assert_eq!(
+            payload
+                .iter()
+                .find(|segment| segment.header().unwrap().code == b"HKSAL")
+                .unwrap()
+                .header()
+                .unwrap()
+                .version,
+            5
+        );
+        assert_eq!(
+            payload
+                .iter()
+                .any(|segment| segment.header().unwrap().code == b"HKTAN"),
+            requires_tan
+        );
+
+        if !requires_tan {
+            let complete = response(
+                &[
+                    "HIRMG:2:2+0010::accepted",
+                    concat!(
+                        "HISAL:3:5:4+123456::280:12345678",
+                        "+Fictional checking+EUR+C:10,:EUR:20260729"
+                    ),
+                ],
+                "dialog1",
+                2,
+            );
+            assert!(matches!(
+                engine.accept_balance(&complete, now()).unwrap(),
+                BalanceResult::Complete(_)
+            ));
+        }
+    }
+
+    let mut mismatched = engine_with_method(TanProcess::ProcessVariantTwo);
+    mismatched.state.advertised_balance_versions = vec![5];
+    mismatched.state.balance_versions = vec![5];
+    mismatched.state.balance_capability_advertised = true;
+    mismatched.state.balance_requires_tan = Some(false);
+    mismatched.state.accounts.push(transaction_account(
+        "DE40123456780000123456",
+        "123456",
+        &[("HKSAL", 1)],
+    ));
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog2", 1);
+    mismatched
+        .accept_initialization(&initialized, now())
+        .unwrap();
+    mismatched
+        .balance_request(0, now().date(), now().time())
+        .unwrap();
+    let wrong_account = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            concat!(
+                "HISAL:3:5:4+123456::280:87654321",
+                "+Fictional checking+EUR+C:10,:EUR:20260729"
+            ),
+        ],
+        "dialog2",
+        2,
+    );
+    let error = match mismatched.accept_balance(&wrong_account, now()) {
+        Err(error) => error,
+        Ok(_) => panic!("mismatched HISAL 5 account was accepted"),
+    };
+    assert!(matches!(error, Error::InconsistentState));
+    assert!(!format!("{error:?} {error}").contains("87654321"));
+}
+
 // FinTS Formals 2017-10-06, D.2 and HIBPA 3: the BPD institute identity
 // identifies the responding institute. Parameters from a wrong endpoint must not
 // replace reusable state for the configured institute.
@@ -923,7 +1046,7 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
     let mut unsupported = engine_with_method(TanProcess::ProcessVariantTwo);
     unsupported.state.accounts.push(account.clone());
     unsupported.state.balance_capability_advertised = true;
-    unsupported.state.advertised_balance_versions = vec![5];
+    unsupported.state.advertised_balance_versions = vec![4];
     unsupported.state.balance_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
     assert!(matches!(
@@ -939,9 +1062,9 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
         &error,
         Error::Unsupported(Limitation::BalanceVersion)
     ));
-    assert_eq!(unsupported.state().advertised_balance_versions(), [5]);
-    assert!(!unsupported.state().supports_balance_version(5));
-    assert!(!error.to_string().contains('5'));
+    assert_eq!(unsupported.state().advertised_balance_versions(), [4]);
+    assert!(!unsupported.state().supports_balance_version(4));
+    assert!(!error.to_string().contains('4'));
 
     let mut absent = engine_with_method(TanProcess::ProcessVariantTwo);
     absent.state.accounts.push(account);

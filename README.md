@@ -76,8 +76,10 @@ messages are not retained.
   limitations.
 - BPD/UPD, system-ID synchronization, TAN-method selection, and the special
   `HKTAB`/`HITAB` 5 medium-discovery initialization.
-- Advertised `HKSAL`/`HISAL` versions 6-8 for one UPD-authorized cash account.
-  The client obeys `HIPINS` instead of assuming that balance retrieval is TAN-free.
+- Advertised `HKSAL`/`HISAL` versions 5-8 for one UPD-authorized cash account.
+  Version 5 uses its archived HBCI-defined national-account and legacy response
+  layout. The client obeys `HIPINS` instead of assuming that balance retrieval is
+  TAN-free.
 
 Missing capabilities, unsupported parameter combinations, and multiple required
 signers return `Limitation`; the client never invents account or balance data.
@@ -133,6 +135,8 @@ log them.
 - BPD capabilities are replaced as a complete set and supported versions are
   selected deterministically. An advertised but unsupported balance version differs
   from an operation that was never advertised.
+- A same-version HIBPA does not erase retained capabilities when business
+  parameter segments are omitted; a changed BPD version replaces the complete set.
 - `advertised_balance_versions()` exposes only the generic HISALS version numbers;
   pair each with `supports_balance_version()` for redacted compatibility diagnostics.
 - Non-account-bound HIUPD records are accepted without fabricating accounts, and the
