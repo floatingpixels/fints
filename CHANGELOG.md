@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Added typed anonymous-BPD recovery when terminated function-999 discovery returns valid 3920 identifiers without usable HITANS descriptions.
+  Unpublished 99xx companions remain uninterpreted and contextual; every published credential, security, lock, registration, and protocol error remains fatal.
+  Added fictional refresh, method-intersection, dialog-lifecycle, malformed-response, redaction, and process-memory regressions.
+
 - **2026-07-29** — Added archive-sourced HKSAL/HISAL/HISALS 5 negotiation, national request encoding, and typed legacy balance parsing after owner-run capability evidence.
   Same-version HIBPA responses now preserve all retained BPD capabilities; changed complete BPD still replace them atomically.
   Added independent version-5 wire, sparse/complete/malformed, TAN, identity, serialization, replacement, and redaction regressions.

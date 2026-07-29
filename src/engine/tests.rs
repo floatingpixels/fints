@@ -224,6 +224,50 @@ fn anonymous_parameter_dialog_uses_unsecured_termination_fixture() {
     assert_eq!(engine.state().bpd_version(), 7);
 }
 
+// PIN/TAN correction T8 and Formals C.3.2.2/P26: an explicit anonymous
+// refresh sends client BPD version zero and atomically applies the complete
+// response even when its institute-assigned version equals retained state.
+#[test]
+fn anonymous_refresh_replaces_same_version_incomplete_bpd() {
+    let mut state = ReusableState::new();
+    state.bpd_version = 57;
+    let mut engine = Engine::new(
+        InstituteId::new("280", "12345678").unwrap(),
+        ProductIdentity::new("PROD123", "1.0").unwrap(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        state,
+    )
+    .unwrap();
+    let request = engine.anonymous_initialization_request().unwrap();
+    let payload = crate::wire::Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let hkvvb = payload
+        .iter()
+        .find(|segment| segment.header().unwrap().code == b"HKVVB")
+        .unwrap();
+    assert_eq!(hkvvb.elements()[1].components()[0].as_text().unwrap(), "0");
+
+    let fixture = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300",
+            concat!(
+                "HITANS:4:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1"
+            ),
+        ],
+        "anonymous-refresh",
+        1,
+    );
+    engine.accept_anonymous_initialization(&fixture).unwrap();
+
+    assert_eq!(engine.state().bpd_version(), 57);
+    assert_eq!(engine.state().tan_methods().len(), 1);
+    assert_eq!(engine.state().tan_methods()[0].security_function(), "942");
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1 and response code 3920.
 #[test]
 fn personalized_method_discovery_retains_only_safe_method_identifiers() {
@@ -344,6 +388,149 @@ fn bank_terminated_method_discovery_applies_bpd_without_sending_hkend() {
     );
 }
 
+// PIN/TAN 2020 B.4.3.1 and B.6.1 establish function-999/3920 discovery;
+// correction T8 requires an anonymous BPD refresh when none of the returned
+// identifiers has usable method parameters. Rückmeldungscodes 2026 A says
+// unpublished 99xx values have no uniform standalone meaning.
+#[test]
+fn unpublished_99xx_discovery_refreshes_bpd_before_method_selection() {
+    let mut engine = Engine::new(
+        InstituteId::new("280", "12345678").unwrap(),
+        ProductIdentity::new("PROD123", "1.0").unwrap(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        ReusableState::new(),
+    )
+    .unwrap();
+    let request = engine
+        .initialization_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert_eq!(
+        payload[0].elements()[2].components()[0].as_text().unwrap(),
+        "999"
+    );
+
+    let discovery = response(
+        &[
+            "HIRMG:2:2+9050::fictional summary+9800::fictional termination",
+            "HIRMS:3:2:4+9952::fictional unpublished companion+3920::methods:942:943",
+        ],
+        "terminated-discovery",
+        1,
+    );
+    assert!(matches!(
+        engine.accept_initialization(&discovery, now()).unwrap(),
+        InitializationResult::RefreshParameters
+    ));
+    assert_eq!(engine.state().bpd_version(), 0);
+    assert_eq!(engine.state().upd_version(), 0);
+    assert!(engine.state().tan_methods().is_empty());
+    assert_eq!(engine.allowed_tan_methods(), ["942", "943"]);
+    assert!(matches!(
+        engine.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+    assert_eq!(
+        engine
+            .last_responses()
+            .iter()
+            .map(|response| (response.code(), response.class(), response.segment_number()))
+            .collect::<Vec<_>>(),
+        vec![
+            (9050, ResponseClass::Error, None),
+            (9800, ResponseClass::Error, None),
+            (9952, ResponseClass::Error, Some(4)),
+            (3920, ResponseClass::Warning, Some(4)),
+        ]
+    );
+    let rendered = format!("{:?}", engine.last_responses());
+    assert!(!rendered.contains("fictional summary"));
+    assert!(!rendered.contains("fictional unpublished companion"));
+
+    // Allowed identifiers are live response state, never ReusableState.
+    let restarted = Engine::new(
+        InstituteId::new("280", "12345678").unwrap(),
+        ProductIdentity::new("PROD123", "1.0").unwrap(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        engine.state().clone(),
+    )
+    .unwrap();
+    assert!(restarted.allowed_tan_methods().is_empty());
+
+    engine.anonymous_initialization_request().unwrap();
+    let refreshed = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300",
+            concat!(
+                "HITANS:4:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1"
+            ),
+        ],
+        "anonymous-refresh",
+        1,
+    );
+    engine.accept_anonymous_initialization(&refreshed).unwrap();
+    assert_eq!(engine.state().bpd_version(), 58);
+    assert_eq!(engine.state().tan_methods().len(), 1);
+    assert_eq!(engine.allowed_tan_methods(), ["942", "943"]);
+    assert!(matches!(
+        engine.choose_tan_method("943"),
+        Err(Error::Unsupported(Limitation::TanMethod))
+    ));
+
+    let termination = engine
+        .termination_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&termination)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert_eq!(
+        payload
+            .iter()
+            .filter(|segment| segment.header().unwrap().code == b"HKEND")
+            .count(),
+        1
+    );
+    let terminated = response(
+        &["HIRMG:2:2+0100::fictional termination"],
+        "anonymous-refresh",
+        2,
+    );
+    engine.accept_termination(&terminated).unwrap();
+    assert!(matches!(
+        engine.termination_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+
+    engine.choose_tan_method("942").unwrap();
+    let personalized = engine
+        .initialization_request(now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&personalized)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert_eq!(
+        payload[0].elements()[2].components()[0].as_text().unwrap(),
+        "942"
+    );
+    let connected = response(
+        &["HIRMG:2:2+0010::accepted", "HIRMS:3:2:4+3920::methods:942"],
+        "personalized-dialog",
+        1,
+    );
+    assert!(matches!(
+        engine.accept_initialization(&connected, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    assert!(engine.has_active_dialog());
+}
+
 // PIN/TAN B.6.1 and B.8.2 define a response set, not an ordering rule.
 #[test]
 fn bank_terminated_method_discovery_is_order_independent() {
@@ -404,7 +591,7 @@ fn method_discovery_requires_usable_methods_and_rejects_unrelated_errors() {
     let fixture = response(
         &[
             "HIRMG:2:2+9050::summary+9800::termination+9942::credential error",
-            "HIRMS:3:2:4+9955::one-step result+3920::methods:942",
+            "HIRMS:3:2:4+9952::unpublished companion+3920::methods:942",
         ],
         "rejected-discovery",
         1,
@@ -422,6 +609,46 @@ fn method_discovery_requires_usable_methods_and_rejects_unrelated_errors() {
     assert!(matches!(
         unrelated.termination_request(now().date(), now().time()),
         Err(Error::InconsistentState)
+    ));
+
+    for methods in [None, Some("899:998:not-a-code")] {
+        let mut malformed = Engine::new(
+            InstituteId::new("280", "12345678").unwrap(),
+            ProductIdentity::new("PROD123", "1.0").unwrap(),
+            Credentials::new("fictional-user", None, "private-pin").unwrap(),
+            ReusableState::new(),
+        )
+        .unwrap();
+        let method_response = methods
+            .map(|values| format!("HIRMS:3:2:4+9952::companion+3920::methods:{values}"))
+            .unwrap_or_else(|| "HIRMS:3:2:4+9952::companion".to_owned());
+        let segments = [
+            "HIRMG:2:2+9050::summary+9800::termination",
+            method_response.as_str(),
+        ];
+        let fixture = response(&segments, "invalid-discovery", 1);
+        assert!(matches!(
+            malformed.accept_initialization(&fixture, now()),
+            Err(Error::MissingValue { .. })
+        ));
+        assert!(matches!(
+            malformed.termination_request(now().date(), now().time()),
+            Err(Error::InconsistentState)
+        ));
+    }
+
+    let mut selected = engine_with_method(TanProcess::ProcessVariantTwo);
+    let fixture = response(
+        &[
+            "HIRMG:2:2+9050::summary+9800::termination",
+            "HIRMS:3:2:4+9952::unpublished companion+3920::methods:942",
+        ],
+        "selected-method",
+        1,
+    );
+    assert!(matches!(
+        selected.accept_initialization(&fixture, now()),
+        Err(Error::Bank(response)) if response.code() == 9050
     ));
 }
 

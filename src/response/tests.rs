@@ -1628,6 +1628,20 @@ fn bank_response_preserves_code_but_not_private_text() {
     assert!(!rendered.contains("private credential detail"));
 }
 
+// Rückmeldungscodes 2026-02-03 A and B.4: 99xx historically permits
+// institution-specific meanings, but every currently published code keeps its
+// defined error status. The absent fictional companion has no standalone meaning.
+#[test]
+fn unpublished_99xx_classification_excludes_every_published_code() {
+    assert!(is_unpublished_99xx(9952));
+    for code in [
+        9901, 9910, 9920, 9930, 9931, 9939, 9941, 9942, 9943, 9951, 9953, 9954, 9955, 9956, 9957,
+        9958, 9959, 9960, 9961, 9962, 9963, 9964, 9980, 9991, 9992, 9997, 9998, 9999,
+    ] {
+        assert!(!is_unpublished_99xx(code), "{code} is published");
+    }
+}
+
 // FinTS Formals 2017-10-06, B.7.5.2: class 0 accepts, class 3 warns,
 // and class 9 rejects the referenced request.
 #[test]

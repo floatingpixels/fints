@@ -32,11 +32,13 @@ persistence format. Credentials are never serializable.
 A new connection follows this bounded sequence:
 
 1. Call `initialize`. With no selected method, the client uses security function 999
-   to obtain BPD/UPD and response code 3920, closes that discovery dialog, and returns
-   `Initialization::ChooseTanMethod`.
-2. Choose one of `tan_methods()` whose identifier is present in
-   `allowed_tan_methods()`, then call `select_tan_method`.
-3. If that method requires a named medium, call `discover_tan_media` and
+   to obtain response code 3920 and closes any open discovery dialog. It returns
+   `Initialization::ChooseTanMethod` when matching BPD method descriptions are usable.
+2. If it instead returns `Initialization::RefreshParameters`, call
+   `refresh_parameters` once. Then offer only `tan_methods()` whose identifiers also
+   occur in `allowed_tan_methods()`; never construct a method from a 3920 identifier.
+3. Call `select_tan_method` for that intersection. If the method requires a named
+   medium, call `discover_tan_media` and
    `select_tan_medium`.
 4. If `state().system_id()` is absent, call `synchronize`. Persist the state only
    after synchronization completes.
@@ -44,9 +46,11 @@ A new connection follows this bounded sequence:
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.
 
-`refresh_parameters` performs a separate anonymous BPD refresh and closes its dialog.
-It is the recovery path when 3920 supplies no usable method; the client does not
-silently guess a method.
+`refresh_parameters` actively requests current BPD with client BPD version zero,
+atomically applies the complete response, and closes its anonymous dialog. It is the
+recovery path when 3920 supplies no usable method; the client does not silently guess a
+method. Allowed 3920 identifiers remain process-memory response state and are not added
+to serialized `ReusableState`.
 
 Typed TAN and decoupled approval challenges are operation-specific, process-memory
 continuations. A continuation reports `ContinuationKind`, the challenge, and the

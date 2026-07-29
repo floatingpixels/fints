@@ -53,7 +53,10 @@ pub(crate) fn anonymous_initialization(
                 text("0")?,
             ],
         )?,
-        hkvvb(3, product, state)?,
+        // FinTS PIN/TAN correction T8 requires actively fetching current BPD
+        // when 3920 has no usable method. Formals C.3.2.2/P26 reserve client
+        // version zero for declaring the retained BPD unknown.
+        build_segment(3, raw_hkvvb_versions(product, 0, state.upd_version)?)?,
         message_trailer(4, 1)?,
     ];
     Ok(Message::new(segments).encode()?)
@@ -474,21 +477,25 @@ fn build_segment(number: u16, raw: RawSegment) -> Result<Segment, Error> {
 }
 
 fn raw_hkvvb(product: &ProductIdentity, state: &ReusableState) -> Result<RawSegment, Error> {
+    raw_hkvvb_versions(product, state.bpd_version, state.upd_version)
+}
+
+fn raw_hkvvb_versions(
+    product: &ProductIdentity,
+    bpd_version: u16,
+    upd_version: u16,
+) -> Result<RawSegment, Error> {
     Ok(raw_segment(
         "HKVVB",
         3,
         vec![
-            text(&state.bpd_version.to_string())?,
-            text(&state.upd_version.to_string())?,
+            text(&bpd_version.to_string())?,
+            text(&upd_version.to_string())?,
             text("0")?,
             text(&product.registration_id)?,
             text(&product.version)?,
         ],
     ))
-}
-
-fn hkvvb(number: u16, product: &ProductIdentity, state: &ReusableState) -> Result<Segment, Error> {
-    build_segment(number, raw_hkvvb(product, state)?)
 }
 
 fn raw_signature_header(

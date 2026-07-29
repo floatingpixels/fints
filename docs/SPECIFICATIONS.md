@@ -156,6 +156,9 @@ access date for each source below is 2026-07-28.
   discovery and its prohibition on UPD); B.6.1 response 3920 (allowed-method
   parameters and 9800 dialog termination); B.8.2 (9955 termination when
   one-step TAN is unavailable, with the supported methods supplied by 3920);
+  correction T8 (active anonymous BPD refresh using client version zero per
+  Formals C.3.2.2/P26 when 3920 cannot be matched to a usable method
+  description);
   the introductory
   `FinTS-Füllwert` definition immediately before B.1 (a filler is any value
   satisfying the field's format, restrictions, and occupancy and is irrelevant
@@ -171,13 +174,16 @@ access date for each source below is 2026-07-28.
   HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. It also
   authorizes treating the specification-defined function-999
   9050/9800/9955/3920 response set as completed method discovery without a
-  client-side HKEND, while unrelated errors retain their normal meaning. It
-  further
+  client-side HKEND. T8 additionally authorizes a typed anonymous-parameter
+  refresh when valid 3920 identifiers lack matching HITANS descriptions.
+  Unpublished 99xx companions receive no standalone meaning and known errors
+  retain their normal meaning. It further
   authorizes strict inbound PIN/TAN security-control occupancy while accepting
   format-valid filler contents without evaluating their concrete values; it
   does not authorize a raw or loosely searched response sequence.
-- **Access/redistribution:** the same implementation grant and unchanged,
-  free-redistribution conditions as the Formals PDF. No PDF is committed.
+- **Access/redistribution:** accessed 2026-07-29; the same implementation
+  grant and unchanged, free-redistribution conditions as the Formals PDF. No
+  PDF is committed.
 
 ### FinTS — Financial Transaction Services, Schnittstellenspezifikation, Sicherheitsverfahren HBCI
 
@@ -261,6 +267,11 @@ access date for each source below is 2026-07-28.
   0030, 0100, 3010, 3040, 3050, 3072, 3075, 3076, 3081, 3920, 3955-3958,
   9000, 9050, 9075, 9078, 9110, 9130, 9185, 9210, 9380, 9391, 9800, 9942,
   9951, 9955, and 9997.
+- **Gate 4 live-interoperability sections:** A (the 0900-0999, 3900-3999,
+  and 9900-9999 exception ranges historically permit institution-specific and
+  differing meanings) and B.4 (the complete published 99xx error-code set).
+  Absence from that set does not authorize assigning an unpublished code a
+  semantic meaning; it only permits retaining it as a redacted generic fact.
 - **Gate 2 sections:** B.1-B.4, especially code 3040 and its mandatory
   Aufsetzpunkt parameter, plus 9210 for a rejected continuation point.
 - **Gate 3 sections:** B.1-B.4, especially 3050 and 3081 (parameter refresh),
@@ -276,8 +287,8 @@ access date for each source below is 2026-07-28.
   pagination, SCA, synchronization, parameter-refresh, and unsupported-version
   outcomes without exposing bank response text; and the same redacted,
   bounded response treatment for Gate 4 reads.
-- **Access/redistribution:** the same implementation grant and unchanged,
-  free-redistribution conditions. No PDF is committed.
+- **Access/redistribution:** accessed 2026-07-29; the same implementation
+  grant and unchanged, free-redistribution conditions. No PDF is committed.
 
 ## Mandatory corrections and extensions
 

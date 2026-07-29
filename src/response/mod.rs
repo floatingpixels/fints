@@ -185,15 +185,31 @@ impl Response {
         // 9955. Code 9050 is only the message-level partial-error summary.
         // This response-set classification is deliberately order-independent
         // and does not change the general meaning of any individual code.
-        self.has_tan_method_response
-            && self.responses.iter().any(|response| {
-                response.class() == ResponseClass::Error && matches!(response.code(), 9800 | 9955)
-            })
-            && self
-                .responses
+        self.responses.iter().any(|response| {
+            response.class() == ResponseClass::Error && matches!(response.code(), 9800 | 9955)
+        }) && self
+            .responses
+            .iter()
+            .filter(|response| response.class() == ResponseClass::Error)
+            .all(|response| matches!(response.code(), 9050 | 9800 | 9955))
+    }
+
+    pub(crate) fn is_unclassified_bank_terminated_tan_method_discovery(&self) -> bool {
+        // The current Rückmeldungscodes A register says 99xx historically has
+        // institution-specific, differing meanings. An unpublished 99xx is
+        // therefore only a structural companion to 9800 here; it receives no
+        // standalone meaning and every published 99xx remains an error.
+        let errors = || {
+            self.responses
                 .iter()
                 .filter(|response| response.class() == ResponseClass::Error)
-                .all(|response| matches!(response.code(), 9050 | 9800 | 9955))
+        };
+        errors().any(|response| response.code() == 9800)
+            && errors().any(|response| is_unpublished_99xx(response.code()))
+            && errors().all(|response| {
+                matches!(response.code(), 9050 | 9800 | 9955)
+                    || is_unpublished_99xx(response.code())
+            })
     }
 
     pub(crate) fn first_error(&self) -> Option<BankResponse> {
@@ -207,7 +223,14 @@ impl Response {
         &self,
         state: &mut ReusableState,
     ) -> Result<Option<Vec<crate::model::Account>>, Error> {
-        parameters::apply(&self.segments, state)
+        parameters::apply(&self.segments, state, false)
+    }
+
+    pub(crate) fn apply_parameter_refresh(
+        &self,
+        state: &mut ReusableState,
+    ) -> Result<Option<Vec<crate::model::Account>>, Error> {
+        parameters::apply(&self.segments, state, true)
     }
 
     pub(crate) fn bpd_institute(&self) -> Result<Option<crate::model::InstituteState>, Error> {
@@ -758,6 +781,40 @@ fn recovery_for(code: u16) -> Option<Recovery> {
         9110 | 9130 | 9210 | 9380 => Some(Recovery::UnsupportedCapability),
         _ => None,
     }
+}
+
+fn is_unpublished_99xx(code: u16) -> bool {
+    (9900..=9999).contains(&code)
+        && !matches!(
+            code,
+            9901 | 9910
+                | 9920
+                | 9930
+                | 9931
+                | 9939
+                | 9941
+                | 9942
+                | 9943
+                | 9951
+                | 9953
+                | 9954
+                | 9955
+                | 9956
+                | 9957
+                | 9958
+                | 9959
+                | 9960
+                | 9961
+                | 9962
+                | 9963
+                | 9964
+                | 9980
+                | 9991
+                | 9992
+                | 9997
+                | 9998
+                | 9999
+        )
 }
 
 #[cfg(test)]

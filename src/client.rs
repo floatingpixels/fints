@@ -33,6 +33,11 @@ pub enum PollingMode {
 pub enum Initialization {
     Connected,
     ChooseTanMethod,
+    /// Anonymous BPD must be refreshed before the returned 3920 identifiers
+    /// can be matched to described TAN methods. Call
+    /// [`Client::refresh_parameters`], then offer only methods present in both
+    /// [`Client::allowed_tan_methods`] and [`Client::tan_methods`].
+    RefreshParameters,
     Challenge(Box<InitializationContinuation>),
 }
 
@@ -214,18 +219,11 @@ impl Client {
     pub fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
         let request = self.engine.initialization_request(now.date(), now.time())?;
         let response = self.send(&request)?;
-        match self.engine.accept_initialization(&response, now)? {
-            InitializationResult::Connected => Ok(Initialization::Connected),
-            InitializationResult::ChooseTanMethod => {
-                if self.engine.has_active_dialog() {
-                    self.terminate(now)?;
-                }
-                Ok(Initialization::ChooseTanMethod)
-            }
-            InitializationResult::Challenge(pending) => Ok(Initialization::Challenge(Box::new(
-                InitializationContinuation { pending: *pending },
-            ))),
-        }
+        let result = self.engine.accept_initialization(&response, now)?;
+        let Self { engine, transport } = self;
+        finish_initialization_with_send(engine, result, now, |request| {
+            transport.send(request).map_err(Error::from)
+        })
     }
 
     pub fn balance(
@@ -824,11 +822,39 @@ fn continuation_kind(pending: &PendingChallenge) -> ContinuationKind {
 fn map_initialization(result: InitializationResult) -> Result<Initialization, Error> {
     match result {
         InitializationResult::Connected => Ok(Initialization::Connected),
-        InitializationResult::ChooseTanMethod => Err(Error::InconsistentState),
+        InitializationResult::ChooseTanMethod | InitializationResult::RefreshParameters => {
+            Err(Error::InconsistentState)
+        }
         InitializationResult::Challenge(pending) => Ok(Initialization::Challenge(Box::new(
             InitializationContinuation { pending: *pending },
         ))),
     }
+}
+
+fn finish_initialization_with_send(
+    engine: &mut Engine,
+    result: InitializationResult,
+    now: NaiveDateTime,
+    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<Initialization, Error> {
+    let outcome = match result {
+        InitializationResult::Connected => return Ok(Initialization::Connected),
+        InitializationResult::ChooseTanMethod => Initialization::ChooseTanMethod,
+        InitializationResult::RefreshParameters => Initialization::RefreshParameters,
+        InitializationResult::Challenge(pending) => {
+            return Ok(Initialization::Challenge(Box::new(
+                InitializationContinuation { pending: *pending },
+            )));
+        }
+    };
+    if engine.has_active_dialog() {
+        let request = engine.termination_request(now.date(), now.time())?;
+        let response = send(&request).inspect_err(|_error| {
+            engine.abort_dialog();
+        })?;
+        engine.accept_termination(&response)?;
+    }
+    Ok(outcome)
 }
 
 fn synchronize_with_send(
@@ -932,6 +958,88 @@ mod tests {
         let length = format!("{:012}", wire.len());
         wire[10..22].copy_from_slice(length.as_bytes());
         wire
+    }
+
+    fn plain_response(segments: &[&str], dialog_id: &str, message_number: u16) -> Vec<u8> {
+        let trailer = segments.len() + 2;
+        let mut wire =
+            format!("HNHBK:1:3+000000000000+300+{dialog_id}+{message_number}+{dialog_id}:1'");
+        for segment in segments {
+            wire.push_str(segment);
+            wire.push('\'');
+        }
+        wire.push_str(&format!("HNHBS:{trailer}:1+{message_number}'"));
+        let length = format!("{:012}", wire.len());
+        wire.replace_range(10..22, &length);
+        wire.into_bytes()
+    }
+
+    // PIN/TAN B.6.1 and correction T8: a bank-terminated function-999
+    // refresh outcome receives no HKEND, while an open successful discovery
+    // with the same missing method descriptions is closed exactly once.
+    #[test]
+    fn refresh_outcome_closes_only_an_open_discovery_dialog() {
+        let new_engine = || {
+            Engine::new(
+                InstituteId::new("280", "12345678").unwrap(),
+                ProductIdentity::new("PROD123", "1.0").unwrap(),
+                Credentials::new("fictional-user", None, "private-pin").unwrap(),
+                ReusableState::new(),
+            )
+            .unwrap()
+        };
+        let mut terminated_engine = new_engine();
+        let terminated = plain_response(
+            &[
+                "HIRMG:2:2+9050::summary+9800::termination",
+                "HIRMS:3:2:4+9952::unpublished companion+3920::methods:942",
+            ],
+            "terminated-discovery",
+            1,
+        );
+        let result = terminated_engine
+            .accept_initialization(&terminated, now())
+            .unwrap();
+        let mut sends = 0;
+        assert!(matches!(
+            finish_initialization_with_send(&mut terminated_engine, result, now(), |_request| {
+                sends += 1;
+                Err(Error::InconsistentState)
+            })
+            .unwrap(),
+            Initialization::RefreshParameters
+        ));
+        assert_eq!(sends, 0);
+
+        let mut open_engine = new_engine();
+        let open = plain_response(
+            &["HIRMG:2:2+0010::accepted", "HIRMS:3:2:4+3920::methods:942"],
+            "open-discovery",
+            1,
+        );
+        let result = open_engine.accept_initialization(&open, now()).unwrap();
+        assert!(matches!(
+            finish_initialization_with_send(&mut open_engine, result, now(), |request| {
+                let payload = Message::parse(request)?.payload_segments()?;
+                assert_eq!(
+                    payload
+                        .iter()
+                        .filter(|segment| segment.header().unwrap().code == b"HKEND")
+                        .count(),
+                    1
+                );
+                sends += 1;
+                Ok(plain_response(
+                    &["HIRMG:2:2+0100::terminated"],
+                    "open-discovery",
+                    2,
+                ))
+            })
+            .unwrap(),
+            Initialization::RefreshParameters
+        ));
+        assert_eq!(sends, 1);
+        assert!(!open_engine.has_active_dialog());
     }
 
     // HBCI Security 2024 B.5.1/DD permits HNSHK timestamp type without

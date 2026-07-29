@@ -12,6 +12,7 @@ use super::{component, optional_component};
 pub(super) fn apply(
     segments: &[Segment],
     state: &mut ReusableState,
+    force_bpd_refresh: bool,
 ) -> Result<Option<Vec<Account>>, Error> {
     let received_bpd_version = bpd_version(segments)?;
     if received_bpd_version.is_some_and(|version| version < state.bpd_version) {
@@ -21,8 +22,11 @@ pub(super) fn apply(
     }
     // FinTS Formals C.3.2.2 and correction P26: a relevant BPD change has a
     // new version and the transmitted BPD are complete. A same-version HIBPA
-    // therefore does not replace retained capabilities with an incomplete set.
-    let replace_bpd = received_bpd_version.is_some_and(|version| version > state.bpd_version);
+    // therefore does not replace retained capabilities with an incomplete set,
+    // except after T8's explicit anonymous fetch using client version zero.
+    let replace_bpd = received_bpd_version.is_some_and(|version| {
+        version > state.bpd_version || (force_bpd_refresh && version == state.bpd_version)
+    });
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();

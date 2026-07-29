@@ -1,18 +1,22 @@
 use super::*;
 use crate::model::{InstituteState, TanProcess};
 
-// FinTS 3.0 Formals 2017-10-06, C.5.1, HKIDN 2, HKVVB 3, HNHBK 3, HNHBS 1.
+// FinTS Formals C.3.2.2, C.5.1 and correction P26; PIN/TAN correction T8:
+// an active anonymous BPD fetch sends client BPD version zero even when a
+// retained version exists. The expected wire is independent of the encoder.
 #[test]
 fn anonymous_initialization_matches_independent_wire_fixture() {
     let institute = InstituteId::new("280", "12345678").unwrap();
     let product = ProductIdentity::new("PROD123", "1.0").unwrap();
-    let state = ReusableState::new();
+    let mut state = ReusableState::new();
+    state.bpd_version = 57;
+    state.upd_version = 1;
 
     let encoded = anonymous_initialization(&institute, &product, &state).unwrap();
 
     assert_eq!(
         encoded,
-        b"HNHBK:1:3+000000000109+300+0+1'HKIDN:2:2+280:12345678+9999999999+0+0'HKVVB:3:3+0+0+0+PROD123+1.0'HNHBS:4:1+1'"
+        b"HNHBK:1:3+000000000109+300+0+1'HKIDN:2:2+280:12345678+9999999999+0+0'HKVVB:3:3+0+1+0+PROD123+1.0'HNHBS:4:1+1'"
     );
 }
 
