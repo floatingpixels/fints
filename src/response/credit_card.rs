@@ -43,6 +43,8 @@ pub(super) fn transactions(
         .transpose()?;
     let mut entries = Vec::new();
     for element in elements.iter().skip(6) {
+        // CR0538 C.12.1 defines each repeated DEG as an entry. A trailing
+        // all-empty DEG is therefore malformed rather than ignorable padding.
         entries.push(parse_entry(element.components())?);
         if entries.len() > MAX_PAGE_ENTRIES {
             return Err(Error::InvalidResponse {

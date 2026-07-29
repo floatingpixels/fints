@@ -54,7 +54,7 @@ fn mt940_page(statement: u16, bank_reference: &str, account_number: &str) -> Vec
 
 fn mt535_page(page: u16, indicator: &str) -> Vec<u8> {
     format!(
-        ":16R:GENL\r\n:28E:{page}/{indicator}\r\n:20C::SEME//NONREF\r\n\
+        "\r\n:16R:GENL\r\n:28E:{page}/{indicator}\r\n:20C::SEME//NONREF\r\n\
          :23G:NEWM\r\n:98A::STAT//20260728\r\n\
          :22F::STTY//CUST\r\n\
          :97A::SAFE//12345678/300001\r\n:17B::ACTI//Y\r\n:16S:GENL\r\n\
@@ -963,6 +963,16 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
     engine
         .depot_positions_request(0, now().date(), now().time())
         .unwrap();
+    assert!(matches!(
+        engine.next_depot_positions_page_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+    engine.continuation_active = true;
+    assert!(matches!(
+        engine.next_depot_positions_page_request(now().date(), now().time()),
+        Err(Error::InconsistentState)
+    ));
+    engine.continuation_active = false;
     let first = binary_response(
         "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
         &mt535_page(1, "MORE"),

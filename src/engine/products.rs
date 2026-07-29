@@ -164,6 +164,9 @@ impl Engine {
         date: NaiveDate,
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
         let state = self
             .products
             .positions
@@ -172,13 +175,17 @@ impl Engine {
         if state.pages >= PAGE_LIMIT {
             return self.fail_positions(Error::PaginationLimitReached);
         }
+        let continuation_point = state
+            .continuation_point
+            .as_deref()
+            .ok_or(Error::InconsistentState)?;
         let tan = self.product_tan(state.requires_tan)?;
         let message = {
             let context = self.context(date, time)?;
             segments::depot_positions_request(
                 &context,
                 &state.account,
-                state.continuation_point.as_deref(),
+                Some(continuation_point),
                 tan.as_ref()
                     .map(|(method, medium)| (method, medium.as_deref())),
             )?
@@ -386,6 +393,9 @@ impl Engine {
         date: NaiveDate,
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
         let state = self
             .products
             .securities
@@ -394,6 +404,10 @@ impl Engine {
         if state.pages >= PAGE_LIMIT {
             return self.fail_securities(Error::PaginationLimitReached);
         }
+        let continuation_point = state
+            .continuation_point
+            .as_deref()
+            .ok_or(Error::InconsistentState)?;
         let tan = self.product_tan(state.requires_tan)?;
         let message = {
             let context = self.context(date, time)?;
@@ -402,7 +416,7 @@ impl Engine {
                 &state.account,
                 state.from,
                 state.to,
-                state.continuation_point.as_deref(),
+                Some(continuation_point),
                 tan.as_ref()
                     .map(|(method, medium)| (method, medium.as_deref())),
             )?
@@ -616,6 +630,9 @@ impl Engine {
         date: NaiveDate,
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
         let state = self
             .products
             .card_transactions
@@ -624,6 +641,10 @@ impl Engine {
         if state.pages >= PAGE_LIMIT {
             return self.fail_card_transactions(Error::PaginationLimitReached);
         }
+        let continuation_point = state
+            .continuation_point
+            .as_deref()
+            .ok_or(Error::InconsistentState)?;
         let tan = self.product_tan(state.requires_tan)?;
         let message = {
             let context = self.context(date, time)?;
@@ -633,7 +654,7 @@ impl Engine {
                 &state.capability,
                 state.from,
                 state.to,
-                state.continuation_point.as_deref(),
+                Some(continuation_point),
                 tan.as_ref()
                     .map(|(method, medium)| (method, medium.as_deref())),
             )?
@@ -917,6 +938,9 @@ impl Engine {
     }
 
     fn ensure_product_idle(&self) -> Result<(), Error> {
+        // Product requests check the pre-existing cash transaction state here;
+        // cash requests independently reject continuation_active. Through the
+        // concrete public Client, only one synchronous operation can enter.
         if self.continuation_active || self.products.active() || self.transaction.is_some() {
             Err(Error::InconsistentState)
         } else {

@@ -99,11 +99,14 @@ struct Block {
 
 fn document(input: &[u8]) -> Result<Block, Error> {
     let text = encoding_rs::mem::decode_latin1(input);
-    if !text.ends_with("\r\n-") || text.starts_with("\r\n") {
-        return Err(Error::MalformedSecuritiesData);
-    }
+    // DK Anlage 3 v3.9, chapter 4 general syntax rule 6: the record starts
+    // with CRLF and ends with the final CRLF "-" record.
+    let body = text
+        .strip_prefix("\r\n")
+        .and_then(|value| value.strip_suffix("\r\n-"))
+        .ok_or(Error::MalformedSecuritiesData)?;
     let mut logical = Vec::<Field>::new();
-    for line in text.strip_suffix("\r\n-").unwrap_or_default().split("\r\n") {
+    for line in body.split("\r\n") {
         if let Some(rest) = line.strip_prefix(':')
             && let Some(end) = rest.find(':')
         {
@@ -540,6 +543,9 @@ fn parse_quantity(
     prefix: &str,
     allow_negative: bool,
 ) -> Result<SecuritiesQuantity, Error> {
+    // For FAMT, the nominal-value currency can also appear in structured
+    // 70E::HOLD line 1 field 2. Gate 4 deliberately does not expose that
+    // separate metadata value; it is not inferred from the quantity itself.
     let rest = value
         .strip_prefix(prefix)
         .ok_or(Error::MalformedSecuritiesData)?;
@@ -582,6 +588,9 @@ fn parse_signed_amount(value: &str, prefix: &str) -> Result<SecuritiesAmount, Er
 fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
     // Anlage 3 v3.9 4.3 places the explicitly reported acquisition amount and
     // currency on line two of the structured HOLD field.
+    // Live-compat watch: both text extractions of the full-message example
+    // appear to omit the prescribed leading line-number digits. Supporting
+    // that shape needs an owner decision and fictional fixture, not tolerance.
     let body = value
         .strip_prefix(":HOLD//")
         .ok_or(Error::MalformedSecuritiesData)?;
@@ -652,6 +661,9 @@ fn parse_qualified_date(field: &Field) -> Result<NaiveDate, Error> {
         .rsplit_once("//")
         .map(|(_, value)| value)
         .ok_or(Error::MalformedSecuritiesData)?;
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::MalformedSecuritiesData);
+    }
     match field.tag.as_str() {
         "98A" if value.len() == 8 => parse_date(value),
         "98C" if value.len() == 14 => {
@@ -672,6 +684,9 @@ fn parse_qualified_timestamp(
         .rsplit_once("//")
         .map(|(_, value)| value)
         .ok_or(Error::MalformedSecuritiesData)?;
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::MalformedSecuritiesData);
+    }
     match field.tag.as_str() {
         "98A" if value.len() == 8 => Ok((Some(parse_date(value)?), None)),
         "98C" if value.len() == 14 => Ok((

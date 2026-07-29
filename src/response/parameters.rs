@@ -91,6 +91,11 @@ pub(super) fn apply(
             b"HIWPDS" => {
                 depot_positions_advertised = true;
                 if header.version == 6 {
+                    if depot_positions_supported {
+                        return Err(Error::InvalidResponse {
+                            structure: "duplicate HIWPDS version 6",
+                        });
+                    }
                     require_depot_position_parameters(segment)?;
                     depot_positions_supported = true;
                 }
@@ -98,6 +103,11 @@ pub(super) fn apply(
             b"HIWDUS" => {
                 securities_transactions_advertised = true;
                 if header.version == 5 {
+                    if securities_transactions_supported {
+                        return Err(Error::InvalidResponse {
+                            structure: "duplicate HIWDUS version 5",
+                        });
+                    }
                     require_depot_transaction_parameters(segment)?;
                     securities_transactions_supported = true;
                 }

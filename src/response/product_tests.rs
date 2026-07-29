@@ -36,6 +36,7 @@ fn message(segments: &[&str]) -> Vec<u8> {
 #[test]
 fn mt535_position_fixture_preserves_only_explicit_values() {
     let payload = concat!(
+        "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
         ":20C::SEME//NONREF\r\n",
@@ -92,6 +93,7 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
 #[test]
 fn mt535_variants_preserve_sign_quality_and_percentage_cost_basis() {
     let payload = concat!(
+        "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
         ":20C::SEME//NONREF\r\n",
@@ -137,6 +139,7 @@ fn mt535_variants_preserve_sign_quality_and_percentage_cost_basis() {
 #[test]
 fn mt536_transaction_fixture_preserves_reference_amounts_and_dates() {
     let payload = concat!(
+        "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
         ":13A::STAT//007\r\n",
@@ -196,6 +199,7 @@ fn mt536_transaction_fixture_preserves_reference_amounts_and_dates() {
 #[test]
 fn mt536_nonref_without_optional_details_fabricates_nothing() {
     let payload = concat!(
+        "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
         ":20C::SEME//NONREF\r\n",
@@ -302,7 +306,14 @@ fn credit_card_balance_fixture_keeps_balance_components_independent() {
 // GENL/FIN/TRANSDET fields cannot yield partial results.
 #[test]
 fn malformed_securities_documents_fail_without_partial_results() {
-    let mismatched = concat!(":16R:GENL\r\n", ":28E:1/ONLY\r\n", ":16S:FIN\r\n", "-").as_bytes();
+    let mismatched = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, mismatched)).unwrap();
     assert!(matches!(
         response.depot_positions(),
@@ -310,6 +321,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
     ));
 
     let missing_quantity = concat!(
+        "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
         ":20C::SEME//NONREF\r\n",
@@ -330,6 +342,233 @@ fn malformed_securities_documents_fail_without_partial_results() {
     assert!(matches!(
         response.depot_positions(),
         Err(Error::MalformedSecuritiesData)
+    ));
+}
+
+// DK Anlage 3 v3.9, chapter 4 general syntax rule 6: an MT535/MT536
+// record starts with CRLF and ends with CRLF followed by "-".
+#[test]
+fn securities_document_rejects_missing_leading_crlf() {
+    let payload = concat!(
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":98A::STAT//20260728\r\n",
+        ":22F::STTY//CUST\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+
+    assert!(matches!(
+        response.depot_positions(),
+        Err(Error::MalformedSecuritiesData)
+    ));
+}
+
+// DK Anlage 3 v3.9, 4.3: 98C carries an ASCII-numeric date and time.
+// A fictional Latin-1 high byte inside the date must be a typed parse error,
+// never a UTF-8 character-boundary panic.
+#[test]
+fn securities_date_with_latin1_high_byte_is_typed_error() {
+    let mut payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":98A::STAT//20260728\r\n",
+        ":22F::STTY//CUST\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS05\r\n",
+        "Fictional Security\r\n",
+        ":90B::MRKT//ACTU/EUR123,45\r\n",
+        ":98C::PRIC//2026072"
+    )
+    .as_bytes()
+    .to_vec();
+    payload.push(0xe4);
+    payload.extend_from_slice(
+        concat!(
+            "12000\r\n",
+            ":93B::AGGR//UNIT/1,\r\n",
+            ":16R:SUBBAL\r\n",
+            ":93C::TAVI//UNIT/AVAI/1,\r\n",
+            ":16S:SUBBAL\r\n",
+            ":16S:FIN\r\n",
+            "-"
+        )
+        .as_bytes(),
+    );
+    let response = Response::parse(&message_with_binary("HIWPD", 6, &payload)).unwrap();
+
+    assert!(matches!(
+        response.depot_positions(),
+        Err(Error::MalformedSecuritiesData)
+    ));
+}
+
+// DK Anlage 3 v3.9, 4.4: one FIN contains exactly one TRAN, PAYM is FREE,
+// and a present TRANSDET block must be structurally complete.
+#[test]
+fn malformed_mt536_blocks_fail_without_partial_results() {
+    let two_transactions = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":69A::STAT//20260701/20260728\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS05\r\n",
+        "Fictional Security\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//NONREF\r\n",
+        ":16S:LINK\r\n",
+        ":16S:TRAN\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//NONREF\r\n",
+        ":16S:LINK\r\n",
+        ":16S:TRAN\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWDU", 5, two_transactions)).unwrap();
+    assert!(matches!(
+        response.securities_transactions(),
+        Err(Error::MalformedSecuritiesData)
+    ));
+
+    let wrong_payment = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":69A::STAT//20260701/20260728\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS05\r\n",
+        "Fictional Security\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//NONREF\r\n",
+        ":16S:LINK\r\n",
+        ":16R:TRANSDET\r\n",
+        ":36B::PSTA//UNIT/1,\r\n",
+        ":22F::TRAN//SETT\r\n",
+        ":22H::REDE//RECE\r\n",
+        ":22H::PAYM//APMT\r\n",
+        ":98A::ESET//20260728\r\n",
+        ":16S:TRANSDET\r\n",
+        ":16S:TRAN\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWDU", 5, wrong_payment)).unwrap();
+    assert!(matches!(
+        response.securities_transactions(),
+        Err(Error::MalformedSecuritiesData)
+    ));
+
+    let truncated_details = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":69A::STAT//20260701/20260728\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS05\r\n",
+        "Fictional Security\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//NONREF\r\n",
+        ":16S:LINK\r\n",
+        ":16R:TRANSDET\r\n",
+        ":36B::PSTA//UNIT/1,\r\n",
+        ":22F::TRAN//SETT\r\n",
+        ":22H::REDE//RECE\r\n",
+        ":22H::PAYM//FREE\r\n",
+        ":98A::ESET//20260728\r\n",
+        ":16S:TRAN\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWDU", 5, truncated_details)).unwrap();
+    assert!(matches!(
+        response.securities_transactions(),
+        Err(Error::MalformedSecuritiesData)
+    ));
+}
+
+// G112 / CR0538 C.12.1 and B.8 btgv: dates and amounts are typed, and the
+// Originalbetrag amount/currency/direction triplet is all-or-nothing.
+#[test]
+fn malformed_credit_card_entries_are_typed_errors() {
+    let bad_date = message(&[
+        "HIRMG:2:2+0010::accepted",
+        concat!(
+            "HIKKU:3:1:4+444433******1111+++++",
+            "444433******1111:20261340:20260728:::::::9,00:EUR:D"
+        ),
+    ]);
+    let response = Response::parse(&bad_date).unwrap();
+    assert!(matches!(
+        response.credit_card_transactions(),
+        Err(Error::InvalidValue {
+            field: "credit-card date"
+        })
+    ));
+
+    let bad_amount = message(&[
+        "HIRMG:2:2+0010::accepted",
+        concat!(
+            "HIKKU:3:1:4+444433******1111+++++",
+            "444433******1111:20260727:20260728:::::::9.00:EUR:D"
+        ),
+    ]);
+    let response = Response::parse(&bad_amount).unwrap();
+    assert!(matches!(
+        response.credit_card_transactions(),
+        Err(Error::InvalidValue {
+            field: "credit-card booking amount"
+        })
+    ));
+
+    let partial_original_amount = message(&[
+        "HIRMG:2:2+0010::accepted",
+        concat!(
+            "HIKKU:3:1:4+444433******1111+++++",
+            "444433******1111:20260727:20260728:::10,00::::9,00:EUR:D"
+        ),
+    ]);
+    let response = Response::parse(&partial_original_amount).unwrap();
+    assert!(matches!(
+        response.credit_card_transactions(),
+        Err(Error::InvalidResponse {
+            structure: "partial credit-card original amount"
+        })
     ));
 }
 

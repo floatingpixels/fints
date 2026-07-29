@@ -164,6 +164,9 @@ the crate reports the typed protocol or transport evidence it can verify.
 - Unsupported versions and unadvertised or unauthorized operations are typed
   `Limitation` values. The crate never derives securities transactions from
   position snapshots and never fills an absent response field from request data.
+- An IBAN-only depot without a UPD account number cannot pass strict MT535/MT536
+  `:97A:` identity verification and returns a typed error. This deliberate
+  limitation is revisited only if live findings justify a bounded protocol rule.
 
 All Gate 4 position, transaction, card, balance, and continuation types contain
 private financial data, deliberately omit `Debug`, remain process-memory values,
