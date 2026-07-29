@@ -86,6 +86,9 @@ officially inherited MIME Base64 mapping. Bounded MIME folding whitespace is acc
 malformed Base64, HTML, non-whitespace transport garbage, and raw FinTS remain
 transport errors. Any transport failure discards the uncertain local dialog; the
 caller starts a fresh initialization instead of replaying a message number.
+Authenticated institute responses accept only the specified HNVSK/HNVSD envelope and
+an optional matched HNSHK/HNSHA control pair around HIRMG and response data; arbitrary
+prefix segments and incomplete security framing remain typed response errors.
 
 Secret-bearing and private-data-bearing types intentionally omit `Debug`. Callers
 must not log credentials, continuations, challenges, accounts, balances, endpoints

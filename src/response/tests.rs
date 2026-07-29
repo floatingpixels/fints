@@ -16,6 +16,324 @@ fn message(segments: &[String], dialog_id: &str, message_number: u16) -> Vec<u8>
     wire.into_bytes()
 }
 
+// Deliberately assembled without the crate serializer. FinTS Formals B.8 and
+// PIN/TAN B.9.8-B.9.10 place the logical inner segments in binary HNVSD.
+fn secured_message(
+    inner: &[u8],
+    outer_trailer_number: u16,
+    trailer_message_number: u16,
+) -> Vec<u8> {
+    let mut wire = concat!(
+        "HNHBK:1:3+000000000000+300+dialog1+1+dialog1:1'",
+        "HNVSK:998:3+PIN:2+998+1+1::fictional-system",
+        "+1:20260729:120000+2:2:13:@8@"
+    )
+    .as_bytes()
+    .to_vec();
+    wire.extend_from_slice(&[0; 8]);
+    wire.extend_from_slice(
+        concat!(":5:1+280:12345678:fictional-bank:V:0:0+0'", "HNVSD:999:1+@").as_bytes(),
+    );
+    wire.extend_from_slice(inner.len().to_string().as_bytes());
+    wire.push(b'@');
+    wire.extend_from_slice(inner);
+    wire.extend_from_slice(
+        format!("'HNHBS:{outer_trailer_number}:1+{trailer_message_number}'").as_bytes(),
+    );
+    let length = format!("{:012}", wire.len());
+    wire[10..22].copy_from_slice(length.as_bytes());
+    wire
+}
+
+fn fixture_offset(fixture: &[u8], needle: &[u8]) -> usize {
+    fixture
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("fictional fixture marker must exist")
+}
+
+fn patch_fixture_length(fixture: &mut [u8]) {
+    let length = format!("{:012}", fixture.len());
+    fixture[10..22].copy_from_slice(length.as_bytes());
+}
+
+// FinTS Formals B.7.1 and B.8; PIN/TAN 2020 B.1, B.9.4-B.9.10,
+// and F.2: the optional bank-side HNSHK/HNSHA control pair surrounds the
+// response segments restored from HNVSD. It carries no bank signature.
+#[test]
+fn authenticated_response_security_controls_precede_hirmg_and_apply_parameters() {
+    let inner = concat!(
+        "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+        "+1::fictional-system+1+1:20260729:120000",
+        "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+        "HIRMG:3:2+0010::accepted'",
+        "HIRMS:4:2:4+3920::methods:942'",
+        "HIBPA:5:3:4+7+280:12345678+Fictional Bank+9+1+300'",
+        "HIPINS:6:1:4+1+1+0+4:6:6:::HKSAL:N:HKTAN:N'",
+        "HIUPA:7:4:4+fictional-user+3+0'",
+        "HIUPD:8:6:4+123456::280:12345678",
+        "+DE40123456780000123456+fictional-customer+1+EUR",
+        "+Fictional Person++Checking++HKSAL:1'",
+        "HNSHA:9:2+fictional-ref'"
+    )
+    .as_bytes();
+    let fixture = secured_message(inner, 10, 1);
+    let mut state = ReusableState::new();
+
+    let response = Response::parse(&fixture).unwrap();
+    response.apply_parameters(&mut state).unwrap();
+
+    assert_eq!(response.allowed_tan_methods(), ["942"]);
+    assert_eq!(state.bpd_version(), 7);
+    assert_eq!(state.upd_version(), 3);
+    assert_eq!(state.accounts().len(), 1);
+}
+
+// PIN/TAN F.2 also permits institute responses without the optional
+// HNSHK/HNSHA pair; HIRMG then begins the logical sequence inside HNVSD.
+#[test]
+fn authenticated_response_without_optional_signature_controls_still_parses() {
+    let inner = concat!("HIRMG:2:2+0010::accepted'", "HIRMS:3:2:4+0020::processed'");
+
+    let response = Response::parse(&secured_message(inner.as_bytes(), 4, 1)).unwrap();
+
+    assert_eq!(response.responses().len(), 2);
+}
+
+// FinTS Formals B.7.1 requires exactly one HIRMG after any HNSHK and before
+// response data. PIN/TAN F.2 permits at most one matching HNSHK/HNSHA pair.
+#[test]
+fn authenticated_response_rejects_missing_duplicate_or_misplaced_controls_and_hirmg() {
+    let cases = [
+        (
+            concat!(
+                "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HIRMS:3:2:4+3920::methods:942'",
+                "HNSHA:4:2+fictional-ref'"
+            ),
+            5,
+        ),
+        (
+            concat!(
+                "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HIRMG:3:2+0010::accepted'",
+                "HIRMG:4:2+0010::accepted'",
+                "HNSHA:5:2+fictional-ref'"
+            ),
+            6,
+        ),
+        (
+            concat!(
+                "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HIFOO:3:1+optional'",
+                "HIRMG:4:2+0010::accepted'",
+                "HNSHA:5:2+fictional-ref'"
+            ),
+            6,
+        ),
+        (
+            concat!("HIRMG:2:2+0010::accepted'", "HNSHA:3:2+fictional-ref'"),
+            4,
+        ),
+        (
+            concat!(
+                "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HIRMG:3:2+0010::accepted'"
+            ),
+            4,
+        ),
+        (
+            concat!(
+                "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HNSHK:3:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+                "HIRMG:4:2+0010::accepted'",
+                "HNSHA:5:2+fictional-ref'"
+            ),
+            6,
+        ),
+        (
+            concat!(
+                "HNSHA:2:2+fictional-ref'",
+                "HIRMG:3:2+0010::accepted'",
+                "HNSHK:4:4+PIN:2+942+fictional-ref+1+1",
+                "+1::fictional-system+1+1:20260729:120000",
+                "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'"
+            ),
+            5,
+        ),
+    ];
+
+    for (inner, trailer_number) in cases {
+        assert!(Response::parse(&secured_message(inner.as_bytes(), trailer_number, 1)).is_err());
+    }
+}
+
+// FinTS Formals B.7.1/B.8 and PIN/TAN B.9.4/B.9.7 require HNSHK 4,
+// HNSHA 2, matching nonzero control references, and no bank-signature value.
+#[test]
+fn authenticated_response_rejects_malformed_security_control_values() {
+    let cases = [
+        concat!(
+            "HNSHK:2:3+PIN:2+942+fictional-ref+1+1",
+            "+1::fictional-system+1+1:20260729:120000",
+            "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+0010::accepted'",
+            "HNSHA:4:2+fictional-ref'"
+        ),
+        concat!(
+            "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+            "+1::fictional-system+1+1:20260729:120000",
+            "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+0010::accepted'",
+            "HNSHA:4:1+fictional-ref'"
+        ),
+        concat!(
+            "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+            "+1::fictional-system+1+1:20260729:120000",
+            "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+0010::accepted'",
+            "HNSHA:4:2+other-ref'"
+        ),
+        concat!(
+            "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+            "+1::fictional-system+1+1:20260729:120000",
+            "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+0010::accepted'",
+            "HNSHA:4:2+fictional-ref+@8@signature'"
+        ),
+    ];
+
+    for inner in cases {
+        assert!(Response::parse(&secured_message(inner.as_bytes(), 5, 1)).is_err());
+    }
+}
+
+// FinTS Formals B.8 and PIN/TAN B.9.8-B.9.10 require exactly ordered
+// HNVSK 3/HNVSD 1 controls around the complete binary logical message.
+#[test]
+fn authenticated_response_rejects_incomplete_or_misordered_outer_controls() {
+    let inner = concat!("HIRMG:2:2+0010::accepted'", "HIRMS:3:2:4+0020::processed'");
+    let valid = secured_message(inner.as_bytes(), 4, 1);
+    let encryption_start = fixture_offset(&valid, b"HNVSK:998:3");
+    let data_start = fixture_offset(&valid, b"HNVSD:999:1");
+    let trailer_start = fixture_offset(&valid, b"HNHBS:4:1");
+    let encryption = valid[encryption_start..data_start].to_vec();
+    let data = valid[data_start..trailer_start].to_vec();
+
+    let mut missing_header = valid.clone();
+    missing_header.drain(encryption_start..data_start);
+    patch_fixture_length(&mut missing_header);
+
+    let mut missing_data = valid.clone();
+    missing_data.drain(data_start..trailer_start);
+    patch_fixture_length(&mut missing_data);
+
+    let mut duplicate_header = valid.clone();
+    duplicate_header.splice(data_start..data_start, encryption.iter().copied());
+    patch_fixture_length(&mut duplicate_header);
+
+    let mut misordered = Vec::new();
+    misordered.extend_from_slice(&valid[..encryption_start]);
+    misordered.extend_from_slice(&data);
+    misordered.extend_from_slice(&encryption);
+    misordered.extend_from_slice(&valid[trailer_start..]);
+    patch_fixture_length(&mut misordered);
+
+    for fixture in [missing_header, missing_data, duplicate_header, misordered] {
+        assert!(matches!(
+            Response::parse(&fixture),
+            Err(Error::Wire(crate::wire::WireError::InvalidSecurityEnvelope))
+        ));
+    }
+}
+
+// HBCI Security B.5.3 and PIN/TAN B.9.1/B.9.8-B.9.9 define the complete
+// PIN/TAN HNVSK occupancy; a recognized outer envelope is not enough.
+#[test]
+fn authenticated_response_rejects_malformed_encryption_header_values() {
+    let inner = b"HIRMG:2:2+0010::accepted'";
+    let mut wrong_profile = secured_message(inner, 3, 1);
+    let profile = fixture_offset(&wrong_profile, b"+PIN:2+998");
+    wrong_profile[profile + 1..profile + 4].copy_from_slice(b"RAH");
+
+    let mut wrong_function = secured_message(inner, 3, 1);
+    let function = fixture_offset(&wrong_function, b"+PIN:2+998");
+    wrong_function[function + 7..function + 10].copy_from_slice(b"997");
+
+    for fixture in [wrong_profile, wrong_function] {
+        assert!(matches!(
+            Response::parse(&fixture),
+            Err(Error::InvalidResponse {
+                structure: "authenticated response encryption header"
+            })
+        ));
+    }
+}
+
+// FinTS Formals B.5.2-B.5.3 and B.8 retain continuous inner numbering,
+// the logical outer trailer number, and matching HNHBK/HNHBS message numbers.
+#[test]
+fn authenticated_response_keeps_inner_and_outer_numbering_strict() {
+    let wrong_inner_number = concat!(
+        "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+        "+1::fictional-system+1+1:20260729:120000",
+        "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+        "HIRMG:4:2+0010::accepted'",
+        "HNSHA:5:2+fictional-ref'"
+    );
+    assert!(matches!(
+        Response::parse(&secured_message(wrong_inner_number.as_bytes(), 5, 1)),
+        Err(Error::Wire(
+            crate::wire::WireError::NonSequentialSegmentNumber {
+                expected: 3,
+                actual: 4
+            }
+        ))
+    ));
+
+    let valid_inner = concat!(
+        "HNSHK:2:4+PIN:2+942+fictional-ref+1+1",
+        "+1::fictional-system+1+1:20260729:120000",
+        "+1:999:1+6:10:16+280:12345678:fictional-bank:S:0:0'",
+        "HIRMG:3:2+0010::accepted'",
+        "HNSHA:4:2+fictional-ref'"
+    );
+    assert!(matches!(
+        Response::parse(&secured_message(valid_inner.as_bytes(), 6, 1)),
+        Err(Error::Wire(
+            crate::wire::WireError::NonSequentialSegmentNumber {
+                expected: 5,
+                actual: 6
+            }
+        ))
+    ));
+    assert!(matches!(
+        Response::parse(&secured_message(valid_inner.as_bytes(), 5, 2)),
+        Err(Error::Wire(crate::wire::WireError::MismatchedMessageNumber))
+    ));
+}
+
+// FinTS Formals B.7.6 and PIN/TAN F.2: permitted unsecured institute
+// responses still begin directly with HIRMG and contain no security controls.
+#[test]
+fn permitted_unsecured_response_still_parses_without_security_controls() {
+    let fixture = message(&["HIRMG:2:2+9800::dialog aborted".into()], "unknown", 1);
+
+    assert!(Response::parse(&fixture).is_ok());
+}
+
 // FinTS Messages 2022-04-15, C.2.1.2.3 and B.1/B.4/B.6.
 #[test]
 fn hisal_eight_preserves_explicit_balance_metadata() {

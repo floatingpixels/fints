@@ -34,6 +34,10 @@ is 2026-07-28.
   Dictionary entries for account type and account/depot number. Account types
   30-39 identify securities depots and 50-59 identify credit-card accounts;
   advertised allowed operations still authorize each concrete request.
+- **Gate 4 live-interoperability sections:** B.7.1 (an institute response places
+  optional HNSHK 4 before its mandatory HIRMG 2 and optional HNSHA 2 before
+  HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
+  segment sequence, including any security controls, with continuous numbering).
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -41,7 +45,10 @@ is 2026-07-28.
   numbering; and Gate 3 replacement of changed parameter sets, endpoint
   institute validation, and omission of non-account-bound UPD records from the
   account list. For Gate 4 it authorizes discovering depot and credit-card
-  products from UPD without guessing from names or identifiers.
+  products from UPD without guessing from names or identifiers. For the
+  authenticated-response interoperability fix it authorizes restoring and
+  validating the logical institute-response order inside HNVSD before requiring
+  HIRMG.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -109,11 +116,18 @@ is 2026-07-28.
   (HITANS); B.9 (PIN/TAN occupancy of security segments); C.3.1 (HKTAB/HITAB
   TAN-media discovery); D (two-step method parameters); F.1-F.2 (message
   composition and examples).
+- **Gate 4 live-interoperability sections:** B.1 (personalized PIN/TAN messages
+  retain the security and encryption segments); B.9.1-B.9.10 (PIN/TAN occupancy
+  of HNSHK, HNSHA, HNVSK, and cleartext-binary HNVSD); F.2 (each institute
+  response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and
+  response data).
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
-  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery.
+  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. It also
+  authorizes strict inbound PIN/TAN security-control occupancy without
+  accepting a raw or loosely searched response sequence.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions as the Formals PDF. No PDF is committed.
 
@@ -127,10 +141,14 @@ is 2026-07-28.
 - **Gate 1 sections:** B.5 only, limited to the common security-envelope
   structures HNSHK 4, HNSHA 2, HNVSK 3, and HNVSD 1 that the PIN/TAN volume
   normatively reuses.
+- **Gate 4 live-interoperability sections:** B.5.1-B.5.4, limited to the shared
+  segment layouts and the placement of HNSHK/HNSHA inside the encrypted HNVSD
+  sequence; PIN/TAN B.9 remains the authority for their field occupancy.
 - **Apply alongside:** the PIN/TAN volume's B.9 occupancy rules. HBCI
   key/card security profiles are not in Gate 1.
 - **Authorizes:** only the shared envelope segment layouts needed to encode the
-  PIN/TAN profile; it does not authorize implementing an HBCI security profile.
+  and validate the PIN/TAN profile; it does not authorize implementing an HBCI
+  security profile.
 - **Access/redistribution:** the PDF contains the same implementation grant and
   unchanged, free-redistribution conditions. No PDF is committed.
 

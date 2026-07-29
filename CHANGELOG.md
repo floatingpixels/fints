@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Accepted the specified optional HNSHK/HNSHA control pair around HIRMG and response data inside authenticated HNVSD responses, prompted by an owner-run live initialization.
+  Added strict inner and outer security-framing validation with independent fictional parameter, ordering, numbering, and malformed-control fixtures.
+  The 91-test network-independent stack is green; raw response data remains neither captured nor exposed.
+
 - **2026-07-29** — Accepted MIME-folded Base64 responses per RFC 2045 section 6.8 and the HBCI PIN/TAN VI.7 MIM filter, prompted by the first owner-run live verification.
   Transport bounds and rejection behavior are unchanged; raw FinTS, HTML, and malformed Base64 remain typed transport errors.
   The 83-test network-independent stack is green.

@@ -141,6 +141,10 @@ impl Message {
         &self.segments
     }
 
+    pub(crate) fn is_security_enveloped(&self) -> bool {
+        self.has_security_envelope()
+    }
+
     pub(crate) fn payload_segments(&self) -> Result<Vec<Segment>, WireError> {
         if self.has_security_envelope() {
             let payload = self

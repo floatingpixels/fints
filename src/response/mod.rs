@@ -35,7 +35,7 @@ impl Response {
             .map_err(|_| Error::InvalidValue {
                 field: "message number",
             })?;
-        let segments = message.payload_segments()?;
+        let segments = response_segments(&message)?;
         let first_header =
             segments
                 .first()
@@ -264,6 +264,252 @@ impl Response {
     pub(crate) fn tan(&self, expected_version: u16) -> Result<Option<tan::TanResponse>, Error> {
         tan::parse(&self.segments, expected_version)
     }
+}
+
+// FinTS Formals B.7.1 and B.8 restore the logical institute-response order
+// inside HNVSD. PIN/TAN B.1 and F.2 retain an optional HNSHK/HNSHA control
+// pair around HIRMG, HIRMS, and response data, without bank-signature material.
+fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
+    let payload = message.payload_segments()?;
+    let security_enveloped = message.is_security_enveloped();
+    if security_enveloped {
+        validate_encryption_header(message.segments().get(1).ok_or(Error::InvalidResponse {
+            structure: "authenticated response encryption header",
+        })?)?;
+    }
+    let signature_headers = payload
+        .iter()
+        .filter(|segment| {
+            segment
+                .header()
+                .is_some_and(|header| header.code == b"HNSHK")
+        })
+        .count();
+    let signature_trailers = payload
+        .iter()
+        .filter(|segment| {
+            segment
+                .header()
+                .is_some_and(|header| header.code == b"HNSHA")
+        })
+        .count();
+
+    if signature_headers == 0 && signature_trailers == 0 {
+        return Ok(payload);
+    }
+    if !security_enveloped || signature_headers != 1 || signature_trailers != 1 || payload.len() < 3
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response security controls",
+        });
+    }
+
+    let signature_header = payload.first().ok_or(Error::InvalidResponse {
+        structure: "authenticated response security controls",
+    })?;
+    let signature_trailer = payload.last().ok_or(Error::InvalidResponse {
+        structure: "authenticated response security controls",
+    })?;
+    validate_signature_header(signature_header)?;
+    let control_reference = signature_control_reference(signature_header)?;
+    validate_signature_trailer(signature_trailer, &control_reference)?;
+
+    Ok(payload[1..payload.len() - 1].to_vec())
+}
+
+// HBCI Security B.5.3 supplies the shared HNVSK 3 layout; PIN/TAN
+// B.9.1 and B.9.8-B.9.9 constrain it to the cleartext-over-TLS profile.
+fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
+    let header = segment.header().ok_or(Error::InvalidResponse {
+        structure: "authenticated response encryption header",
+    })?;
+    if header.code != b"HNVSK"
+        || header.number != 998
+        || header.version != 3
+        || header.reference.is_some()
+        || !(9..=10).contains(&segment.elements().len())
+        || !element_has_components(segment, 1, 2)
+        || !(2..=3).all(|index| element_has_components(segment, index, 1))
+        || !(4..=5).all(|index| element_has_components(segment, index, 3))
+        || !element_has_components(segment, 6, 6)
+        || !element_has_components(segment, 7, 6)
+        || !element_has_components(segment, 8, 1)
+        || segment
+            .element(9)
+            .is_some_and(|element| !element_is_empty(element))
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response encryption header",
+        });
+    }
+
+    let profile = segment.elements()[1].components();
+    let security_identity = segment.elements()[4].components();
+    let security_time = segment.elements()[5].components();
+    let encryption = segment.elements()[6].components();
+    if profile[0].as_text().as_deref() != Some("PIN")
+        || !matches!(profile[1].as_text().as_deref(), Some("1" | "2"))
+        || required_segment_text(segment, 2, "authenticated response encryption function")? != "998"
+        || !matches!(
+            required_segment_text(segment, 3, "authenticated response security role")?.as_str(),
+            "1" | "4"
+        )
+        || security_identity[0].as_text().as_deref() != Some("1")
+        || security_identity[1].as_text().as_deref() != Some("")
+        || security_identity[2]
+            .as_text()
+            .is_none_or(|value| value.is_empty())
+        || security_time[0].as_text().as_deref() != Some("1")
+        || !text_is_ascii_digits(&security_time[1], 8)
+        || !text_is_ascii_digits(&security_time[2], 6)
+        || encryption[0].as_text().as_deref() != Some("2")
+        || encryption[1].as_text().as_deref() != Some("2")
+        || encryption[2].as_text().as_deref() != Some("13")
+        || encryption[3]
+            .as_binary()
+            .is_none_or(|value| value != [0; 8])
+        || encryption[4].as_text().as_deref() != Some("5")
+        || encryption[5].as_text().as_deref() != Some("1")
+        || required_segment_text(segment, 8, "authenticated response compression function")? != "0"
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response encryption header",
+        });
+    }
+    Ok(())
+}
+
+fn validate_signature_header(segment: &Segment) -> Result<(), Error> {
+    let header = segment.header().ok_or(Error::InvalidResponse {
+        structure: "authenticated response signature header",
+    })?;
+    if header.code != b"HNSHK"
+        || header.version != 4
+        || header.reference.is_some()
+        || !(12..=13).contains(&segment.elements().len())
+        || !element_has_components(segment, 1, 2)
+        || !(2..=5).all(|index| element_has_components(segment, index, 1))
+        || !element_has_components(segment, 6, 3)
+        || !element_has_components(segment, 7, 1)
+        || !(8..=10).all(|index| element_has_components(segment, index, 3))
+        || !element_has_components(segment, 11, 6)
+        || segment
+            .element(12)
+            .is_some_and(|element| !element_is_empty(element))
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response signature header",
+        });
+    }
+
+    let profile = segment.elements()[1].components();
+    if profile[0].as_text().as_deref() != Some("PIN")
+        || !matches!(profile[1].as_text().as_deref(), Some("1" | "2"))
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response signature header",
+        });
+    }
+    let security_function =
+        required_segment_text(segment, 2, "authenticated response security function")?;
+    let security_function =
+        security_function
+            .parse::<u16>()
+            .map_err(|_| Error::InvalidResponse {
+                structure: "authenticated response signature header",
+            })?;
+    if !((900..=997).contains(&security_function) || security_function == 999)
+        || required_segment_text(segment, 4, "authenticated response security area")? != "1"
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response signature header",
+        });
+    }
+
+    let reference = signature_control_reference(segment)?;
+    if reference.len() > 14 || reference == "0" {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response signature header",
+        });
+    }
+    Ok(())
+}
+
+fn validate_signature_trailer(segment: &Segment, expected_reference: &str) -> Result<(), Error> {
+    let header = segment.header().ok_or(Error::InvalidResponse {
+        structure: "authenticated response signature trailer",
+    })?;
+    if header.code != b"HNSHA"
+        || header.version != 2
+        || header.reference.is_some()
+        || !(2..=4).contains(&segment.elements().len())
+        || !element_has_components(segment, 1, 1)
+        || segment
+            .element(2)
+            .is_some_and(|element| !element_is_empty(element))
+        || segment
+            .element(3)
+            .is_some_and(|element| !element_is_empty(element))
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response signature trailer",
+        });
+    }
+    if required_segment_text(
+        segment,
+        1,
+        "authenticated response security control reference",
+    )? != expected_reference
+    {
+        return Err(Error::InvalidResponse {
+            structure: "authenticated response security control reference",
+        });
+    }
+    Ok(())
+}
+
+fn signature_control_reference(segment: &Segment) -> Result<String, Error> {
+    required_segment_text(
+        segment,
+        3,
+        "authenticated response security control reference",
+    )
+}
+
+fn required_segment_text(
+    segment: &Segment,
+    element: usize,
+    field: &'static str,
+) -> Result<String, Error> {
+    segment
+        .element(element)
+        .and_then(|element| {
+            (element.components().len() == 1)
+                .then(|| element.components()[0].as_text())
+                .flatten()
+        })
+        .filter(|value| !value.is_empty())
+        .map(|value| value.into_owned())
+        .ok_or(Error::MissingValue { field })
+}
+
+fn element_has_components(segment: &Segment, element: usize, count: usize) -> bool {
+    segment
+        .element(element)
+        .is_some_and(|element| element.components().len() == count)
+}
+
+fn element_is_empty(element: &crate::wire::Element) -> bool {
+    element
+        .components()
+        .iter()
+        .all(|value| value.as_text().is_some_and(|value| value.is_empty()))
+}
+
+fn text_is_ascii_digits(value: &crate::wire::Value, length: usize) -> bool {
+    value.as_text().is_some_and(|value| {
+        value.len() == length && value.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn required_message_text(
