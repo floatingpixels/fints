@@ -1,8 +1,12 @@
 # Changelog
 
+- **2026-07-29** — Accepted MIME-folded Base64 responses per RFC 2045 section 6.8 and the HBCI PIN/TAN VI.7 MIM filter, prompted by the first owner-run live verification.
+  Transport bounds and rejection behavior are unchanged; raw FinTS, HTML, and malformed Base64 remain typed transport errors.
+  The 83-test network-independent stack is green.
+
 - **2026-07-28** — Completed Gate 4 with advertised HKWPD 6 positions, HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1 credit-card reads.
-  Added bounded MT535/MT536 parsing, MIME-folded Base64 transport interoperability, exact optional-value semantics, and exhaustive guarded pagination without derived product data.
-  The 83-test fictional network-independent stack is green; all product results remain private process-memory values and live verification remains owner-run.
+  Added bounded MT535/MT536 parsing, exact optional-value semantics, operation-bound TAN continuations, and exhaustive guarded pagination without derived product data.
+  The 81-test fictional network-independent stack is green; all product results remain private process-memory values and live verification remains owner-run.
 
 - **2026-07-28** — Completed Gate 3 with four fictional multibank profiles and deterministic advertised capability/version selection.
   Added pre-mutation HIBPA institute validation, non-account HIUPD handling, the official 35-character IBAN correction, and distinct typed capability/SCA failures.
