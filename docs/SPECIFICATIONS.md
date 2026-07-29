@@ -126,9 +126,10 @@ is 2026-07-28.
   `FinTS-Füllwert` definition immediately before B.1 (a filler is any value
   satisfying the field's format, restrictions, and occupancy and is irrelevant
   to processing); B.9.1-B.9.10 (PIN/TAN occupancy of HNSHK, HNSHA, HNVSK, and
-  cleartext-binary HNVSD, including B.9.9's non-normative filler examples); F.2
-  (each institute response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair
-  around HIRMG and response data).
+  cleartext-binary HNVSD, including B.9.4-B.9.6's HNSHK certificate, hash, and
+  filler rules and B.9.9's non-normative filler examples); F.2 (each institute
+  response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and
+  response data).
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
@@ -159,13 +160,16 @@ is 2026-07-28.
   sequence; Data Dictionary entries `Rolle des Sicherheitslieferanten, kodiert`
   (codes 1, 3, and 4; currently not to be interpreted), `Bezeichner für
   Sicherheitspartei` (codes 1 and 2), `Sicherheitsdatum und -uhrzeit` (optional
-  date and conditional time), and `Verschlüsselungsalgorithmus` (component
-  formats, 512-byte binary bound, identifiers 5/6 and 1, and unoccupied IV
-  value). PIN/TAN B.9 remains the authority for profile-specific occupancy.
+  date and conditional time, including a timestamp-type-only HNSHK),
+  `Hashalgorithmus`, `Signaturalgorithmus`, `Schlüsselname`, and
+  `Verschlüsselungsalgorithmus` (component formats, 512-byte binary bound,
+  identifiers 5/6 and 1, and unoccupied IV value). PIN/TAN B.9 remains the
+  authority for profile-specific occupancy.
 - **Apply alongside:** the PIN/TAN volume's B.9 occupancy rules. HBCI
   key/card security profiles are not in Gate 1.
 - **Authorizes:** only the shared envelope segment layouts and field restrictions
-  needed to encode and validate the PIN/TAN profile; it does not authorize an HBCI
+  needed to encode and validate the PIN/TAN profile, including cut or explicitly
+  empty optional HNSHK date/time components; it does not authorize an HBCI
   security profile.
 - **Access/redistribution:** the PDF contains the same implementation grant and
   unchanged, free-redistribution conditions. No PDF is committed.

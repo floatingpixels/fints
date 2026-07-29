@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Accepted HNSHK security timestamps with omitted optional date/time after the next owner-run synchronization reached dialog termination.
+  Added constant field diagnostics while retaining PIN/TAN profile, identity, algorithm, key, certificate, control-pairing, and envelope validation.
+  Fictional end-to-end synchronization now proves exactly one HKEND and durable assigned system state without captured protocol data.
+
 - **2026-07-29** — Recognized specification-defined bank-terminated function-999 TAN-method discovery after the next owner-run live initialization.
   BPD and valid 3920 method identifiers now survive the 9050/9800/9955 response set without retaining the ended dialog or sending HKEND.
   Added independent fictional ordering, lifecycle, invalid-method, unrelated-error, redaction, and fresh-initialization regressions.

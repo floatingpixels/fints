@@ -190,19 +190,10 @@ impl Client {
 
     /// Obtains a new assigned system ID and closes the synchronization dialog.
     pub fn synchronize(&mut self, now: NaiveDateTime) -> Result<Synchronization, Error> {
-        let request = self
-            .engine
-            .synchronization_request(now.date(), now.time())?;
-        let response = self.send(&request)?;
-        match self.engine.accept_synchronization(&response, now)? {
-            SynchronizationResult::Complete => {
-                self.terminate(now)?;
-                Ok(Synchronization::Complete)
-            }
-            SynchronizationResult::Challenge(pending) => Ok(Synchronization::Challenge(Box::new(
-                SynchronizationContinuation { pending: *pending },
-            ))),
-        }
+        let Self { engine, transport } = self;
+        synchronize_with_send(engine, now, |request| {
+            transport.send(request).map_err(Error::from)
+        })
     }
 
     /// Discovers TAN media using the dedicated HKTAB initialization flow, then closes it.
@@ -840,6 +831,26 @@ fn map_initialization(result: InitializationResult) -> Result<Initialization, Er
     }
 }
 
+fn synchronize_with_send(
+    engine: &mut Engine,
+    now: NaiveDateTime,
+    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<Synchronization, Error> {
+    let request = engine.synchronization_request(now.date(), now.time())?;
+    let response = send(&request)?;
+    match engine.accept_synchronization(&response, now)? {
+        SynchronizationResult::Complete => {
+            let request = engine.termination_request(now.date(), now.time())?;
+            let response = send(&request)?;
+            engine.accept_termination(&response)?;
+            Ok(Synchronization::Complete)
+        }
+        SynchronizationResult::Challenge(pending) => Ok(Synchronization::Challenge(Box::new(
+            SynchronizationContinuation { pending: *pending },
+        ))),
+    }
+}
+
 fn map_balance(result: BalanceResult) -> Result<BalanceRequest, Error> {
     Ok(match result {
         BalanceResult::Complete(balance) => BalanceRequest::Complete(balance),
@@ -860,4 +871,127 @@ fn map_credit_card_balance(
             }))
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use chrono::{NaiveDate, NaiveTime};
+
+    use super::*;
+    use crate::{model::TanProcess, wire::Message};
+
+    fn now() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 7, 29)
+            .unwrap()
+            .and_time(NaiveTime::from_hms_opt(12, 0, 0).unwrap())
+    }
+
+    fn synchronization_engine() -> Engine {
+        let mut state = ReusableState::new();
+        state.tan_methods.push(TanMethod {
+            security_function: "942".to_owned(),
+            hktan_version: 6,
+            process: TanProcess::ProcessVariantTwo,
+            technical_id: "fictional-method".to_owned(),
+            display_name: "Fictional approval".to_owned(),
+            dk_method: None,
+            max_tan_length: Some(6),
+            tan_format: Some("1".to_owned()),
+            medium_name_required: false,
+            hhd_response_required: false,
+            max_decoupled_polls: None,
+            first_poll_delay_seconds: None,
+            next_poll_delay_seconds: None,
+            manual_polling_allowed: false,
+            automatic_polling_allowed: false,
+        });
+        state.selected_tan_method = Some("942".to_owned());
+        Engine::new(
+            InstituteId::new("280", "12345678").unwrap(),
+            ProductIdentity::new("PROD123", "1.0").unwrap(),
+            Credentials::new("fictional-user", None, "private-pin").unwrap(),
+            state,
+        )
+        .unwrap()
+    }
+
+    fn secured_response(inner: &[u8], message_number: u16, trailer_number: u16) -> Vec<u8> {
+        let mut wire = format!(
+            "HNHBK:1:3+000000000000+300+dialog1+{message_number}+dialog1:1'\
+             HNVSK:998:3+PIN:2+998+1+1::fictional-system+1+2:2:13:@8@"
+        )
+        .into_bytes();
+        wire.extend_from_slice(&[0; 8]);
+        wire.extend_from_slice(b":5:1+280:12345678:fictional-bank:V:0:0+0'HNVSD:999:1+@");
+        wire.extend_from_slice(inner.len().to_string().as_bytes());
+        wire.push(b'@');
+        wire.extend_from_slice(inner);
+        wire.extend_from_slice(format!("'HNHBS:{trailer_number}:1+{message_number}'").as_bytes());
+        let length = format!("{:012}", wire.len());
+        wire[10..22].copy_from_slice(length.as_bytes());
+        wire
+    }
+
+    // HBCI Security 2024 B.5.1/DD permits HNSHK timestamp type without
+    // date/time; PIN/TAN F.2 permits the optional response-side control pair.
+    // This exercises the production Client::synchronize orchestration seam.
+    #[test]
+    fn synchronization_sends_one_hkend_and_preserves_assigned_system_id() {
+        let synchronization = concat!(
+            "HNSHK:2:4+PIN:2+942+fiction-ref+1+1",
+            "+1::fictional-system+1+1+1:999:1+6:10:16",
+            "+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+3060::fictional warning'",
+            "HIRMS:4:2:6+0020::fictional synchronization accepted'",
+            "HIRMS:5:2:4+0020::fictional identity accepted",
+            "+3920::fictional methods:942'",
+            "HIRMS:6:2:5+3076::fictional SCA exemption'",
+            "HISYN:7:4:2+fictional-assigned-system'",
+            "HNSHA:8:2+fiction-ref'"
+        );
+        let termination = concat!(
+            "HNSHK:2:4+PIN:2+942+fiction-ref+1+1",
+            "+1::fictional-assigned-system+2+1+1:999:1+6:10:16",
+            "+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+0100::fictional termination'",
+            "HNSHA:4:2+fiction-ref'"
+        );
+        let mut responses = VecDeque::from([
+            secured_response(synchronization.as_bytes(), 1, 9),
+            secured_response(termination.as_bytes(), 2, 5),
+        ]);
+        let mut operations = Vec::new();
+        let mut engine = synchronization_engine();
+
+        let result = synchronize_with_send(&mut engine, now(), |request| {
+            let payload = Message::parse(request)?.payload_segments()?;
+            operations.push(
+                if payload
+                    .iter()
+                    .any(|segment| segment.header().unwrap().code == b"HKSYN")
+                {
+                    "HKSYN"
+                } else if payload
+                    .iter()
+                    .any(|segment| segment.header().unwrap().code == b"HKEND")
+                {
+                    "HKEND"
+                } else {
+                    "unexpected"
+                },
+            );
+            responses.pop_front().ok_or(Error::InconsistentState)
+        })
+        .unwrap();
+
+        assert!(matches!(result, Synchronization::Complete));
+        assert_eq!(operations, ["HKSYN", "HKEND"]);
+        assert_eq!(
+            engine.state().system_id(),
+            Some("fictional-assigned-system")
+        );
+        assert!(responses.is_empty());
+    }
 }

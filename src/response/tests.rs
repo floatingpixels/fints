@@ -151,6 +151,92 @@ fn assert_encryption_header_error(header: Vec<u8>, expected: &'static str) {
     assert_redacted_encryption_error(error, expected);
 }
 
+struct SignatureHeaderFixture<'a> {
+    profile: &'a str,
+    security_function: &'a str,
+    control_reference: &'a str,
+    application_area: &'a str,
+    security_role: &'a str,
+    security_identity: &'a str,
+    security_reference: &'a str,
+    timestamp: &'a str,
+    hash: &'a str,
+    signature_algorithm: &'a str,
+    key_name: &'a str,
+    certificate: Option<&'a str>,
+}
+
+impl Default for SignatureHeaderFixture<'static> {
+    fn default() -> Self {
+        Self {
+            profile: "PIN:2",
+            security_function: "942",
+            control_reference: "fictional-ref",
+            application_area: "1",
+            security_role: "1",
+            security_identity: "1::fictional-system",
+            security_reference: "1",
+            timestamp: "1:20260729:120000",
+            hash: "1:999:1",
+            signature_algorithm: "6:10:16",
+            key_name: "280:12345678:fictional-bank:S:0:0",
+            certificate: None,
+        }
+    }
+}
+
+fn fictional_signature_header(fixture: SignatureHeaderFixture<'_>) -> String {
+    let mut header = format!(
+        "HNSHK:2:4+{}+{}+{}+{}+{}+{}+{}+{}+{}+{}+{}",
+        fixture.profile,
+        fixture.security_function,
+        fixture.control_reference,
+        fixture.application_area,
+        fixture.security_role,
+        fixture.security_identity,
+        fixture.security_reference,
+        fixture.timestamp,
+        fixture.hash,
+        fixture.signature_algorithm,
+        fixture.key_name,
+    );
+    if let Some(certificate) = fixture.certificate {
+        header.push('+');
+        header.push_str(certificate);
+    }
+    header.push('\'');
+    header
+}
+
+fn signed_response(header: &str, trailer_reference: &str) -> Vec<u8> {
+    signed_response_with_trailer(header, &format!("HNSHA:4:2+{trailer_reference}'"))
+}
+
+fn signed_response_with_trailer(header: &str, trailer: &str) -> Vec<u8> {
+    let inner = format!("{header}HIRMG:3:2+0010::fictional accepted'{trailer}");
+    secured_message(inner.as_bytes(), 5, 1)
+}
+
+fn assert_redacted_signature_error(error: Error, expected: &'static str) {
+    assert!(matches!(
+        &error,
+        Error::InvalidResponse { structure } if *structure == expected
+    ));
+    assert_eq!(
+        error.to_string(),
+        format!("FinTS response has an invalid {expected} structure")
+    );
+    assert!(!error.to_string().contains("fictional-system"));
+    assert!(!error.to_string().contains("fictional-ref"));
+}
+
+fn signature_error(header: &str, trailer_reference: &str) -> Error {
+    match Response::parse(&signed_response(header, trailer_reference)) {
+        Ok(_) => panic!("malformed fictional signature controls must fail"),
+        Err(error) => error,
+    }
+}
+
 // FinTS Formals B.7.1 and B.8; PIN/TAN 2020 B.1, B.9.4-B.9.10,
 // and F.2: the optional bank-side HNSHK/HNSHA control pair surrounds the
 // response segments restored from HNVSD. It carries no bank signature.
@@ -202,6 +288,199 @@ fn authenticated_response_without_optional_signature_controls_still_parses() {
     let response = Response::parse(&secured_message(inner.as_bytes(), 4, 1)).unwrap();
 
     assert_eq!(response.responses().len(), 2);
+}
+
+// HBCI Security 2024 B.5.1 and DD "Sicherheitsdatum und -uhrzeit";
+// PIN/TAN 2020 B.9.4-B.9.6: only the timestamp type is mandatory, while
+// date and its conditional time may be cut or explicitly left empty.
+#[test]
+fn authenticated_signature_header_accepts_normative_timestamp_shapes() {
+    let timestamps = [
+        "1",
+        "1:20260729",
+        "1:20260729:120000",
+        "1:",
+        "1::",
+        "1:20260729:",
+    ];
+
+    for timestamp in timestamps {
+        let header = fictional_signature_header(SignatureHeaderFixture {
+            timestamp,
+            hash: "1:999:1:",
+            certificate: Some(""),
+            ..SignatureHeaderFixture::default()
+        });
+        assert!(Response::parse(&signed_response(&header, "fictional-ref")).is_ok());
+    }
+    for role in ["3", "4"] {
+        let header = fictional_signature_header(SignatureHeaderFixture {
+            security_role: role,
+            security_identity: "2::fictional-system",
+            timestamp: "1",
+            ..SignatureHeaderFixture::default()
+        });
+        assert!(Response::parse(&signed_response(&header, "fictional-ref")).is_ok());
+    }
+}
+
+// HBCI Security DD makes time conditional on a present date and retains the
+// Formals dat/tim validity rules. No malformed timestamp reaches HIRMG.
+#[test]
+fn authenticated_signature_header_rejects_invalid_timestamp_shapes() {
+    for timestamp in ["1::120000", "1:20260230", "1:20260729:250000"] {
+        let header = fictional_signature_header(SignatureHeaderFixture {
+            timestamp,
+            ..SignatureHeaderFixture::default()
+        });
+        assert_redacted_signature_error(
+            signature_error(&header, "fictional-ref"),
+            "signature_header.timestamp_shape",
+        );
+    }
+}
+
+// HBCI Security 2024 B.5.1/DD and PIN/TAN B.9.1-B.9.6 define the fixed
+// profile fields, mandatory shapes, filler formats, matching control reference,
+// and forbidden certificate occupancy. Labels are constant and value-free.
+#[test]
+fn authenticated_signature_header_diagnostics_are_redacted_and_field_specific() {
+    let cases = [
+        (
+            fictional_signature_header(SignatureHeaderFixture::default()).replacen(
+                "HNSHK:2:4",
+                "HNSHK:2:3",
+                1,
+            ),
+            "signature_header.segment_header",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                profile: "PIN:2:extra",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.element_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                profile: "RAH:2",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.security_profile",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                security_function: "899",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.security_function",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                control_reference: "0",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.control_reference",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                application_area: "2",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.application_area",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                security_role: "2",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.security_role_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                security_identity: "1:@1@x:fictional-system",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.security_identity_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                security_reference: "not-numeric",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.security_reference_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                timestamp: "1:invalid",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.timestamp_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                hash: "2:999:1",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.hash_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                signature_algorithm: "5:10:16",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.signature_algorithm_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                key_name: "280:12345678:fictional-bank:S:0:not-numeric",
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.key_name_shape",
+        ),
+        (
+            fictional_signature_header(SignatureHeaderFixture {
+                certificate: Some("fictional-certificate"),
+                ..SignatureHeaderFixture::default()
+            }),
+            "signature_header.certificate_occupancy",
+        ),
+    ];
+
+    for (header, expected) in cases {
+        assert_redacted_signature_error(signature_error(&header, "fictional-ref"), expected);
+    }
+
+    let header = fictional_signature_header(SignatureHeaderFixture::default());
+    assert_redacted_signature_error(
+        signature_error(&header, "other-reference"),
+        "signature_trailer.control_reference",
+    );
+    for (trailer, expected) in [
+        (
+            "HNSHA:4:1+fictional-ref'",
+            "signature_trailer.segment_header",
+        ),
+        (
+            "HNSHA:4:2+fictional-ref+occupied'",
+            "signature_trailer.element_shape",
+        ),
+    ] {
+        let error = match Response::parse(&signed_response_with_trailer(&header, trailer)) {
+            Ok(_) => panic!("malformed fictional signature trailer must fail"),
+            Err(error) => error,
+        };
+        assert_redacted_signature_error(error, expected);
+    }
+}
+
+// PIN/TAN F.2 permits an institute dialog-end response without HNSHK/HNSHA.
+#[test]
+fn authenticated_termination_without_signature_controls_still_parses() {
+    let inner = b"HIRMG:2:2+0100::fictional termination'";
+    let response = Response::parse(&secured_message(inner, 3, 1)).unwrap();
+
+    assert_eq!(response.responses()[0].code(), 100);
 }
 
 // FinTS Formals B.7.1 requires exactly one HIRMG after any HNSHK and before

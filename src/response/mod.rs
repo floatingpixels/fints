@@ -335,8 +335,7 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
     let signature_trailer = payload.last().ok_or(Error::InvalidResponse {
         structure: "authenticated response security controls",
     })?;
-    validate_signature_header(signature_header)?;
-    let control_reference = signature_control_reference(signature_header)?;
+    let control_reference = validate_signature_header(signature_header)?;
     validate_signature_trailer(signature_trailer, &control_reference)?;
 
     Ok(payload[1..payload.len() - 1].to_vec())
@@ -499,70 +498,137 @@ fn valid_key_identifier_filler(value: &crate::wire::Value) -> bool {
     matches!(value.as_text().as_deref(), Some("5" | "6"))
 }
 
-fn validate_signature_header(segment: &Segment) -> Result<(), Error> {
-    let header = segment.header().ok_or(Error::InvalidResponse {
-        structure: "authenticated response signature header",
-    })?;
-    if header.code != b"HNSHK"
-        || header.version != 4
-        || header.reference.is_some()
-        || !(12..=13).contains(&segment.elements().len())
+// HBCI Security 2024 B.5.1/DD supplies the mandatory HNSHK 4 layout and
+// field formats. PIN/TAN 2020 B.9.1-B.9.6 fixes the profile, function, area,
+// identity occupancy, and certificate prohibition; filler contents retain
+// only their declared formats. The role is checked against its defined codes
+// but is not interpreted.
+fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
+    let header = segment
+        .header()
+        .ok_or_else(|| invalid_signature_header("signature_header.segment_header"))?;
+    if header.code != b"HNSHK" || header.version != 4 || header.reference.is_some() {
+        return Err(invalid_signature_header("signature_header.segment_header"));
+    }
+    if !(12..=13).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 2)
         || !(2..=5).all(|index| element_has_components(segment, index, 1))
         || !element_has_components(segment, 6, 3)
         || !element_has_components(segment, 7, 1)
-        || !(8..=10).all(|index| element_has_components(segment, index, 3))
-        || !element_has_components(segment, 11, 6)
         || segment
-            .element(12)
-            .is_some_and(|element| !element_is_empty(element))
+            .element(8)
+            .is_none_or(|element| !(1..=3).contains(&element.components().len()))
+        || segment
+            .element(9)
+            .is_none_or(|element| !(3..=4).contains(&element.components().len()))
+        || !element_has_components(segment, 10, 3)
+        || !element_has_components(segment, 11, 6)
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response signature header",
-        });
+        return Err(invalid_signature_header("signature_header.element_shape"));
     }
 
     let profile = segment.elements()[1].components();
     if profile[0].as_text().as_deref() != Some("PIN")
         || !matches!(profile[1].as_text().as_deref(), Some("1" | "2"))
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response signature header",
-        });
+        return Err(invalid_signature_header(
+            "signature_header.security_profile",
+        ));
     }
-    let security_function =
-        required_segment_text(segment, 2, "authenticated response security function")?;
-    let security_function =
-        security_function
-            .parse::<u16>()
-            .map_err(|_| Error::InvalidResponse {
-                structure: "authenticated response signature header",
-            })?;
-    if !((900..=997).contains(&security_function) || security_function == 999)
-        || required_segment_text(segment, 4, "authenticated response security area")? != "1"
+    if segment.elements()[2].components()[0]
+        .as_text()
+        .is_none_or(|value| !is_tan_security_function(&value))
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response signature header",
-        });
+        return Err(invalid_signature_header(
+            "signature_header.security_function",
+        ));
     }
 
-    let reference = signature_control_reference(segment)?;
-    if reference.len() > 14 || reference == "0" {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response signature header",
-        });
+    let reference = required_segment_text(segment, 3, "signature control reference")
+        .map_err(|_| invalid_signature_header("signature_header.control_reference"))?;
+    if encoding_rs::mem::encode_latin1_lossy(&reference).len() > 14 || reference == "0" {
+        return Err(invalid_signature_header(
+            "signature_header.control_reference",
+        ));
     }
-    Ok(())
+    if segment.elements()[4].components()[0].as_text().as_deref() != Some("1") {
+        return Err(invalid_signature_header(
+            "signature_header.application_area",
+        ));
+    }
+    if !matches!(
+        segment.elements()[5].components()[0].as_text().as_deref(),
+        Some("1" | "3" | "4")
+    ) {
+        return Err(invalid_signature_header(
+            "signature_header.security_role_shape",
+        ));
+    }
+    let identity = segment.elements()[6].components();
+    if !matches!(identity[0].as_text().as_deref(), Some("1" | "2"))
+        || identity[1].as_text().as_deref() != Some("")
+        || identity[2].as_text().is_none_or(|value| value.is_empty())
+    {
+        return Err(invalid_signature_header(
+            "signature_header.security_identity_shape",
+        ));
+    }
+    if !valid_numeric_text(&segment.elements()[7].components()[0], 16) {
+        return Err(invalid_signature_header(
+            "signature_header.security_reference_shape",
+        ));
+    }
+    if !valid_security_timestamp(segment.elements()[8].components()) {
+        return Err(invalid_signature_header("signature_header.timestamp_shape"));
+    }
+    let hash = segment.elements()[9].components();
+    if hash[0].as_text().as_deref() != Some("1")
+        || !valid_code_text(&hash[1])
+        || !valid_code_text(&hash[2])
+        || hash
+            .get(3)
+            .is_some_and(|value| value.as_text().is_none_or(|value| !value.is_empty()))
+    {
+        return Err(invalid_signature_header("signature_header.hash_shape"));
+    }
+    let signature = segment.elements()[10].components();
+    if signature[0].as_text().as_deref() != Some("6")
+        || !valid_code_text(&signature[1])
+        || !valid_code_text(&signature[2])
+    {
+        return Err(invalid_signature_header(
+            "signature_header.signature_algorithm_shape",
+        ));
+    }
+    let key = segment.elements()[11].components();
+    if !valid_numeric_text(&key[0], 3)
+        || key[1].as_text().is_none_or(|value| value.is_empty())
+        || key[2].as_text().is_none_or(|value| value.is_empty())
+        || !matches!(key[3].as_text().as_deref(), Some("D" | "S" | "V"))
+        || !valid_numeric_text(&key[4], 3)
+        || !valid_numeric_text(&key[5], 3)
+    {
+        return Err(invalid_signature_header("signature_header.key_name_shape"));
+    }
+    if segment
+        .element(12)
+        .is_some_and(|element| element.components().len() != 1 || !element_is_empty(element))
+    {
+        return Err(invalid_signature_header(
+            "signature_header.certificate_occupancy",
+        ));
+    }
+    Ok(reference)
 }
 
 fn validate_signature_trailer(segment: &Segment, expected_reference: &str) -> Result<(), Error> {
-    let header = segment.header().ok_or(Error::InvalidResponse {
-        structure: "authenticated response signature trailer",
-    })?;
-    if header.code != b"HNSHA"
-        || header.version != 2
-        || header.reference.is_some()
-        || !(2..=4).contains(&segment.elements().len())
+    let header = segment
+        .header()
+        .ok_or_else(|| invalid_signature_header("signature_trailer.segment_header"))?;
+    if header.code != b"HNSHA" || header.version != 2 || header.reference.is_some() {
+        return Err(invalid_signature_header("signature_trailer.segment_header"));
+    }
+    if !(2..=4).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 1)
         || segment
             .element(2)
@@ -571,29 +637,40 @@ fn validate_signature_trailer(segment: &Segment, expected_reference: &str) -> Re
             .element(3)
             .is_some_and(|element| !element_is_empty(element))
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response signature trailer",
-        });
+        return Err(invalid_signature_header("signature_trailer.element_shape"));
     }
     if required_segment_text(
         segment,
         1,
         "authenticated response security control reference",
-    )? != expected_reference
+    )
+    .map_err(|_| invalid_signature_header("signature_trailer.control_reference"))?
+        != expected_reference
     {
-        return Err(Error::InvalidResponse {
-            structure: "authenticated response security control reference",
-        });
+        return Err(invalid_signature_header(
+            "signature_trailer.control_reference",
+        ));
     }
     Ok(())
 }
 
-fn signature_control_reference(segment: &Segment) -> Result<String, Error> {
-    required_segment_text(
-        segment,
-        3,
-        "authenticated response security control reference",
-    )
+fn invalid_signature_header(structure: &'static str) -> Error {
+    Error::InvalidResponse { structure }
+}
+
+fn valid_code_text(value: &crate::wire::Value) -> bool {
+    value.as_text().is_some_and(|value| {
+        !value.is_empty() && encoding_rs::mem::encode_latin1_lossy(&value).len() <= 3
+    })
+}
+
+fn valid_numeric_text(value: &crate::wire::Value, max: usize) -> bool {
+    value
+        .as_text()
+        .is_some_and(|value| !value.is_empty() && value.len() <= max)
+        && value
+            .as_text()
+            .is_some_and(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn required_segment_text(
