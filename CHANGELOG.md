@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Expanded acceptance across dialog aborts, parameter state, security fillers, camt, SWIFT, and credit-card data to the full specification-permitted value space.
+  Strict bounds, redaction, malformed-input rejection, and typed unsupported outcomes remain intact.
+  Added independent accepted-shape and adjacent-malformed fixtures for every changed boundary.
+
 - **2026-07-29** — Added typed anonymous-BPD recovery when terminated function-999 discovery returns valid 3920 identifiers without usable HITANS descriptions.
   Unpublished 99xx companions remain uninterpreted and contextual; every published credential, security, lock, registration, and protocol error remains fatal.
   Added fictional refresh, method-intersection, dialog-lifecycle, malformed-response, redaction, and process-memory regressions.

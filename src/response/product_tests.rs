@@ -370,6 +370,60 @@ fn securities_document_rejects_missing_leading_crlf() {
     ));
 }
 
+// DK Anlage 3 v3.9 chapter 4 rule 6 plus the owner-ratified transport shape:
+// MT535 and MT536 accept one CRLF after the final "-" and reject two.
+#[test]
+fn securities_documents_accept_exactly_one_trailing_crlf() {
+    let mt535 = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":98A::STAT//20260729\r\n",
+        ":22F::STTY//CUST\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        "-"
+    );
+    let mt536 = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":69A::STAT//20260701/20260729\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        "-"
+    );
+    for (code, version, payload) in [("HIWPD", 6, mt535), ("HIWDU", 5, mt536)] {
+        let one = format!("{payload}\r\n");
+        let response =
+            Response::parse(&message_with_binary(code, version, one.as_bytes())).unwrap();
+        let accepted = if code == "HIWPD" {
+            response.depot_positions().map(|value| value.is_some())
+        } else {
+            response
+                .securities_transactions()
+                .map(|value| value.is_some())
+        };
+        assert!(matches!(accepted, Ok(true)));
+
+        let two = format!("{payload}\r\n\r\n");
+        let response =
+            Response::parse(&message_with_binary(code, version, two.as_bytes())).unwrap();
+        let rejected = if code == "HIWPD" {
+            response.depot_positions().map(|_| ())
+        } else {
+            response.securities_transactions().map(|_| ())
+        };
+        assert!(matches!(rejected, Err(Error::MalformedSecuritiesData)));
+    }
+}
+
 // DK Anlage 3 v3.9, 4.3: 98C carries an ASCII-numeric date and time.
 // A fictional Latin-1 high byte inside the date must be a typed parse error,
 // never a UTF-8 character-boundary panic.
@@ -570,6 +624,47 @@ fn malformed_credit_card_entries_are_typed_errors() {
             structure: "partial credit-card original amount"
         })
     ));
+}
+
+// Owner-ratified CR0538 live shape: one all-empty final entry DEG is padding,
+// and components after the 29 defined entry positions are meaning-neutral
+// extensions. A second empty DEG or a partially filled DEG remains malformed.
+#[test]
+fn credit_card_entries_accept_one_empty_tail_and_unknown_components() {
+    let entry = concat!(
+        "444433******1111:20260727:20260728::20260728",
+        ":10,00:USD:D:0,9:9,00:EUR:D",
+        ":Purchase:at merchant:Second group:detail:::::DE",
+        ":Fictional Merchant:TERM-1:N",
+        ":BOOKREF-1:F001:07-2026:Cash fee:AEE:EXTENSION:MORE"
+    );
+    let accepted = message(&[
+        "HIRMG:2:2+0010::accepted",
+        &format!("HIKKU:3:1:4+444433******1111+++++{entry}+"),
+    ]);
+    assert_eq!(
+        Response::parse(&accepted)
+            .unwrap()
+            .credit_card_transactions()
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+
+    for tail in ["++", "+partially-filled"] {
+        let fixture = message(&[
+            "HIRMG:2:2+0010::accepted",
+            &format!("HIKKU:3:1:4+444433******1111+++++{entry}{tail}"),
+        ]);
+        assert!(
+            Response::parse(&fixture)
+                .unwrap()
+                .credit_card_transactions()
+                .is_err()
+        );
+    }
 }
 
 // FinTS Messages 2022 C.4.3.1-C.4.3.2 and G112 C.12.1-C.12.2:

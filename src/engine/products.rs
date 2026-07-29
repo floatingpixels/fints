@@ -115,8 +115,9 @@ impl Engine {
             "HKWPD",
             Limitation::DepotPositionsNotAuthorized,
         )?;
-        if !self.state.depot_positions_supported {
-            return Err(if self.state.depot_positions_advertised {
+        let parameters = self.parameters();
+        if !parameters.depot_positions_supported {
+            return Err(if parameters.depot_positions_advertised {
                 Limitation::DepotPositionsVersion
             } else {
                 Limitation::DepotPositionsNotAdvertised
@@ -124,7 +125,7 @@ impl Engine {
             .into());
         }
         let requires_tan = required_tan(
-            self.state.depot_positions_requires_tan,
+            parameters.depot_positions_requires_tan,
             Limitation::PinTanParameters,
         )?;
         let tan = self.product_tan(requires_tan)?;
@@ -341,8 +342,9 @@ impl Engine {
             "HKWDU",
             Limitation::SecuritiesTransactionsNotAuthorized,
         )?;
-        if !self.state.securities_transactions_supported {
-            return Err(if self.state.securities_transactions_advertised {
+        let parameters = self.parameters();
+        if !parameters.securities_transactions_supported {
+            return Err(if parameters.securities_transactions_advertised {
                 Limitation::SecuritiesTransactionsVersion
             } else {
                 Limitation::SecuritiesTransactionsNotAdvertised
@@ -350,7 +352,7 @@ impl Engine {
             .into());
         }
         let requires_tan = required_tan(
-            self.state.securities_transactions_requires_tan,
+            parameters.securities_transactions_requires_tan,
             Limitation::PinTanParameters,
         )?;
         let tan = self.product_tan(requires_tan)?;
@@ -569,8 +571,9 @@ impl Engine {
             "HKKKU",
             Limitation::CreditCardTransactionsNotAuthorized,
         )?;
-        let capability = self.state.credit_card_transactions.clone().ok_or(
-            if self.state.credit_card_transactions_advertised {
+        let parameters = self.parameters();
+        let capability = parameters.credit_card_transactions.clone().ok_or(
+            if parameters.credit_card_transactions_advertised {
                 Limitation::CreditCardTransactionsVersion
             } else {
                 Limitation::CreditCardTransactionsNotAdvertised
@@ -580,7 +583,7 @@ impl Engine {
             return Err(Limitation::CreditCardTransactionsVersion.into());
         }
         let requires_tan = required_tan(
-            self.state.credit_card_transactions_requires_tan,
+            parameters.credit_card_transactions_requires_tan,
             Limitation::PinTanParameters,
         )?;
         let tan = self.product_tan(requires_tan)?;
@@ -836,15 +839,16 @@ impl Engine {
             "HKKKS",
             Limitation::CreditCardBalanceNotAuthorized,
         )?;
-        let account_required = self.state.credit_card_balance_account_required.ok_or(
-            if self.state.credit_card_balance_advertised {
+        let parameters = self.parameters();
+        let account_required = parameters.credit_card_balance_account_required.ok_or(
+            if parameters.credit_card_balance_advertised {
                 Limitation::CreditCardBalanceVersion
             } else {
                 Limitation::CreditCardBalanceNotAdvertised
             },
         )?;
         let requires_tan = required_tan(
-            self.state.credit_card_balance_requires_tan,
+            parameters.credit_card_balance_requires_tan,
             Limitation::PinTanParameters,
         )?;
         let tan = self.product_tan(requires_tan)?;
@@ -894,7 +898,7 @@ impl Engine {
         if let Some(error) = response.first_error() {
             return self.fail_card_balance(Error::Bank(error));
         }
-        let requires_tan = self.state.credit_card_balance_requires_tan == Some(true);
+        let requires_tan = self.parameters().credit_card_balance_requires_tan == Some(true);
         let challenge = match self.product_response_challenge(
             &response,
             pending,
@@ -955,11 +959,7 @@ impl Engine {
         unauthorized: Limitation,
     ) -> Result<Account, Error> {
         let account = self.accounts().get(index).ok_or(unauthorized)?.clone();
-        let permission = account
-            .allowed_operations
-            .iter()
-            .find(|permission| permission.code == operation)
-            .ok_or(unauthorized)?;
+        let permission = account.required_signatures(operation).ok_or(unauthorized)?;
         let account_type_matches = match operation {
             "HKWPD" | "HKWDU" => account
                 .account_type
@@ -972,7 +972,7 @@ impl Engine {
         if !account_type_matches {
             return Err(unauthorized.into());
         }
-        if permission.required_signatures > 1 {
+        if permission > 1 {
             return Err(Limitation::MultipleSigners.into());
         }
         Ok(account)

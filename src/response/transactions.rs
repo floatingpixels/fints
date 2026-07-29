@@ -4,7 +4,7 @@ use crate::{
     wire::{Segment, Value},
 };
 
-use super::optional_component;
+use super::{camt_descriptor_matches, optional_component};
 
 mod camt;
 mod mt940;
@@ -61,9 +61,10 @@ fn parse_camt(
         }
         account = Some(parsed_account);
         let descriptor = single_text(segment, 2, "HICAZ camt descriptor")?;
-        // Messages 2022 echoes the negotiated camt descriptor in HICAZ. A
-        // differently normalized value is deliberately not treated as equivalent.
-        if descriptor != expected_descriptor {
+        // Messages 2022 echoes the negotiated camt descriptor in HICAZ.
+        // Descriptor identifiers are compared case-insensitively and permit
+        // the optional schema-file suffix used by the DD.
+        if !camt_descriptor_matches(&descriptor, expected_descriptor) {
             return Err(Error::InvalidValue {
                 field: "HICAZ camt descriptor",
             });
@@ -171,6 +172,7 @@ fn parse_international_account(components: &[Value]) -> Result<Account, Error> {
         owner_name_2: None,
         product_name: None,
         allowed_operations: Vec::new(),
+        unlisted_operations_unknown: false,
     })
 }
 

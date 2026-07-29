@@ -159,7 +159,7 @@ impl Client {
     }
 
     pub fn tan_methods(&self) -> &[TanMethod] {
-        self.engine.state().tan_methods()
+        self.engine.tan_methods()
     }
 
     pub fn allowed_tan_methods(&self) -> &[String] {

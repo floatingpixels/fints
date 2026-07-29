@@ -14,6 +14,7 @@ mod transactions;
 pub(crate) struct Response {
     dialog_id: String,
     message_number: u16,
+    dialog_abort: bool,
     segments: Vec<Segment>,
     responses: Vec<BankResponse>,
     allowed_tan_methods: Vec<String>,
@@ -148,9 +149,20 @@ impl Response {
                 field: "HIRMG response segment",
             });
         }
+        // Formals B.7.6 fixes the unsigned abort message to
+        // HNHBK+HIRMG+HNHBS. For a mid-dialog failure, either identifier may
+        // be unavailable and use the normative sentinel.
+        let dialog_abort = !message.is_security_enveloped()
+            && message.segments().len() == 3
+            && segments.len() == 1
+            && (dialog_id == "unbekannt" || message_number == 9999)
+            && responses
+                .iter()
+                .any(|response| response.class() == ResponseClass::Error);
         Ok(Self {
             dialog_id,
             message_number,
+            dialog_abort,
             segments,
             responses,
             allowed_tan_methods,
@@ -165,6 +177,10 @@ impl Response {
 
     pub(crate) fn message_number(&self) -> u16 {
         self.message_number
+    }
+
+    pub(crate) fn is_dialog_abort(&self) -> bool {
+        self.dialog_abort
     }
 
     pub(crate) fn responses(&self) -> &[BankResponse] {
@@ -231,6 +247,10 @@ impl Response {
         state: &mut ReusableState,
     ) -> Result<Option<Vec<crate::model::Account>>, Error> {
         parameters::apply(&self.segments, state, true)
+    }
+
+    pub(crate) fn bpd_version(&self) -> Result<Option<u16>, Error> {
+        parameters::bpd_version(&self.segments)
     }
 
     pub(crate) fn bpd_institute(&self) -> Result<Option<crate::model::InstituteState>, Error> {
@@ -311,9 +331,9 @@ fn is_tan_security_function(value: &str) -> bool {
             .is_ok_and(|value| (900..=997).contains(&value) || value == 999)
 }
 
-// FinTS Formals B.7.1 and B.8 restore the logical institute-response order
-// inside HNVSD. PIN/TAN B.1 and F.2 retain an optional HNSHK/HNSHA control
-// pair around HIRMG, HIRMS, and response data, without bank-signature material.
+// FinTS Formals B.7.1 permits an optional HNSHK/HNSHA control pair in the
+// unencrypted response layout. B.8 restores the same logical order inside
+// HNVSD; PIN/TAN B.1 and F.2 use the controls without bank-signature material.
 fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
     let payload = message.payload_segments()?;
     let security_enveloped = message.is_security_enveloped();
@@ -345,8 +365,7 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
     if signature_headers == 0 && signature_trailers == 0 {
         return Ok(payload);
     }
-    if !security_enveloped || signature_headers != 1 || signature_trailers != 1 || payload.len() < 3
-    {
+    if signature_headers != 1 || signature_trailers != 1 || payload.len() < 3 {
         return Err(Error::InvalidResponse {
             structure: "authenticated response security controls",
         });
@@ -447,8 +466,8 @@ fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
 
     let encryption = segment.elements()[6].components();
     if encryption[0].as_text().as_deref() != Some("2")
-        || encryption[1].as_text().as_deref() != Some("2")
-        || encryption[2].as_text().as_deref() != Some("13")
+        || !matches!(encryption[1].as_text().as_deref(), Some("2" | "18"))
+        || !matches!(encryption[2].as_text().as_deref(), Some("13" | "14"))
     {
         return Err(invalid_encryption_header(
             "encryption_header.algorithm_codes",
@@ -645,6 +664,8 @@ fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
 }
 
 fn validate_signature_trailer(segment: &Segment, expected_reference: &str) -> Result<(), Error> {
+    // HBCI Security DD defines the signature trailer "ab Segmentversion 2";
+    // version 2 is the only currently defined HNSHA layout.
     let header = segment
         .header()
         .ok_or_else(|| invalid_signature_header("signature_trailer.segment_header"))?;
@@ -724,6 +745,21 @@ fn element_is_empty(element: &crate::wire::Element) -> bool {
         .components()
         .iter()
         .all(|value| value.as_text().is_some_and(|value| value.is_empty()))
+}
+
+pub(super) fn camt_descriptor_matches(value: &str, expected: &str) -> bool {
+    strip_ascii_suffix(value, ".xsd").eq_ignore_ascii_case(strip_ascii_suffix(expected, ".xsd"))
+}
+
+fn strip_ascii_suffix<'a>(value: &'a str, suffix: &str) -> &'a str {
+    value
+        .get(..value.len().saturating_sub(suffix.len()))
+        .filter(|prefix| {
+            value
+                .get(prefix.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        })
+        .unwrap_or(value)
 }
 
 fn required_message_text(

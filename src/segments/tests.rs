@@ -105,6 +105,7 @@ fn fictional_account(iban: Option<&str>) -> Account {
         owner_name_2: None,
         product_name: Some("Checking".to_owned()),
         allowed_operations: Vec::new(),
+        unlisted_operations_unknown: false,
     }
 }
 

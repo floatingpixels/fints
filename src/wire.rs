@@ -13,8 +13,10 @@ mod parser;
 use parser::parse_segment_sequence;
 
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
-const MAX_SEGMENTS: usize = 256;
-const MAX_ELEMENTS_PER_SEGMENT: usize = 256;
+// Formals permits segment numbers through 999, and HIUPD "Erlaubte GV"
+// repeats up to 999 times. The independent 1 MiB message bound still caps memory.
+const MAX_SEGMENTS: usize = 1_000;
+const MAX_ELEMENTS_PER_SEGMENT: usize = 1_000;
 // PIN/TAN B.8.2 permits 98 HITANS 7 methods in one parameter DEG:
 // three leading parameters plus 98 method blocks of 26 components.
 const MAX_COMPONENTS_PER_ELEMENT: usize = 3 + 98 * 26;

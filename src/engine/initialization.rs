@@ -135,11 +135,7 @@ impl Engine {
                     field: "3920 TAN method response",
                 });
             }
-            if response.allowed_tan_methods().is_empty() {
-                return Err(Error::MissingValue {
-                    field: "valid 3920 TAN method parameter",
-                });
-            }
+            validate_discovered_methods(&response)?;
             // PIN/TAN 2020 B.6.1 and B.8.2: 9800/9955 terminates the
             // function-999 discovery dialog at the institute. T8 requires an
             // anonymous BPD refresh when 3920 cannot be matched to a described
@@ -182,11 +178,7 @@ impl Engine {
                     field: "3920 TAN method response",
                 });
             }
-            if response.allowed_tan_methods().is_empty() {
-                return Err(Error::MissingValue {
-                    field: "valid 3920 TAN method parameter",
-                });
-            }
+            validate_discovered_methods(&response)?;
             if !self.has_usable_allowed_tan_method() {
                 return Ok(InitializationResult::RefreshParameters);
             }
@@ -194,7 +186,7 @@ impl Engine {
         let selected = self.state.selected_tan_method.as_deref();
         if selected.is_none()
             || !self
-                .state
+                .parameters()
                 .tan_methods
                 .iter()
                 .any(|method| Some(method.security_function.as_str()) == selected)
@@ -228,10 +220,26 @@ impl Engine {
     }
 
     fn has_usable_allowed_tan_method(&self) -> bool {
-        self.state.tan_methods.iter().any(|method| {
+        self.parameters().tan_methods.iter().any(|method| {
             self.allowed_tan_methods
                 .iter()
                 .any(|allowed| allowed == &method.security_function)
         })
     }
+}
+
+fn validate_discovered_methods(response: &Response) -> Result<(), Error> {
+    if response.allowed_tan_methods().is_empty() {
+        return Err(Error::MissingValue {
+            field: "valid 3920 TAN method parameter",
+        });
+    }
+    if response
+        .allowed_tan_methods()
+        .iter()
+        .all(|method| method == "999")
+    {
+        return Err(Limitation::TanMethod.into());
+    }
+    Ok(())
 }

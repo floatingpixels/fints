@@ -10,7 +10,8 @@ use super::MAX_TRANSACTION_PAGE_ENTRIES;
 pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
     let text = encoding_rs::mem::decode_latin1(input);
     // DK Anlage 3 v3.8, 8.1 requires CRLF separators and the final "-" record.
-    // A trailing CRLF after that terminator stays a strict live-compat watch item.
+    // One transport-style CRLF after the terminator is an owner-ratified tolerance.
+    let text = text.strip_suffix("\r\n").unwrap_or(&text);
     if !text.starts_with("\r\n") || !text.ends_with("\r\n-") {
         return Err(Error::MalformedTransactionData);
     }
@@ -25,7 +26,8 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
             continue;
         }
         if line.is_empty() {
-            return Err(Error::MalformedTransactionData);
+            // DK 8.1 permits empty separator records between logical fields.
+            continue;
         }
         if let Some((tag, value)) = parse_tag(line) {
             fields.push(Field {
@@ -334,11 +336,14 @@ fn parse_statement_number(value: &str) -> Result<(String, Option<String>), Error
 }
 
 fn parse_balance_currency(value: &str) -> Result<String, Error> {
-    let currency = value.get(7..10).ok_or(Error::MalformedTransactionData)?;
-    if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
-        return Err(Error::MalformedTransactionData);
-    }
-    Ok(currency.to_owned())
+    let after_direction = value.get(1..).ok_or(Error::MalformedTransactionData)?;
+    after_direction
+        .as_bytes()
+        .windows(3)
+        .position(|window| window.iter().all(u8::is_ascii_uppercase))
+        .and_then(|start| after_direction.get(start..start + 3))
+        .map(str::to_owned)
+        .ok_or(Error::MalformedTransactionData)
 }
 
 fn parse_amount(value: &str, currency: &str) -> Result<Amount, Error> {

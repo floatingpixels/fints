@@ -27,6 +27,7 @@ pub(crate) struct Engine {
     product: ProductIdentity,
     credentials: Credentials,
     state: ReusableState,
+    transient_bpd: Option<ReusableState>,
     allowed_tan_methods: Vec<String>,
     allowed_tan_methods_known: bool,
     tan_media: Vec<TanMedium>,
@@ -135,6 +136,7 @@ impl Engine {
             product,
             credentials,
             state,
+            transient_bpd: None,
             allowed_tan_methods: Vec::new(),
             allowed_tan_methods_known: false,
             tan_media: Vec::new(),
@@ -154,6 +156,10 @@ impl Engine {
 
     pub(crate) fn into_state(self) -> ReusableState {
         self.state
+    }
+
+    pub(crate) fn tan_methods(&self) -> &[TanMethod] {
+        &self.parameters().tan_methods
     }
 
     pub(crate) fn accounts(&self) -> &[crate::model::Account] {
@@ -181,7 +187,7 @@ impl Engine {
             return Err(InputError::TanMethod.into());
         }
         if !self
-            .state
+            .parameters()
             .tan_methods
             .iter()
             .any(|method| method.security_function == security_function)
@@ -326,27 +332,23 @@ impl Engine {
         if !account.allows_balance() {
             return Err(Limitation::BalanceNotAuthorized.into());
         }
-        let signatures = account
-            .allowed_operations
-            .iter()
-            .find(|operation| operation.code == "HKSAL")
-            .map(|operation| operation.required_signatures)
-            .unwrap_or(0);
+        let signatures = account.required_signatures("HKSAL").unwrap_or(0);
         if signatures > 1 {
             return Err(Limitation::MultipleSigners.into());
         }
+        let parameters = self.parameters();
         let version = self
-            .state
+            .parameters()
             .balance_versions
             .iter()
             .copied()
             .find(|version| (5..=8).contains(version))
-            .ok_or(if self.state.balance_capability_advertised {
+            .ok_or(if parameters.balance_capability_advertised {
                 Limitation::BalanceVersion
             } else {
                 Limitation::BalanceNotAdvertised
             })?;
-        let tan = match self.state.balance_requires_tan {
+        let tan = match parameters.balance_requires_tan {
             Some(true) => {
                 let method = self.active_method()?.clone();
                 Some((method, self.state.selected_tan_medium.clone()))
@@ -759,6 +761,7 @@ impl Engine {
         self.requested_balance = None;
         self.transaction = None;
         self.products.clear();
+        self.transient_bpd = None;
         Ok(())
     }
 
@@ -768,11 +771,21 @@ impl Engine {
         self.requested_balance = None;
         self.transaction = None;
         self.products.clear();
+        self.transient_bpd = None;
     }
 
     fn accept_dialog_response(&mut self, input: &[u8]) -> Result<Response, Error> {
         let response = Response::parse(input)?;
         self.record_responses(&response);
+        if response.is_dialog_abort()
+            && let Some(error) = response.first_error()
+        {
+            // Formals B.7.6: the institute already ended the dialog and may
+            // not know its ID or message number. Preserve the actionable bank
+            // response instead of masking it as a local state mismatch.
+            self.abort_dialog();
+            return Err(Error::Bank(error));
+        }
         let dialog = self.dialog.as_mut().ok_or(Error::InconsistentState)?;
         let expected_message_number = dialog.next_message_number;
         if response.dialog_id() != dialog.id || response.message_number() != expected_message_number
@@ -797,11 +810,15 @@ impl Engine {
             .selected_tan_method
             .as_deref()
             .ok_or(Limitation::TanMethod)?;
-        self.state
+        self.parameters()
             .tan_methods
             .iter()
             .find(|method| method.security_function == selected)
             .ok_or_else(|| Limitation::TanMethod.into())
+    }
+
+    fn parameters(&self) -> &ReusableState {
+        self.transient_bpd.as_ref().unwrap_or(&self.state)
     }
 
     fn ensure_no_dialog(&self) -> Result<(), Error> {
@@ -891,10 +908,34 @@ impl Engine {
         {
             return Err(Limitation::InstituteMismatch.into());
         }
-        let accounts = if force_bpd_refresh {
-            response.apply_parameter_refresh(&mut self.state)?
+        let received_bpd_version = response.bpd_version()?;
+        let accounts = if received_bpd_version == Some(0) {
+            // Formals C.3.2.2 gives BPD version zero dialog-only validity.
+            // Parse it into an effective clone so reusable state remains intact.
+            let mut transient = self.state.clone();
+            let accounts = if force_bpd_refresh {
+                response.apply_parameter_refresh(&mut transient)?
+            } else {
+                response.apply_parameters(&mut transient)?
+            };
+            self.state.upd_version = transient.upd_version;
+            if transient.upd_version > 0 {
+                self.state.accounts = transient.accounts.clone();
+            }
+            self.transient_bpd = Some(transient);
+            accounts
+        } else if force_bpd_refresh {
+            let accounts = response.apply_parameter_refresh(&mut self.state)?;
+            if received_bpd_version.is_some() {
+                self.transient_bpd = None;
+            }
+            accounts
         } else {
-            response.apply_parameters(&mut self.state)?
+            let accounts = response.apply_parameters(&mut self.state)?;
+            if received_bpd_version.is_some() {
+                self.transient_bpd = None;
+            }
+            accounts
         };
         if let Some(accounts) = accounts {
             self.transient_accounts = Some(accounts);
@@ -912,23 +953,18 @@ impl Engine {
         &self,
         account: &crate::model::Account,
     ) -> Result<(TransactionFormat, bool), Error> {
-        let camt_permission = account
-            .allowed_operations
-            .iter()
-            .find(|operation| operation.code == "HKCAZ");
-        let legacy_permission = account
-            .allowed_operations
-            .iter()
-            .find(|operation| operation.code == "HKKAZ");
-        if camt_permission.is_none() && legacy_permission.is_none() {
+        let camt_signatures = account.required_signatures("HKCAZ");
+        let legacy_signatures = account.required_signatures("HKKAZ");
+        if camt_signatures.is_none() && legacy_signatures.is_none() {
             return Err(Limitation::TransactionsNotAuthorized.into());
         }
+        let parameters = self.parameters();
         let mut missing_tan_parameters = false;
-        if let (Some(permission), Some(capability)) =
-            (camt_permission, self.state.camt_capability.as_ref())
-            && permission.required_signatures <= 1
+        if let (Some(signatures), Some(capability)) =
+            (camt_signatures, parameters.camt_capability.as_ref())
+            && signatures <= 1
         {
-            if let Some(requires_tan) = self.state.camt_requires_tan {
+            if let Some(requires_tan) = parameters.camt_requires_tan {
                 return Ok((
                     TransactionFormat::Camt {
                         descriptor: capability.descriptor.clone(),
@@ -938,31 +974,30 @@ impl Engine {
             }
             missing_tan_parameters = true;
         }
-        if let Some(permission) = legacy_permission
-            && permission.required_signatures <= 1
-            && let Some(version) = self
-                .state
+        if let Some(signatures) = legacy_signatures
+            && signatures <= 1
+            && let Some(version) = parameters
                 .legacy_transaction_versions
                 .iter()
                 .copied()
                 .find(|version| (6..=7).contains(version))
         {
-            if let Some(requires_tan) = self.state.legacy_transactions_require_tan {
+            if let Some(requires_tan) = parameters.legacy_transactions_require_tan {
                 return Ok((TransactionFormat::Mt940 { version }, requires_tan));
             }
             missing_tan_parameters = true;
         }
-        if camt_permission
+        if camt_signatures
             .into_iter()
-            .chain(legacy_permission)
-            .all(|permission| permission.required_signatures > 1)
+            .chain(legacy_signatures)
+            .all(|signatures| signatures > 1)
         {
             return Err(Limitation::MultipleSigners.into());
         }
         if missing_tan_parameters {
             return Err(Limitation::PinTanParameters.into());
         }
-        if self.state.transaction_capability_advertised {
+        if parameters.transaction_capability_advertised {
             Err(Limitation::TransactionsVersion.into())
         } else {
             Err(Limitation::TransactionsNotAdvertised.into())
@@ -1130,6 +1165,10 @@ fn validate_reusable_state(state: &ReusableState) -> Result<(), Error> {
             .advertised_balance_versions
             .iter()
             .any(|version| *version > 999)
+        || state
+            .advertised_camt_descriptors
+            .iter()
+            .any(|descriptor| !valid_latin1_length(descriptor, 1, 256))
         || state
             .system_id
             .as_deref()

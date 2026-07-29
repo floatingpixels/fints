@@ -77,6 +77,11 @@ Keep optional features out until a current gate proves them necessary.
   persistence, imported-data persistence, UI, and retry policy between user actions.
 - Public inputs and outputs are product-neutral. Never expose Tauri, SQL, Finanzplaner,
   or consumer storage types.
+- Acceptance follows the specification's full permitted value space, not the fixture's
+  example. Meaning-neutral fields—constants and fillers whose value does not change
+  interpretation, safety, or security—are read past, not enforced. Rejection is
+  reserved for malformed, ambiguous, meaning-changing, or bound-violating data. Strict
+  bounds, redaction, and structural validation remain untouched.
 - Prefer concrete operation types over a universal segment tree in the public API.
 - Missing advertised operations and unsupported parameter combinations are normal typed
   limitations, not guessed fallbacks.

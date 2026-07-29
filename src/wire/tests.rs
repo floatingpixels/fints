@@ -191,3 +191,79 @@ fn wire_errors_contain_only_structure_and_safe_counts() {
         )
     );
 }
+
+// Formals segment numbering permits 999 physical segments, while HIUPD
+// Erlaubte GV repeats up to 999 times. The parser bounds are 1000 and remain
+// subordinate to the independent one-megabyte message bound.
+#[test]
+fn specification_maximum_segment_and_element_counts_fit_the_parser_bounds() {
+    let make_header = |code: &str, number: usize| {
+        Element::new(vec![
+            Value::text(code).unwrap(),
+            Value::text(&number.to_string()).unwrap(),
+            Value::text("1").unwrap(),
+        ])
+    };
+    let bounded_message = |count: usize| {
+        let mut segments = Vec::with_capacity(count);
+        segments.push(Segment::new(vec![
+            Element::new(vec![
+                Value::text("HNHBK").unwrap(),
+                Value::text("1").unwrap(),
+                Value::text("3").unwrap(),
+            ]),
+            Element::text("000000000000").unwrap(),
+            Element::text("300").unwrap(),
+            Element::text("0").unwrap(),
+            Element::text("1").unwrap(),
+        ]));
+        for number in 2..count {
+            segments.push(Segment::new(vec![make_header("HITST", number)]));
+        }
+        segments.push(Segment::new(vec![
+            Element::new(vec![
+                Value::text("HNHBS").unwrap(),
+                Value::text(&count.to_string()).unwrap(),
+                Value::text("1").unwrap(),
+            ]),
+            Element::text("1").unwrap(),
+        ]));
+        Message::new(segments).encode().unwrap()
+    };
+
+    assert_eq!(
+        Message::parse(&bounded_message(999))
+            .unwrap()
+            .segments()
+            .len(),
+        999
+    );
+    assert!(matches!(
+        Message::parse(&bounded_message(1_001)),
+        Err(WireError::TooManySegments { limit: 1_000 })
+    ));
+
+    let message_with_elements = |count: usize| {
+        let mut elements = Vec::with_capacity(count);
+        elements.push(make_header("HITST", 2));
+        elements.extend((1..count).map(|_| Element::text("X").unwrap()));
+        message_with_middle_segment(Segment::new(elements))
+            .encode()
+            .unwrap()
+    };
+    assert_eq!(
+        Message::parse(&message_with_elements(1_000))
+            .unwrap()
+            .segments()[1]
+            .elements()
+            .len(),
+        1_000
+    );
+    assert!(matches!(
+        Message::parse(&message_with_elements(1_001)),
+        Err(WireError::TooManyElements {
+            segment: 2,
+            limit: 1_000
+        })
+    ));
+}

@@ -217,6 +217,16 @@ fn signed_response_with_trailer(header: &str, trailer: &str) -> Vec<u8> {
     secured_message(inner.as_bytes(), 5, 1)
 }
 
+fn signed_clear_response(header: &str, trailer: &str) -> Vec<u8> {
+    let mut wire = format!(
+        "HNHBK:1:3+000000000000+300+dialog1+1+dialog1:1'\
+         {header}HIRMG:3:2+0010::fictional accepted'{trailer}HNHBS:5:1+1'"
+    );
+    let length = format!("{:012}", wire.len());
+    wire.replace_range(10..22, &length);
+    wire.into_bytes()
+}
+
 fn assert_redacted_signature_error(error: Error, expected: &'static str) {
     assert!(matches!(
         &error,
@@ -288,6 +298,30 @@ fn authenticated_response_without_optional_signature_controls_still_parses() {
     let response = Response::parse(&secured_message(inner.as_bytes(), 4, 1)).unwrap();
 
     assert_eq!(response.responses().len(), 2);
+}
+
+// Formals B.7.1 lists HNSHK/HNSHA as optional in the unencrypted institute
+// layout. The same exact pair validation applies without HNVSK/HNVSD.
+#[test]
+fn signed_but_unencrypted_response_is_validated_as_a_control_pair() {
+    let header = fictional_signature_header(SignatureHeaderFixture::default());
+    let valid = signed_clear_response(&header, "HNSHA:4:2+fictional-ref'");
+    assert_eq!(Response::parse(&valid).unwrap().responses()[0].code(), 10);
+
+    let missing_trailer = message(
+        &[
+            header.trim_end_matches('\'').to_owned(),
+            "HIRMG:3:2+0010::fictional accepted".to_owned(),
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&missing_trailer),
+        Err(Error::InvalidResponse {
+            structure: "authenticated response security controls"
+        })
+    ));
 }
 
 // HBCI Security 2024 B.5.1 and DD "Sicherheitsdatum und -uhrzeit";
@@ -746,7 +780,7 @@ fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific
         ),
         (
             fictional_encryption_header(EncryptionHeaderFixture {
-                algorithm_codes: ["2", "18", "13"],
+                algorithm_codes: ["2", "19", "13"],
                 ..EncryptionHeaderFixture::default()
             }),
             "encryption_header.algorithm_codes",
@@ -808,6 +842,33 @@ fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific
         }),
         "encryption_header.security_role",
     );
+}
+
+// HBCI Security 2024 DD "Verschlüsselungsalgorithmus": algorithm fillers
+// 13/14 and operation modes 2/18 are all syntactically permitted. Values
+// outside those bounded code sets remain rejected without exposing content.
+#[test]
+fn authenticated_response_accepts_all_encryption_filler_code_combinations() {
+    for mode in ["2", "18"] {
+        for algorithm in ["13", "14"] {
+            let header = fictional_encryption_header(EncryptionHeaderFixture {
+                algorithm_codes: ["2", mode, algorithm],
+                ..EncryptionHeaderFixture::default()
+            });
+            let fixture =
+                secured_message_with_encryption_header(b"HIRMG:2:2+0010::accepted'", 3, 1, &header);
+            assert!(Response::parse(&fixture).is_ok());
+        }
+    }
+    for codes in [["3", "2", "13"], ["2", "17", "13"], ["2", "2", "12"]] {
+        assert_encryption_header_error(
+            fictional_encryption_header(EncryptionHeaderFixture {
+                algorithm_codes: codes,
+                ..EncryptionHeaderFixture::default()
+            }),
+            "encryption_header.algorithm_codes",
+        );
+    }
 }
 
 // FinTS Formals B.5.2-B.5.3 and B.8 retain continuous inner numbering,
@@ -952,7 +1013,6 @@ fn malformed_hisal_five_fields_fail_with_redacted_typed_errors() {
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729:101112:EXTRA",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260230",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++1,",
-        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++++++131415",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729+++++20260728+246000",
     ];
 
@@ -970,6 +1030,30 @@ fn malformed_hisal_five_fields_fail_with_redacted_typed_errors() {
         assert!(!redacted.contains("PRIVATE654321"));
         assert!(!redacted.contains("20260230"));
         assert!(!redacted.contains("246000"));
+    }
+}
+
+// HBCI 2.2 VII.2.2: the optional HISAL 5 booking time has no meaning
+// without its optional booking date, so a syntactically valid lone time is read past.
+#[test]
+fn hisal_five_drops_lone_booking_time_but_rejects_malformed_time() {
+    for (time, accepted) in [("131415", true), ("246000", false)] {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!(
+                    "HISAL:3:5:4+654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++++++{time}"
+                ),
+            ],
+            "dialog1",
+            2,
+        );
+        let result = Response::parse(&fixture).unwrap().balance();
+        if accepted {
+            assert!(result.unwrap().unwrap().booking_time().is_none());
+        } else {
+            assert!(matches!(result, Err(Error::InvalidValue { .. })));
+        }
     }
 }
 
@@ -1113,6 +1197,51 @@ fn bpd_upd_and_user_allowed_tan_method_are_interpreted_together() {
     assert_eq!(state.tan_methods()[0].max_decoupled_polls(), Some(5));
 }
 
+// Formals E.2 "UPD-Verwendung": with value 1, an operation omitted from
+// Erlaubte GV is unknown rather than denied; value 0 remains a local deny.
+#[test]
+fn upd_usage_controls_only_unlisted_operation_permissions() {
+    for (usage, expected) in [("0", false), ("1", true)] {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HIUPA:3:4:3+fictional-user+1+{usage}"),
+                concat!(
+                    "HIUPD:4:6:3+123456::280:12345678",
+                    "+DE40123456780000123456+fictional-customer+1+EUR",
+                    "+Fictional Person++Checking"
+                )
+                .into(),
+            ],
+            "dialog1",
+            1,
+        );
+        let mut state = ReusableState::new();
+        Response::parse(&fixture)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .unwrap();
+        assert_eq!(state.accounts()[0].allows_balance(), expected);
+        assert_eq!(state.accounts()[0].allows_booked_transactions(), expected);
+        assert_eq!(state.accounts()[0].allows_depot_positions(), expected);
+    }
+
+    let malformed = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIUPA:3:4:3+fictional-user+1+2".into(),
+        ],
+        "dialog2",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&malformed)
+            .unwrap()
+            .apply_parameters(&mut ReusableState::new()),
+        Err(Error::InvalidValue { field: "UPD usage" })
+    ));
+}
+
 // FinTS Messages 2022-04-15, C.2.3.1.1.1 and C.2.1.1.1.1-.2;
 // PIN/TAN correction T31. Capability and TAN status come from BPD/UPD, not endpoints.
 #[test]
@@ -1153,6 +1282,51 @@ fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
     assert_eq!(state.camt_requires_tan, Some(false));
     assert_eq!(state.legacy_transactions_require_tan, Some(true));
     assert!(state.accounts()[0].allows_booked_transactions());
+}
+
+// Messages 2022 HICAZS and the camt format registration treat the optional
+// ".xsd" suffix and ASCII case as identifier normalization. Every advertised
+// descriptor remains a safe generic fact; malformed empty descriptors still fail.
+#[test]
+fn camt_descriptors_are_retained_and_supported_by_normalized_identity() {
+    let supported = "URN?:ISO?:STD?:ISO?:20022?:TECH?:XSD?:CAMT.052.001.08.XSD";
+    let unsupported = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.99";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+8+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+90:J:N:{unsupported}:{supported}"),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.advertised_camt_descriptors().len(), 2);
+    assert_eq!(
+        state.camt_capability.as_ref().unwrap().descriptor,
+        "URN:ISO:STD:ISO:20022:TECH:XSD:CAMT.052.001.08.XSD"
+    );
+
+    let malformed = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+9+280:12345678+Fictional Bank+9+1+300".into(),
+            "HICAZS:4:1:3+1+1+0+90:J:N:".into(),
+        ],
+        "dialog2",
+        1,
+    );
+    assert!(
+        Response::parse(&malformed)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .is_err()
+    );
 }
 
 // Gate 3 fictional Atruvia profile. The interoperability lead is non-authoritative;
@@ -1281,16 +1455,15 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
     assert!(state.balance_versions.is_empty());
 }
 
-// HBCI 2.2 VII.2.2 defines HISALS 5 as a parameter segment containing only
-// maximum orders and minimum signatures. FinTS Formals D makes its header
-// version the advertised operation version.
+// HBCI 2.2 VII.2.2 defines meaning-neutral maximum-order/signature parameters.
+// Zero maximum orders and trailing extension elements do not change HKSAL 5.
 #[test]
 fn hisals_five_is_validated_and_selected_deterministically() {
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300".into(),
-            "HISALS:4:5:3+1+1".into(),
+            "HISALS:4:5:3+0+1+ignored+extension".into(),
         ],
         "dialog1",
         1,
@@ -1322,7 +1495,7 @@ fn hisals_five_is_validated_and_selected_deterministically() {
     assert_eq!(state.advertised_balance_versions(), [8, 6, 5]);
     assert_eq!(state.balance_versions, [8, 6, 5]);
 
-    for parameters in ["0+1", "1+4", "1+1+0"] {
+    for parameters in ["1", "1+4"] {
         let malformed = message(
             &[
                 "HIRMG:2:2+0010::accepted".into(),
@@ -1332,19 +1505,18 @@ fn hisals_five_is_validated_and_selected_deterministically() {
             "dialog3",
             1,
         );
-        assert!(
-            Response::parse(&malformed)
-                .unwrap()
-                .apply_parameters(&mut state)
-                .is_err()
-        );
-        assert_eq!(state.bpd_version(), 58);
-        assert_eq!(state.balance_versions, [8, 6, 5]);
+        Response::parse(&malformed)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .unwrap();
+        assert_eq!(state.bpd_version(), 59);
+        assert_eq!(state.advertised_balance_versions(), [5]);
+        assert!(state.balance_versions.is_empty());
     }
 }
 
-// FinTS Formals C.3.2.2 and correction P26: changed BPD receive a new,
-// higher version and a transmitted BPD set is complete. A same-version HIBPA
+// FinTS Formals C.3.2.2, F.2 [IF3], and correction P26: a changed BPD
+// version may wrap or reset, and a transmitted BPD set is complete. Same-version HIBPA
 // without repeated business parameter segments must preserve every retained
 // capability; a malformed new set must not partially mutate it.
 #[test]
@@ -1422,27 +1594,28 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
     assert_eq!(state.credit_card_balance_account_required, Some(true));
     assert_eq!(state.tan_methods().len(), 1);
 
-    let stale = message(
+    let wrapped = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+56+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:6:3+1+1+0+N".into(),
         ],
         "dialog2",
         1,
     );
-    assert!(
-        Response::parse(&stale)
-            .unwrap()
-            .apply_parameters(&mut state)
-            .is_err()
-    );
-    assert_eq!(state.bpd_version(), 57);
+    Response::parse(&wrapped)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.bpd_version(), 56);
+    assert_eq!(state.balance_versions, [6]);
+    assert!(!state.depot_positions_supported);
 
     let malformed_new = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
-            "HISALS:4:5:3+0+1".into(),
+            "HIPINS:4:1:3+1+1+0+4:6:6:::HKSAL:X".into(),
         ],
         "dialog3",
         1,
@@ -1453,9 +1626,8 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
             .apply_parameters(&mut state)
             .is_err()
     );
-    assert_eq!(state.bpd_version(), 57);
-    assert!(state.depot_positions_supported);
-    assert_eq!(state.tan_methods().len(), 1);
+    assert_eq!(state.bpd_version(), 56);
+    assert_eq!(state.balance_versions, [6]);
 
     let complete_new = message(
         &[
@@ -1577,21 +1749,7 @@ fn gate3_upd_skips_non_account_records_and_applies_iban_length_correction() {
 // "TAN-Medium-Liste" 5.
 #[test]
 fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
-    let medium = [
-        "M",
-        "1",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "Fictional phone",
-        "?+49***123",
-    ]
-    .join(":");
+    let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
@@ -1608,7 +1766,21 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     assert_eq!(media[0].class(), crate::TanMediumClass::Mobile);
     assert_eq!(media[0].status(), crate::TanMediumStatus::Active);
     assert_eq!(media[0].name(), Some("Fictional phone"));
-    assert_eq!(media[0].masked_phone(), Some("+49***123"));
+    assert_eq!(media[0].masked_phone(), None);
+
+    let missing_name = ["M", "1", "", "", "", "", "", "", "", "", "", "?+49***123"].join(":");
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            format!("HITAB:3:5:4+1+{missing_name}"),
+        ],
+        "dialog2",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&fixture).unwrap().tan_media(),
+        Err(Error::MissingValue { .. })
+    ));
 }
 
 // Formals 2017-10-06, B.7.5: free bank text is not retained in public errors.

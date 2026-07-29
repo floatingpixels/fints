@@ -45,6 +45,8 @@ pub enum Limitation {
     TransactionsNotAuthorized,
     #[error("the institution requires an unsupported booked-transaction format or version")]
     TransactionsVersion,
+    #[error("the institution delivered an unsupported camt namespace")]
+    CamtNamespace,
     #[error("the institution does not advertise depot positions")]
     DepotPositionsNotAdvertised,
     #[error("the account is not authorized for depot positions")]
@@ -192,6 +194,8 @@ pub enum Error {
     RepeatedContinuationPoint,
     #[error("booked transaction data is malformed")]
     MalformedTransactionData,
+    #[error("camt transaction data contains more than one report")]
+    MultipleCamtReports,
     #[error("securities data is malformed")]
     MalformedSecuritiesData,
     #[error("the decoupled approval may not be polled again yet")]

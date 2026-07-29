@@ -34,6 +34,7 @@ fn product_account(account_type: u8, account_number: &str) -> Account {
             code: if account_type == 30 { "HKWPD" } else { "HKKKU" }.to_owned(),
             required_signatures: 1,
         }],
+        unlisted_operations_unknown: false,
     }
 }
 

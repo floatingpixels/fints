@@ -221,6 +221,19 @@ fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
+        Err(Error::Unsupported(crate::Limitation::CamtNamespace))
+    ));
+
+    let foreign_structure = format!(
+        "<Document xmlns=\"{CAMT_DESCRIPTOR}\"><BkToCstmrAcctRpt>\
+         <Rpt xmlns=\"urn:fictional:misplaced\"/></BkToCstmrAcctRpt></Document>"
+    );
+    assert!(matches!(
+        Response::parse(&camt_message(foreign_structure.as_bytes()))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
         Err(Error::MalformedTransactionData)
     ));
 
@@ -245,6 +258,120 @@ fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
 </Document>"#;
     assert!(matches!(
         Response::parse(&camt_message(wrong_encoding))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::MalformedTransactionData)
+    ));
+}
+
+// Anlage 3 v3.9 chapter 7 and ISO 20022 lexical rules: xs:decimal accepts
+// leading plus and one empty side of the decimal point; xs:date permits a
+// timezone; SplmtryData/Envlp may contain a foreign-namespace subtree.
+#[test]
+fn camt_accepts_permitted_lexical_and_supplementary_shapes() {
+    for (label, amount, date, supplementary) in [
+        ("leading plus", "+5.", "2026-07-29", ""),
+        ("leading decimal point", ".5", "2026-07-29", ""),
+        ("date timezone", "5.00", "2026-07-29+02:00", ""),
+        (
+            "foreign supplementary subtree",
+            "5.00",
+            "2026-07-29",
+            "<SplmtryData><Envlp xmlns=\"urn:fictional:extension\"><Any><Deep/></Any></Envlp></SplmtryData>",
+        ),
+    ] {
+        let xml = format!(
+            "<Document xmlns=\"{CAMT_DESCRIPTOR}\"><BkToCstmrAcctRpt><Rpt>\
+             <Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct>\
+             {supplementary}\
+             <Ntry><Amt Ccy=\"EUR\">{amount}</Amt><CdtDbtInd>CRDT</CdtDbtInd>\
+             <Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>{date}</Dt></BookgDt>\
+             <AcctSvcrRef>fictional-lexical</AcctSvcrRef>\
+             <BkTxCd/><NtryDtls><TxDtls><Amt Ccy=\"EUR\">{amount}</Amt>\
+             <BkTxCd><Domn><Cd>PMNT</Cd><Fmly><Cd>RCDT</Cd>\
+             <SubFmlyCd>ESCT</SubFmlyCd></Fmly></Domn></BkTxCd>\
+             </TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"
+        );
+        let result = Response::parse(&camt_message(xml.as_bytes()))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: format!("{CAMT_DESCRIPTOR}.XSD").to_uppercase(),
+            });
+        assert!(result.is_ok(), "{label}");
+        let page = result.unwrap().unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0].booking_date(),
+            NaiveDate::from_ymd_opt(2026, 7, 29)
+        );
+    }
+
+    for (amount, date) in [("+.", "2026-07-29"), ("1.00", "2026-07-29+14:01")] {
+        let malformed = format!(
+            "<Document xmlns=\"{CAMT_DESCRIPTOR}\"><BkToCstmrAcctRpt><Rpt>\
+             <Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct>\
+             <Ntry><Amt Ccy=\"EUR\">{amount}</Amt><CdtDbtInd>CRDT</CdtDbtInd>\
+             <Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>{date}</Dt></BookgDt>\
+             <AcctSvcrRef>fictional-malformed</AcctSvcrRef><BkTxCd/>\
+             <NtryDtls><TxDtls><Amt Ccy=\"EUR\">{amount}</Amt>\
+             <BkTxCd><Domn><Cd>PMNT</Cd><Fmly><Cd>RCDT</Cd>\
+             <SubFmlyCd>ESCT</SubFmlyCd></Fmly></Domn></BkTxCd>\
+             </TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"
+        );
+        assert!(matches!(
+            Response::parse(&camt_message(malformed.as_bytes()))
+                .unwrap()
+                .transactions(&TransactionFormat::Camt {
+                    descriptor: CAMT_DESCRIPTOR.to_owned()
+                }),
+            Err(Error::MalformedTransactionData)
+        ));
+    }
+
+    let mismatched = binary_message(
+        "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+\
+         urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.09+@",
+        b"not parsed after descriptor mismatch",
+        "'HNHBS:4:1+2'",
+    );
+    assert!(matches!(
+        Response::parse(&mismatched)
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::InvalidValue {
+            field: "HICAZ camt descriptor"
+        })
+    ));
+}
+
+// Anlage 3 v3.9 chapter 7 retains the DK single-Rpt restriction. A second
+// otherwise well-placed Rpt has a dedicated redacted error; zero reports is malformed.
+#[test]
+fn camt_multiple_reports_have_a_distinct_typed_error() {
+    let multiple = format!(
+        "<Document xmlns=\"{CAMT_DESCRIPTOR}\"><BkToCstmrAcctRpt>\
+         <Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct></Rpt>\
+         <Rpt></Rpt>\
+         </BkToCstmrAcctRpt></Document>"
+    );
+    assert!(matches!(
+        Response::parse(&camt_message(multiple.as_bytes()))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::MultipleCamtReports)
+    ));
+    let none = format!(
+        "<Document xmlns=\"{CAMT_DESCRIPTOR}\"><BkToCstmrAcctRpt/>\
+         </Document>"
+    );
+    assert!(matches!(
+        Response::parse(&camt_message(none.as_bytes()))
             .unwrap()
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
@@ -320,6 +447,51 @@ fn mt940_fixture_preserves_bank_reference_or_exact_statement_position() {
     assert_eq!(position.page_number(), Some("2"));
     assert_eq!(position.entry_index(), 2);
     assert!(page.entries[1].account_servicer_reference().is_none());
+}
+
+// DK Anlage 3 v3.8, 8.1 and 8.2.1: blank separator lines are ignorable,
+// the opening-balance date is n..6, and exactly one trailing CRLF after the
+// SWIFT terminator is owner-ratified. A second trailing CRLF remains malformed.
+#[test]
+fn mt940_accepts_variable_opening_date_blank_lines_and_one_trailing_crlf() {
+    let payload = concat!(
+        "\r\n",
+        ":20:FICTIONAL1\r\n",
+        "\r\n",
+        ":25:12345678/123456\r\n",
+        ":28C:1\r\n",
+        ":60F:C1EUR1,00\r\n",
+        ":61:260729C1,00NTRFNONREF\r\n",
+        ":62F:C1EUR2,00\r\n",
+        "-\r\n"
+    );
+    let response = Response::parse(&binary_message(
+        "HIKAZ:3:7:3+@",
+        payload.as_bytes(),
+        "'HNHBS:4:1+2'",
+    ))
+    .unwrap();
+    assert_eq!(
+        response
+            .transactions(&TransactionFormat::Mt940 { version: 7 })
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+
+    let malformed = format!("{payload}\r\n");
+    let response = Response::parse(&binary_message(
+        "HIKAZ:3:7:3+@",
+        malformed.as_bytes(),
+        "'HNHBS:4:1+2'",
+    ))
+    .unwrap();
+    assert!(matches!(
+        response.transactions(&TransactionFormat::Mt940 { version: 7 }),
+        Err(Error::MalformedTransactionData)
+    ));
 }
 
 // DK Anlage 3 v3.8, 8.2.4 permits unstructured :86: information. A leading

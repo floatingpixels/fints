@@ -42,9 +42,17 @@ pub(super) fn transactions(
         .map(|value| parse_date(&value))
         .transpose()?;
     let mut entries = Vec::new();
-    for element in elements.iter().skip(6) {
-        // CR0538 C.12.1 defines each repeated DEG as an entry. A trailing
-        // all-empty DEG is therefore malformed rather than ignorable padding.
+    for (index, element) in elements.iter().enumerate().skip(6) {
+        // Owner-ratified live shape: exactly one all-empty final repeated DEG
+        // is ignorable. Empty mid-list or multiple empty tails still fail.
+        if index + 1 == elements.len()
+            && element
+                .components()
+                .iter()
+                .all(|value| value.as_text().is_some_and(|value| value.is_empty()))
+        {
+            continue;
+        }
         entries.push(parse_entry(element.components())?);
         if entries.len() > MAX_PAGE_ENTRIES {
             return Err(Error::InvalidResponse {
@@ -116,11 +124,8 @@ fn parse_entry(components: &[Value]) -> Result<CreditCardEntry, Error> {
     // G112 / CR 538, "Umsatz Kreditkartenkonto". Components are positional;
     // the four repeated "Transaktionsbeschreibung" DEGs occupy eight flat
     // component slots. Absent trailing optional values remain absent.
-    if components.len() > 29 {
-        return Err(Error::InvalidResponse {
-            structure: "credit-card entry components",
-        });
-    }
+    // CR0538 C.12.1 defines the first 29 positional components. Unknown
+    // trailing extension components are read past without changing the result.
     Ok(CreditCardEntry {
         card_number: component(components, 0, "credit-card entry card number")?,
         receipt_date: parse_date(&component(components, 1, "credit-card receipt date")?)?,

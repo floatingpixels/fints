@@ -271,6 +271,8 @@ pub struct Account {
     pub(crate) owner_name_2: Option<String>,
     pub(crate) product_name: Option<String>,
     pub(crate) allowed_operations: Vec<OperationPermission>,
+    #[serde(default)]
+    pub(crate) unlisted_operations_unknown: bool,
 }
 
 impl Account {
@@ -311,39 +313,43 @@ impl Account {
     }
 
     pub fn allows_balance(&self) -> bool {
-        self.allowed_operations
-            .iter()
-            .any(|operation| operation.code == "HKSAL")
+        self.operation_is_not_denied("HKSAL")
     }
 
     pub fn allows_booked_transactions(&self) -> bool {
-        self.allowed_operations
-            .iter()
-            .any(|operation| matches!(operation.code.as_str(), "HKCAZ" | "HKKAZ"))
+        self.operation_is_not_denied("HKCAZ") || self.operation_is_not_denied("HKKAZ")
     }
 
     pub fn allows_depot_positions(&self) -> bool {
-        self.allowed_operations
-            .iter()
-            .any(|operation| operation.code == "HKWPD")
+        self.operation_is_not_denied("HKWPD")
     }
 
     pub fn allows_securities_transactions(&self) -> bool {
-        self.allowed_operations
-            .iter()
-            .any(|operation| operation.code == "HKWDU")
+        self.operation_is_not_denied("HKWDU")
     }
 
     pub fn allows_credit_card_transactions(&self) -> bool {
-        self.allowed_operations
-            .iter()
-            .any(|operation| operation.code == "HKKKU")
+        self.operation_is_not_denied("HKKKU")
     }
 
     pub fn allows_credit_card_balance(&self) -> bool {
+        self.operation_is_not_denied("HKKKS")
+    }
+
+    pub(crate) fn operation_permission(&self, code: &str) -> Option<&OperationPermission> {
         self.allowed_operations
             .iter()
-            .any(|operation| operation.code == "HKKKS")
+            .find(|operation| operation.code == code)
+    }
+
+    pub(crate) fn operation_is_not_denied(&self, code: &str) -> bool {
+        self.unlisted_operations_unknown || self.operation_permission(code).is_some()
+    }
+
+    pub(crate) fn required_signatures(&self, code: &str) -> Option<u8> {
+        self.operation_permission(code)
+            .map(|permission| permission.required_signatures)
+            .or(self.unlisted_operations_unknown.then_some(1))
     }
 
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
@@ -420,6 +426,8 @@ pub struct ReusableState {
     #[serde(default)]
     pub(crate) camt_capability: Option<CamtCapability>,
     #[serde(default)]
+    pub(crate) advertised_camt_descriptors: Vec<String>,
+    #[serde(default)]
     pub(crate) legacy_transaction_versions: Vec<u16>,
     #[serde(default)]
     pub(crate) camt_requires_tan: Option<bool>,
@@ -489,6 +497,14 @@ impl ReusableState {
         (self.advertised_balance_versions.contains(&version) && (5..=8).contains(&version))
             || (self.advertised_balance_versions.is_empty()
                 && self.balance_versions.contains(&version))
+    }
+
+    /// HICAZS camt descriptors advertised by the latest retained BPD.
+    ///
+    /// Descriptors are generic protocol capability facts. Unsupported values remain
+    /// present for redacted compatibility diagnostics.
+    pub fn advertised_camt_descriptors(&self) -> &[String] {
+        &self.advertised_camt_descriptors
     }
 
     pub fn accounts(&self) -> &[Account] {
@@ -1473,6 +1489,7 @@ mod tests {
         assert_eq!(state.bpd_version(), 57);
         assert_eq!(state.upd_version(), 1);
         assert!(state.advertised_balance_versions().is_empty());
+        assert!(state.advertised_camt_descriptors().is_empty());
     }
 
     #[derive(Debug)]

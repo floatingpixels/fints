@@ -39,7 +39,12 @@ access date for each source below is 2026-07-28.
   optional HNSHK 4 before its mandatory HIRMG 2 and optional HNSHA 2 before
   HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
   segment sequence, including any security controls, with continuous numbering);
-  B.4.1-B.4.2 (`bin`, `code`, `dat`, and `tim` format and restriction rules).
+  B.4.1-B.4.2 (`bin`, `code`, `dat`, and `tim` format and restriction rules);
+  B.7.6 (unsigned `HNHBK+HIRMG+HNHBS` dialog-abort message, including
+  `unbekannt` and `9999` sentinels); C.3.2.2 and F.2 process condition [IF3]
+  (dialog-transient BPD version zero and version wrap-around); E.2 and the HIUPA
+  Data Dictionary entry (`UPD-Verwendung` values 0 and 1); and the message,
+  segment, and HIUPD `Erlaubte GV` repetition maxima.
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -50,7 +55,9 @@ access date for each source below is 2026-07-28.
   products from UPD without guessing from names or identifiers. For the
   authenticated-response interoperability fix it authorizes restoring and
   validating the logical institute-response order inside HNVSD before requiring
-  HIRMG.
+  HIRMG. It also authorizes surfacing exact mid-dialog aborts as bank errors,
+  treating omitted allowed-operation entries according to `UPD-Verwendung`, and
+  replacing a changed complete BPD without assuming numeric monotonicity.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -164,9 +171,10 @@ access date for each source below is 2026-07-28.
   satisfying the field's format, restrictions, and occupancy and is irrelevant
   to processing); B.9.1-B.9.10 (PIN/TAN occupancy of HNSHK, HNSHA, HNVSK, and
   cleartext-binary HNVSD, including B.9.4-B.9.6's HNSHK certificate, hash, and
-  filler rules and B.9.9's non-normative filler examples); F.2 (each institute
-  response has HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and
-  response data).
+  filler rules and B.9.9's non-normative filler examples); C.3.1 and the
+  TAN-Medium-Liste version 5 Data Dictionary entry (mobile-media name mandatory,
+  both phone-number fields optional); F.2 (each institute response has
+  HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and response data).
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
@@ -203,8 +211,9 @@ access date for each source below is 2026-07-28.
   date and conditional time, including a timestamp-type-only HNSHK),
   `Hashalgorithmus`, `Signaturalgorithmus`, `Schlüsselname`, and
   `Verschlüsselungsalgorithmus` (component formats, 512-byte binary bound,
-  identifiers 5/6 and 1, and unoccupied IV value). PIN/TAN B.9 remains the
-  authority for profile-specific occupancy.
+  encryption algorithms 13/14, modes 2/18, identifiers 5/6 and 1, and
+  unoccupied IV value). PIN/TAN B.9 remains the authority for profile-specific
+  occupancy and makes these cleartext fields meaning-neutral fillers.
 - **Apply alongside:** the PIN/TAN volume's B.9 occupancy rules. HBCI
   key/card security profiles are not in Gate 1.
 - **Authorizes:** only the shared envelope segment layouts and field restrictions
@@ -332,9 +341,10 @@ Gate 2 additionally applies these entries:
 
 Gate 3 additionally applies **P22**, **P24**, and **P26** to every fictional
 profile: replace parameter sets after code 3081, retain the account-type
-requirement for payment accounts, and reject a bank-supplied BPD version zero.
-These corrections authorize protocol-level compatibility only; they do not
-authorize institution-specific branches.
+requirement for payment accounts, and never persist a version-zero BPD. A received
+version-zero BPD is usable only for its current dialog and replaces no reusable
+capability state. These corrections authorize protocol-level compatibility only;
+they do not authorize institution-specific branches.
 
 Gate 4 additionally applies **G112** (2024-09-30), which defines the FinTS 3.0
 credit-card balance and booked-transaction operations. No correction-register
@@ -353,13 +363,17 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   (account), 7.1.6 (entry), 7.1.7 (transaction details), and 7.2
   (camt.052 occupancy). Gate 2 accepts only `BOOK` entries from
   `camt.052.001.08`, preserves supplied entry and account-servicer references,
-  and keeps optional data absent when the XML omits it.
+  and keeps optional data absent when the XML omits it. The ISO `xs:decimal`
+  and `xs:date` lexical spaces apply, and `SplmtryData/Envlp` may contain
+  foreign-namespace extension data with no Gate 2 result semantics.
 - **Apply alongside:** G97 and G108 from the FinTS correction register and the
   FinTS Messages HKCAZ/HICAZ version 1 transport segments.
 - **Authorizes:** namespace-aware, UTF-8 camt.052.001.08 parsing of the booked
   response payload returned by HICAZ, including exact amounts, booking/value
   dates, transaction references, counterpart data, and remittance information
-  only where supplied.
+  only where supplied. The advertised and echoed descriptor is compared after
+  the Data Dictionary's optional `.xsd` suffix and ASCII case are normalized;
+  delivery in another bound camt namespace remains a typed limitation.
 - **Gate 4 sections:** 4.3 (MT535 `Statement of Holdings`, SRG 1998) and
   4.4 (MT536 `Statement of Transactions`, SRG 1998), including GENL/FIN,
   SUBBAL, TRAN/TRANSDET, instrument identifiers, quantities, prices, position

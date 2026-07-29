@@ -100,7 +100,9 @@ struct Block {
 fn document(input: &[u8]) -> Result<Block, Error> {
     let text = encoding_rs::mem::decode_latin1(input);
     // DK Anlage 3 v3.9, chapter 4 general syntax rule 6: the record starts
-    // with CRLF and ends with the final CRLF "-" record.
+    // with CRLF and ends with the final CRLF "-" record. One trailing CRLF
+    // after that terminator is an owner-ratified transport tolerance.
+    let text = text.strip_suffix("\r\n").unwrap_or(&text);
     let body = text
         .strip_prefix("\r\n")
         .and_then(|value| value.strip_suffix("\r\n-"))
@@ -588,9 +590,7 @@ fn parse_signed_amount(value: &str, prefix: &str) -> Result<SecuritiesAmount, Er
 fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
     // Anlage 3 v3.9 4.3 places the explicitly reported acquisition amount and
     // currency on line two of the structured HOLD field.
-    // Live-compat watch: both text extractions of the full-message example
-    // appear to omit the prescribed leading line-number digits. Supporting
-    // that shape needs an owner decision and fictional fixture, not tolerance.
+    // Anlage 3 v3.9 4.3 mandates the structured 70E::HOLD line-number digits.
     let body = value
         .strip_prefix(":HOLD//")
         .ok_or(Error::MalformedSecuritiesData)?;

@@ -7,7 +7,10 @@ use crate::{
     wire::{Segment, Value},
 };
 
+use super::camt_descriptor_matches;
 use super::{component, optional_component};
+
+const SUPPORTED_CAMT_DESCRIPTOR: &str = "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08";
 
 pub(super) fn apply(
     segments: &[Segment],
@@ -15,18 +18,11 @@ pub(super) fn apply(
     force_bpd_refresh: bool,
 ) -> Result<Option<Vec<Account>>, Error> {
     let received_bpd_version = bpd_version(segments)?;
-    if received_bpd_version.is_some_and(|version| version < state.bpd_version) {
-        return Err(Error::InvalidResponse {
-            structure: "stale BPD version",
-        });
-    }
-    // FinTS Formals C.3.2.2 and correction P26: a relevant BPD change has a
-    // new version and the transmitted BPD are complete. A same-version HIBPA
-    // therefore does not replace retained capabilities with an incomplete set,
-    // except after T8's explicit anonymous fetch using client version zero.
-    let replace_bpd = received_bpd_version.is_some_and(|version| {
-        version > state.bpd_version || (force_bpd_refresh && version == state.bpd_version)
-    });
+    // Formals F.2 [IF3] requires clients to handle version wrap-around.
+    // Changed versions replace atomically in either numeric direction; zero is
+    // a dialog-transient BPD and an explicit refresh may replace same-version BPD.
+    let replace_bpd = received_bpd_version
+        .is_some_and(|version| version == 0 || version != state.bpd_version || force_bpd_refresh);
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
@@ -36,6 +32,7 @@ pub(super) fn apply(
     let mut received_legacy_transaction_versions = Vec::new();
     let mut transaction_capability_advertised = false;
     let mut received_upd_version = None;
+    let mut received_upd_usage = None;
     let mut balance_requires_tan = None;
     let mut camt_requires_tan = None;
     let mut legacy_transactions_require_tan = None;
@@ -67,6 +64,13 @@ pub(super) fn apply(
                     });
                 }
                 received_upd_version = Some(version);
+                received_upd_usage = Some(match single_text(segment, 3, "UPD usage")?.as_str() {
+                    "0" => false,
+                    "1" => true,
+                    _ => {
+                        return Err(Error::InvalidValue { field: "UPD usage" });
+                    }
+                });
             }
             b"HIUPD" => {
                 require_version(header.version, 6, "HIUPD")?;
@@ -78,8 +82,12 @@ pub(super) fn apply(
                 balance_capability_advertised = true;
                 advertised_balance_versions.push(header.version);
                 if header.version == 5 {
-                    require_legacy_balance_parameters(segment)?;
-                    received_balance_versions.push(header.version);
+                    // HBCI 2.2 VII.2.2 contains only meaning-neutral order and
+                    // signature limits. A malformed legacy parameter shape is
+                    // retained as advertised-but-unsupported, not fatal to BPD.
+                    if require_legacy_balance_parameters(segment).is_ok() {
+                        received_balance_versions.push(header.version);
+                    }
                 } else if (6..=8).contains(&header.version) {
                     received_balance_versions.push(header.version);
                 }
@@ -182,9 +190,10 @@ pub(super) fn apply(
         state.balance_capability_advertised = balance_capability_advertised;
         state.balance_requires_tan = balance_requires_tan;
         state.transaction_capability_advertised = transaction_capability_advertised;
+        state.advertised_camt_descriptors = received_camt_descriptors.clone();
         state.camt_capability = received_camt_descriptors
             .into_iter()
-            .find(|descriptor| descriptor == "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08")
+            .find(|descriptor| camt_descriptor_matches(descriptor, SUPPORTED_CAMT_DESCRIPTOR))
             .map(|descriptor| CamtCapability { descriptor });
         state.legacy_transaction_versions = received_legacy_transaction_versions;
         state.camt_requires_tan = camt_requires_tan;
@@ -206,6 +215,11 @@ pub(super) fn apply(
 
     let mut transient_accounts = None;
     if let Some(version) = received_upd_version {
+        let unlisted_operations_unknown =
+            received_upd_usage.ok_or(Error::MissingValue { field: "UPD usage" })?;
+        for account in &mut received_accounts {
+            account.unlisted_operations_unknown = unlisted_operations_unknown;
+        }
         state.upd_version = version;
         if version > 0 {
             state.accounts = received_accounts;
@@ -216,7 +230,7 @@ pub(super) fn apply(
     Ok(transient_accounts)
 }
 
-fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
+pub(super) fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
     let mut received = None;
     for segment in segments {
         let Some(header) = segment.header() else {
@@ -234,7 +248,7 @@ fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
         }
         require_version(header.version, 3, "HIBPA")?;
         let version = parse_element_u16(segment, 1, "BPD version")?;
-        if version == 0 || version > 999 {
+        if version > 999 {
             return Err(Error::InvalidValue {
                 field: "BPD version",
             });
@@ -337,11 +351,7 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Vec<TanMedium>, Error> {
                     field: "TAN list number",
                 });
             }
-            TanMediumClass::Mobile
-                if optional_component(components, 10).is_none()
-                    || (optional_component(components, 11).is_none()
-                        && optional_component(components, 12).is_none()) =>
-            {
+            TanMediumClass::Mobile if optional_component(components, 10).is_none() => {
                 return Err(Error::MissingValue {
                     field: "mobile TAN medium identity",
                 });
@@ -454,6 +464,7 @@ fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
         owner_name_2: optional_single_text(elements, 7),
         product_name: optional_single_text(elements, 8),
         allowed_operations,
+        unlisted_operations_unknown: false,
     }))
 }
 
@@ -482,13 +493,13 @@ fn require_legacy_balance_parameters(segment: &Segment) -> Result<(), Error> {
     // HBCI 2.2 VII.2.2: HISALS 5 is a "Geschäftsvorfall ohne
     // Parameter" containing only maximum orders and minimum signatures.
     let elements = segment.elements();
-    if elements.len() != 3 {
+    if elements.len() < 3 {
         return Err(Error::InvalidResponse {
             structure: "HISALS 5 parameters",
         });
     }
     let maximum_orders = parse_element_u16(segment, 1, "HISALS maximum orders")?;
-    if maximum_orders == 0 || maximum_orders > 999 {
+    if maximum_orders > 999 {
         return Err(Error::InvalidValue {
             field: "HISALS maximum orders",
         });

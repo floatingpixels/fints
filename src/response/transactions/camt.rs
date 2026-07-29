@@ -29,14 +29,42 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     let mut state = CamtState::default();
     let mut nodes: usize = 0;
     let mut saw_declaration = false;
+    let mut supplementary_depth = 0_usize;
 
     loop {
         let (namespace, event) = reader
             .read_resolved_event()
             .map_err(|_| Error::MalformedTransactionData)?;
+        if supplementary_depth > 0 {
+            match event {
+                Event::Start(_) => {
+                    nodes = nodes
+                        .checked_add(1)
+                        .filter(|count| *count <= MAX_XML_NODES)
+                        .ok_or(Error::MalformedTransactionData)?;
+                    supplementary_depth = supplementary_depth
+                        .checked_add(1)
+                        .filter(|depth| *depth <= MAX_XML_DEPTH)
+                        .ok_or(Error::MalformedTransactionData)?;
+                }
+                Event::Empty(_) => {
+                    nodes = nodes
+                        .checked_add(1)
+                        .filter(|count| *count <= MAX_XML_NODES)
+                        .ok_or(Error::MalformedTransactionData)?;
+                }
+                Event::End(_) => supplementary_depth -= 1,
+                Event::DocType(_) | Event::Eof => return Err(Error::MalformedTransactionData),
+                _ => {}
+            }
+            continue;
+        }
         match event {
             Event::Start(start) => {
-                require_camt_namespace(namespace)?;
+                let document_root = !state.saw_document
+                    && stack.is_empty()
+                    && start.local_name().as_ref() == b"Document";
+                require_camt_namespace(namespace, document_root)?;
                 nodes = nodes
                     .checked_add(1)
                     .filter(|count| *count <= MAX_XML_NODES)
@@ -47,6 +75,12 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 let local = std::str::from_utf8(start.local_name().as_ref())
                     .map_err(|_| Error::MalformedTransactionData)?
                     .to_owned();
+                if local == "SplmtryData" {
+                    // ISO 20022 permits an arbitrary-namespace Envlp below
+                    // SplmtryData. It has no Gate 2 result semantics.
+                    supplementary_depth = 1;
+                    continue;
+                }
                 let currency = if local == "Amt" {
                     amount_currency(&start)?
                 } else {
@@ -88,7 +122,10 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 });
             }
             Event::Empty(start) => {
-                require_camt_namespace(namespace)?;
+                let document_root = !state.saw_document
+                    && stack.is_empty()
+                    && start.local_name().as_ref() == b"Document";
+                require_camt_namespace(namespace, document_root)?;
                 nodes = nodes
                     .checked_add(1)
                     .filter(|count| *count <= MAX_XML_NODES)
@@ -132,7 +169,7 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 );
             }
             Event::End(end) => {
-                require_camt_namespace(namespace)?;
+                require_camt_namespace(namespace, false)?;
                 let local = std::str::from_utf8(end.local_name().as_ref())
                     .map_err(|_| Error::MalformedTransactionData)?
                     .to_owned();
@@ -167,10 +204,15 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     if !stack.is_empty()
         || !state.saw_document
         || !state.saw_message
-        || state.reports != 1
         || state.entry.is_some()
         || state.detail.is_some()
     {
+        return Err(Error::MalformedTransactionData);
+    }
+    if state.reports > 1 {
+        return Err(Error::MultipleCamtReports);
+    }
+    if state.reports == 0 {
         return Err(Error::MalformedTransactionData);
     }
     if state.iban.is_none() && state.other_account_id.is_none() {
@@ -183,12 +225,12 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     })
 }
 
-fn require_camt_namespace(namespace: ResolveResult<'_>) -> Result<(), Error> {
+fn require_camt_namespace(namespace: ResolveResult<'_>, document_root: bool) -> Result<(), Error> {
     match namespace {
         ResolveResult::Bound(Namespace(value)) if value == CAMT_NAMESPACE => Ok(()),
-        ResolveResult::Unbound | ResolveResult::Bound(_) | ResolveResult::Unknown(_) => {
-            Err(Error::MalformedTransactionData)
-        }
+        ResolveResult::Bound(_) if document_root => Err(crate::Limitation::CamtNamespace.into()),
+        ResolveResult::Bound(_) => Err(Error::MalformedTransactionData),
+        ResolveResult::Unbound | ResolveResult::Unknown(_) => Err(Error::MalformedTransactionData),
     }
 }
 
@@ -496,8 +538,9 @@ impl DetailBuilder {
 }
 
 fn parse_amount(value: &str, currency: String) -> Result<Amount, Error> {
+    let value = value.strip_prefix('+').unwrap_or(value);
     let (integer, fraction) = value.split_once('.').unwrap_or((value, ""));
-    if integer.is_empty()
+    if (integer.is_empty() && fraction.is_empty())
         || !integer.bytes().all(|byte| byte.is_ascii_digit())
         || fraction.len() > 5
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
@@ -594,7 +637,29 @@ fn scaled_coefficient(amount: &Amount, scale: u8) -> Result<u128, Error> {
 }
 
 fn parse_date(value: &str) -> Result<NaiveDate, Error> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| Error::MalformedTransactionData)
+    let date = value.get(..10).ok_or(Error::MalformedTransactionData)?;
+    if !valid_timezone(value.get(10..).ok_or(Error::MalformedTransactionData)?) {
+        return Err(Error::MalformedTransactionData);
+    }
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| Error::MalformedTransactionData)
+}
+
+fn valid_timezone(value: &str) -> bool {
+    if value.is_empty() || value == "Z" {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() != 6
+        || !matches!(bytes[0], b'+' | b'-')
+        || bytes[3] != b':'
+        || !bytes[1..3].iter().all(u8::is_ascii_digit)
+        || !bytes[4..6].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let hour = u16::from(bytes[1] - b'0') * 10 + u16::from(bytes[2] - b'0');
+    let minute = u16::from(bytes[4] - b'0') * 10 + u16::from(bytes[5] - b'0');
+    hour < 14 && minute < 60 || hour == 14 && minute == 0
 }
 
 fn parse_date_time_date(value: &str) -> Result<NaiveDate, Error> {

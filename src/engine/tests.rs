@@ -3,7 +3,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 use super::*;
 use crate::{
     ResponseClass,
-    model::{Account, InstituteState, OperationPermission},
+    model::{Account, CamtCapability, InstituteState, OperationPermission},
 };
 
 fn response(segments: &[&str], dialog_id: &str, message_number: u16) -> Vec<u8> {
@@ -132,6 +132,7 @@ fn transaction_account(iban: &str, account_number: &str, operations: &[(&str, u8
                 required_signatures: *required_signatures,
             })
             .collect(),
+        unlisted_operations_unknown: false,
     }
 }
 
@@ -266,6 +267,57 @@ fn anonymous_refresh_replaces_same_version_incomplete_bpd() {
     assert_eq!(engine.state().bpd_version(), 57);
     assert_eq!(engine.state().tan_methods().len(), 1);
     assert_eq!(engine.state().tan_methods()[0].security_function(), "942");
+}
+
+// Formals C.3.2.2: institute BPD version zero is valid only for the current
+// dialog. It replaces the effective capabilities without mutating reusable state.
+#[test]
+fn bpd_version_zero_is_effective_only_for_the_active_dialog() {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.bpd_version = 57;
+    engine.state.balance_versions = vec![5];
+    engine.state.advertised_balance_versions = vec![5];
+    engine.state.balance_capability_advertised = true;
+    engine.state.balance_requires_tan = Some(false);
+    engine
+        .state
+        .accounts
+        .push(transaction_account("", "123456", &[("HKSAL", 1)]));
+
+    let fixture = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIBPA:3:3:3+0+280:12345678+Fictional Bank+9+1+300",
+            "HISALS:4:6:3+1+1+0+N",
+            "HIPINS:5:1:3+1+1+0+4:6:6:::HKSAL:N",
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        engine.accept_initialization(&fixture, now()).unwrap(),
+        InitializationResult::ChooseTanMethod
+    ));
+    assert_eq!(engine.state().bpd_version(), 57);
+    assert_eq!(engine.state().advertised_balance_versions(), [5]);
+
+    let request = engine
+        .balance_request(0, now().date(), now().time())
+        .unwrap();
+    let payload = crate::wire::Message::parse(&request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert!(
+        payload
+            .iter()
+            .any(|segment| segment.header().unwrap().code == b"HKSAL"
+                && segment.header().unwrap().version == 6)
+    );
+
+    engine.abort_dialog();
+    assert_eq!(engine.state().bpd_version(), 57);
+    assert_eq!(engine.state().advertised_balance_versions(), [5]);
 }
 
 // FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1 and response code 3920.
@@ -637,6 +689,26 @@ fn method_discovery_requires_usable_methods_and_rejects_unrelated_errors() {
         ));
     }
 
+    let mut filler_only = Engine::new(
+        InstituteId::new("280", "12345678").unwrap(),
+        ProductIdentity::new("PROD123", "1.0").unwrap(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        ReusableState::new(),
+    )
+    .unwrap();
+    let fixture = response(
+        &[
+            "HIRMG:2:2+9050::summary+9800::termination",
+            "HIRMS:3:2:4+9952::companion+3920::methods:999",
+        ],
+        "filler-only-discovery",
+        1,
+    );
+    assert!(matches!(
+        filler_only.accept_initialization(&fixture, now()),
+        Err(Error::Unsupported(Limitation::TanMethod))
+    ));
+
     let mut selected = engine_with_method(TanProcess::ProcessVariantTwo);
     let fixture = response(
         &[
@@ -956,6 +1028,56 @@ fn stale_synchronization_continuation_cannot_cross_dialogs_or_persist_state() {
     assert_ne!(engine.state().system_id(), Some("stale-fictional-system"));
 }
 
+// Formals B.7.6: the fixed unsigned HNHBK+HIRMG+HNHBS abort may use
+// "unbekannt" and/or message 9999 when the institute cannot reference the
+// active dialog. Central mid-dialog acceptance must preserve its class-9 code.
+#[test]
+fn fixed_dialog_abort_surfaces_bank_error_without_loosening_mismatch_checks() {
+    let connected = || {
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        engine
+            .accept_initialization(&initialization, now())
+            .unwrap();
+        engine
+    };
+
+    for (dialog_id, message_number) in [("unbekannt", 2), ("dialog1", 9999)] {
+        let mut engine = connected();
+        let abort = response(
+            &["HIRMG:2:2+9800::fictional abort"],
+            dialog_id,
+            message_number,
+        );
+        assert!(matches!(
+            engine.accept_termination(&abort),
+            Err(Error::Bank(bank)) if bank.code() == 9800
+        ));
+        assert!(!engine.has_active_dialog());
+        assert_eq!(engine.last_responses()[0].code(), 9800);
+    }
+
+    for abort in [
+        response(&["HIRMG:2:2+3900::warning only"], "unbekannt", 2),
+        response(
+            &[
+                "HIRMG:2:2+9800::fictional abort",
+                "HIRMS:3:2:4+9951::extra segment",
+            ],
+            "unbekannt",
+            2,
+        ),
+        response(&["HIRMG:2:2+9800::wrong dialog"], "other-dialog", 2),
+    ] {
+        let mut engine = connected();
+        assert!(matches!(
+            engine.accept_termination(&abort),
+            Err(Error::InconsistentState)
+        ));
+        assert!(engine.has_active_dialog());
+    }
+}
+
 // FinTS Formals 2017-10-06, C.6-C.7; repository safety contract:
 // a server cannot keep a typed continuation alive without a local bound.
 #[test]
@@ -1051,6 +1173,7 @@ fn balance_request_requires_advertised_version_and_account_permission() {
             code: "HKSAL".to_owned(),
             required_signatures: 1,
         }],
+        unlisted_operations_unknown: false,
     });
     let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
     assert!(matches!(
@@ -1094,6 +1217,100 @@ fn balance_request_requires_advertised_version_and_account_permission() {
         engine.accept_balance(&mismatched, now()),
         Err(Error::InconsistentState)
     ));
+}
+
+// Formals E.2 "UPD-Verwendung": an omitted Erlaubte-GV entry is locally
+// denied only for usage 0. Usage 1 permits the concrete request and leaves
+// the final authorization decision to the institute.
+#[test]
+fn upd_usage_one_allows_unknown_cash_and_product_operations() {
+    let connected = |mut engine: Engine| {
+        let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine
+                .accept_initialization(&initialization, now())
+                .unwrap(),
+            InitializationResult::Connected
+        ));
+        engine
+    };
+    let account = |account_type, unknown| {
+        let mut account = transaction_account("DE40123456780000123456", "123456", &[]);
+        account.account_type = Some(account_type);
+        account.unlisted_operations_unknown = unknown;
+        account
+    };
+
+    let mut balance = engine_with_method(TanProcess::ProcessVariantTwo);
+    balance.state.balance_versions = vec![8];
+    balance.state.balance_capability_advertised = true;
+    balance.state.balance_requires_tan = Some(false);
+    balance.state.accounts.push(account(1, true));
+    let mut balance = connected(balance);
+    let wire = balance
+        .balance_request(0, now().date(), now().time())
+        .unwrap();
+    assert!(
+        crate::wire::Message::parse(&wire)
+            .unwrap()
+            .payload_segments()
+            .unwrap()
+            .iter()
+            .any(|segment| segment.header().unwrap().code == b"HKSAL")
+    );
+
+    let mut transactions = engine_with_method(TanProcess::ProcessVariantTwo);
+    transactions.state.transaction_capability_advertised = true;
+    transactions.state.camt_capability = Some(CamtCapability {
+        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
+    });
+    transactions.state.camt_requires_tan = Some(false);
+    transactions.state.accounts.push(account(1, true));
+    let mut transactions = connected(transactions);
+    assert!(
+        transactions
+            .transaction_request(0, None, None, now().date(), now().time())
+            .is_ok()
+    );
+
+    let mut depot = engine_with_method(TanProcess::ProcessVariantTwo);
+    depot.state.depot_positions_advertised = true;
+    depot.state.depot_positions_supported = true;
+    depot.state.depot_positions_requires_tan = Some(false);
+    depot.state.accounts.push(account(30, true));
+    let mut depot = connected(depot);
+    assert!(
+        depot
+            .depot_positions_request(0, now().date(), now().time())
+            .is_ok()
+    );
+
+    for operation in ["balance", "transactions", "depot"] {
+        let mut denied = engine_with_method(TanProcess::ProcessVariantTwo);
+        denied.state.balance_versions = vec![8];
+        denied.state.balance_capability_advertised = true;
+        denied.state.balance_requires_tan = Some(false);
+        denied.state.transaction_capability_advertised = true;
+        denied.state.camt_capability = Some(CamtCapability {
+            descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
+        });
+        denied.state.camt_requires_tan = Some(false);
+        denied.state.depot_positions_advertised = true;
+        denied.state.depot_positions_supported = true;
+        denied.state.depot_positions_requires_tan = Some(false);
+        denied
+            .state
+            .accounts
+            .push(account(if operation == "depot" { 30 } else { 1 }, false));
+        let mut denied = connected(denied);
+        let result = match operation {
+            "balance" => denied.balance_request(0, now().date(), now().time()),
+            "transactions" => denied.transaction_request(0, None, None, now().date(), now().time()),
+            "depot" => denied.depot_positions_request(0, now().date(), now().time()),
+            _ => unreachable!(),
+        };
+        assert!(matches!(result, Err(Error::Unsupported(_))));
+    }
 }
 
 // FinTS Messages 2022 C.2.1.2.1-C.2.1.2.3: every implemented HISALS

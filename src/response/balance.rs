@@ -53,12 +53,7 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
             .transpose()?;
         let booking_time = match (booking_date, booking_clock) {
             (Some(date), time) => Some(Timestamp::new(date, time)),
-            (None, None) => None,
-            (None, Some(_)) => {
-                return Err(Error::InvalidResponse {
-                    structure: "HISAL 5 booking time without date",
-                });
-            }
+            (None, _) => None,
         };
         let due_date = optional_single_element(elements, 11, "balance due date")?
             .map(|value| parse_date(&value))
@@ -125,6 +120,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
             owner_name_2: None,
             product_name: None,
             allowed_operations: Vec::new(),
+            unlisted_operations_unknown: false,
         });
     }
 
@@ -154,6 +150,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
         owner_name_2: None,
         product_name: None,
         allowed_operations: Vec::new(),
+        unlisted_operations_unknown: false,
     };
     if account.iban.is_none() && account.account_number.is_none() {
         return Err(Error::MissingValue {
