@@ -780,6 +780,8 @@ fn date_only_challenge_expiry_does_not_invent_a_time() {
 fn balance_request_requires_advertised_version_and_account_permission() {
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
     engine.state.balance_versions = vec![8];
+    engine.state.advertised_balance_versions = vec![9, 8, 6];
+    engine.state.balance_capability_advertised = true;
     engine.state.balance_requires_tan = Some(false);
     engine.state.accounts.push(Account {
         iban: None,
@@ -819,6 +821,9 @@ fn balance_request_requires_advertised_version_and_account_permission() {
         .unwrap();
 
     assert_eq!(hksal.header().unwrap().version, 8);
+    assert_eq!(engine.state().advertised_balance_versions(), [9, 8, 6]);
+    assert!(engine.state().supports_balance_version(8));
+    assert!(!engine.state().supports_balance_version(9));
     assert_eq!(
         hksal.elements()[1].components()[2].as_text().unwrap(),
         "123456"
@@ -839,6 +844,50 @@ fn balance_request_requires_advertised_version_and_account_permission() {
         engine.accept_balance(&mismatched, now()),
         Err(Error::InconsistentState)
     ));
+}
+
+// FinTS Messages 2022 C.2.1.2.1-C.2.1.2.3: every implemented HISALS
+// advertisement has a corresponding HKSAL request version and cannot degrade
+// into the unsupported-version limitation.
+#[test]
+fn supported_balance_advertisements_select_each_implemented_version() {
+    for version in 6..=8 {
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        engine.state.balance_versions = vec![version];
+        engine.state.advertised_balance_versions = vec![version];
+        engine.state.balance_capability_advertised = true;
+        engine.state.balance_requires_tan = Some(false);
+        engine.state.accounts.push(transaction_account(
+            "DE40123456780000123456",
+            "123456",
+            &[("HKSAL", 1)],
+        ));
+        let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine
+                .accept_initialization(&initialization, now())
+                .unwrap(),
+            InitializationResult::Connected
+        ));
+
+        let request = engine
+            .balance_request(0, now().date(), now().time())
+            .unwrap();
+        let payload = crate::wire::Message::parse(&request)
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        assert_eq!(
+            payload
+                .iter()
+                .find(|segment| segment.header().unwrap().code == b"HKSAL")
+                .unwrap()
+                .header()
+                .unwrap()
+                .version,
+            version
+        );
+    }
 }
 
 // FinTS Formals 2017-10-06, D.2 and HIBPA 3: the BPD institute identity
@@ -863,6 +912,7 @@ fn gate3_wrong_endpoint_parameters_are_rejected_before_state_mutation() {
     ));
     assert_eq!(engine.state().bpd_version(), 0);
     assert!(engine.state.balance_versions.is_empty());
+    assert!(engine.state().advertised_balance_versions().is_empty());
 }
 
 // FinTS Formals D and Messages C.2.1.2: an advertised but unsupported HISALS
@@ -873,6 +923,7 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
     let mut unsupported = engine_with_method(TanProcess::ProcessVariantTwo);
     unsupported.state.accounts.push(account.clone());
     unsupported.state.balance_capability_advertised = true;
+    unsupported.state.advertised_balance_versions = vec![5];
     unsupported.state.balance_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
     assert!(matches!(
@@ -881,10 +932,16 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
             .unwrap(),
         InitializationResult::Connected
     ));
+    let error = unsupported
+        .balance_request(0, now().date(), now().time())
+        .unwrap_err();
     assert!(matches!(
-        unsupported.balance_request(0, now().date(), now().time()),
-        Err(Error::Unsupported(Limitation::BalanceVersion))
+        &error,
+        Error::Unsupported(Limitation::BalanceVersion)
     ));
+    assert_eq!(unsupported.state().advertised_balance_versions(), [5]);
+    assert!(!unsupported.state().supports_balance_version(5));
+    assert!(!error.to_string().contains('5'));
 
     let mut absent = engine_with_method(TanProcess::ProcessVariantTwo);
     absent.state.accounts.push(account);
@@ -897,6 +954,7 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
         absent.balance_request(0, now().date(), now().time()),
         Err(Error::Unsupported(Limitation::BalanceNotAdvertised))
     ));
+    assert!(absent.state().advertised_balance_versions().is_empty());
 }
 
 // FinTS Messages 2022-04-15, C.2.1.1.1: HKKAZ 6 requires the national

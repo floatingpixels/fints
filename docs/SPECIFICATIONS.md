@@ -203,12 +203,15 @@ is 2026-07-28.
   2022 volume. The current return-code volume still applies.
 - **Authorizes:** negotiated Gate 1 balance requests and responses for segment
   versions 6-8 and their typed account, amount, currency, sign, date/time, and
-  optional-value semantics; and Gate 2 HKCAZ 1 or bounded HKKAZ 7/6 booked
-  transaction retrieval, including the operation-specific continuation field.
-  For Gate 3 it authorizes deterministic selection from the advertised
-  operation/version combinations, never institution-name dispatch. For Gate 4
-  it authorizes only advertised and UPD-authorized HKWPD 6 and HKWDU 5 using
-  the specified MT535 and MT536 response formats.
+  optional-value semantics. The HISALS segment-header version is the generic
+  advertised-version fact used for negotiation, including when the version is
+  outside the implemented 6-8 range. It also authorizes Gate 2 HKCAZ 1 or
+  bounded HKKAZ 7/6 booked transaction retrieval, including the
+  operation-specific continuation field. For Gate 3 it authorizes deterministic
+  selection from the advertised operation/version combinations, never
+  institution-name dispatch. For Gate 4 it authorizes only advertised and
+  UPD-authorized HKWPD 6 and HKWDU 5 using the specified MT535 and MT536
+  response formats.
 - **Access/redistribution:** the same implementation grant and unchanged,
   free-redistribution conditions. No PDF is committed.
 

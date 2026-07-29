@@ -1119,6 +1119,56 @@ fn gate3_finanz_informatik_profile_deduplicates_negotiated_versions() {
     assert_eq!(response.responses()[1].code(), 3076);
 }
 
+// FinTS Formals D and Messages 2022 C.2.1.2: every HISALS header version is
+// a safe generic capability fact, while request negotiation remains limited to
+// the independently implemented HKSAL/HISAL versions 6-8.
+#[test]
+fn balance_advertisements_preserve_unsupported_versions_without_selecting_them() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+31+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+fictional unsupported parameters".into(),
+            "HISALS:5:8:3+1+1+0+N".into(),
+            "HISALS:6:9:3+fictional unsupported parameters".into(),
+            "HISALS:7:6:3+1+1+0+N".into(),
+            "HISALS:8:9:3+fictional duplicate parameters".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    state.bpd_version = 30;
+    state.advertised_balance_versions = vec![7];
+    state.balance_versions = vec![7];
+
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.advertised_balance_versions(), [9, 8, 6, 5]);
+    assert_eq!(state.balance_versions, [8, 6]);
+    assert!(state.supports_balance_version(8));
+    assert!(!state.supports_balance_version(9));
+
+    let unsupported_only = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+32+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:5:3+fictional unsupported parameters".into(),
+        ],
+        "dialog2",
+        1,
+    );
+    Response::parse(&unsupported_only)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert!(state.balance_versions.is_empty());
+}
+
 // Gate 3 fictional independent-institution legacy profile. FinTS Messages
 // C.2.1.1.1 and C.2.1.2.1 explicitly retain national HKKAZ/HKSAL version 6.
 #[test]

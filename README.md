@@ -133,6 +133,8 @@ log them.
 - BPD capabilities are replaced as a complete set and supported versions are
   selected deterministically. An advertised but unsupported balance version differs
   from an operation that was never advertised.
+- `advertised_balance_versions()` exposes only the generic HISALS version numbers;
+  pair each with `supports_balance_version()` for redacted compatibility diagnostics.
 - Non-account-bound HIUPD records are accepted without fabricating accounts, and the
   official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
 - HIBPA parameters whose institute identity differs from the configured institute

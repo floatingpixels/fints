@@ -16,6 +16,7 @@ pub(super) fn apply(
     let mut received_accounts = Vec::new();
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
+    let mut advertised_balance_versions = Vec::new();
     let mut balance_capability_advertised = false;
     let mut received_camt_descriptors = Vec::new();
     let mut received_legacy_transaction_versions = Vec::new();
@@ -71,6 +72,7 @@ pub(super) fn apply(
             }
             b"HISALS" => {
                 balance_capability_advertised = true;
+                advertised_balance_versions.push(header.version);
                 if (6..=8).contains(&header.version) {
                     received_balance_versions.push(header.version);
                 }
@@ -156,6 +158,8 @@ pub(super) fn apply(
         state.bpd_version = version;
         received_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
         received_balance_versions.dedup();
+        advertised_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
+        advertised_balance_versions.dedup();
         received_legacy_transaction_versions.sort_unstable_by(|left, right| right.cmp(left));
         received_legacy_transaction_versions.dedup();
         received_camt_descriptors.sort();
@@ -167,6 +171,7 @@ pub(super) fn apply(
         });
         received_methods.dedup_by(|left, right| left.security_function == right.security_function);
         state.balance_versions = received_balance_versions;
+        state.advertised_balance_versions = advertised_balance_versions;
         state.balance_capability_advertised = balance_capability_advertised;
         state.balance_requires_tan = balance_requires_tan;
         state.transaction_capability_advertised = transaction_capability_advertised;

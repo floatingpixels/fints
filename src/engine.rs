@@ -1296,6 +1296,10 @@ fn validate_reusable_state(state: &ReusableState) -> Result<(), Error> {
     if state.bpd_version > 999
         || state.upd_version > 999
         || state
+            .advertised_balance_versions
+            .iter()
+            .any(|version| *version > 999)
+        || state
             .system_id
             .as_deref()
             .is_some_and(|value| !valid_latin1_length(value, 1, 30))

@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-29** — Preserved every advertised HISALS version as a redacted generic capability fact after an owner-run balance limitation.
+  HKSAL negotiation remains restricted to versions 6-8; unsupported-only advertisements still return the typed `BalanceVersion` limitation.
+  Added fictional mixed-version, BPD-replacement, limitation, redaction, and reusable-state migration regressions.
+
 - **2026-07-29** — Accepted HNSHK security timestamps with omitted optional date/time after the next owner-run synchronization reached dialog termination.
   Added constant field diagnostics while retaining PIN/TAN profile, identity, algorithm, key, certificate, control-pairing, and envelope validation.
   Fictional end-to-end synchronization now proves exactly one HKEND and durable assigned system state without captured protocol data.

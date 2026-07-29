@@ -411,6 +411,8 @@ pub struct ReusableState {
     pub(crate) upd_version: u16,
     pub(crate) balance_versions: Vec<u16>,
     #[serde(default)]
+    pub(crate) advertised_balance_versions: Vec<u16>,
+    #[serde(default)]
     pub(crate) balance_capability_advertised: bool,
     pub(crate) balance_requires_tan: Option<bool>,
     #[serde(default)]
@@ -468,6 +470,20 @@ impl ReusableState {
 
     pub fn upd_version(&self) -> u16 {
         self.upd_version
+    }
+
+    /// HISALS segment versions advertised by the latest retained BPD.
+    ///
+    /// Segment codes and versions are generic protocol facts and contain no
+    /// account or parameter values. Versions unsupported by this crate remain
+    /// present so callers can report a typed compatibility diagnostic.
+    pub fn advertised_balance_versions(&self) -> &[u16] {
+        &self.advertised_balance_versions
+    }
+
+    /// Whether an advertised HISALS version is supported for HKSAL requests.
+    pub fn supports_balance_version(&self, version: u16) -> bool {
+        self.balance_versions.contains(&version)
     }
 
     pub fn accounts(&self) -> &[Account] {
@@ -1346,4 +1362,103 @@ impl Balance {
 pub(crate) fn valid_latin1_length(value: &str, minimum: usize, maximum: usize) -> bool {
     mem::is_str_latin1(value)
         && (minimum..=maximum).contains(&mem::encode_latin1_lossy(value).len())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::de::{
+        self, IntoDeserializer, Visitor,
+        value::{Error as ValueError, MapDeserializer, SeqDeserializer},
+    };
+
+    use super::*;
+
+    enum PreviousValue {
+        U16(u16),
+        None,
+        EmptySequence,
+    }
+
+    impl<'de> IntoDeserializer<'de, ValueError> for PreviousValue {
+        type Deserializer = Self;
+
+        fn into_deserializer(self) -> Self::Deserializer {
+            self
+        }
+    }
+
+    impl<'de> de::Deserializer<'de> for PreviousValue {
+        type Error = ValueError;
+
+        fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self {
+                Self::U16(value) => visitor.visit_u16(value),
+                Self::None => visitor.visit_none(),
+                Self::EmptySequence => {
+                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(std::iter::empty::<
+                        PreviousValue,
+                    >(
+                    )))
+                }
+            }
+        }
+
+        fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self {
+                Self::None => visitor.visit_none(),
+                value => visitor.visit_some(value),
+            }
+        }
+
+        fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self {
+                Self::EmptySequence => {
+                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(std::iter::empty::<
+                        PreviousValue,
+                    >(
+                    )))
+                }
+                _ => Err(de::Error::custom("expected previous-state sequence")),
+            }
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str
+            string bytes byte_buf unit unit_struct newtype_struct tuple tuple_struct
+            map struct enum identifier ignored_any
+        }
+    }
+
+    // The added advertised-version field did not exist in gate-4.5 state.
+    // Its serde default keeps that previously serialized shape readable.
+    #[test]
+    fn previous_reusable_state_shape_defaults_advertised_balance_versions() {
+        let fields = [
+            ("system_id", PreviousValue::None),
+            ("bpd_version", PreviousValue::U16(57)),
+            ("upd_version", PreviousValue::U16(1)),
+            ("balance_versions", PreviousValue::EmptySequence),
+            ("balance_requires_tan", PreviousValue::None),
+            ("tan_methods", PreviousValue::EmptySequence),
+            ("accounts", PreviousValue::EmptySequence),
+            ("selected_tan_method", PreviousValue::None),
+            ("selected_tan_medium", PreviousValue::None),
+        ];
+        let state =
+            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
+                .unwrap();
+
+        assert_eq!(state.bpd_version(), 57);
+        assert_eq!(state.upd_version(), 1);
+        assert!(state.advertised_balance_versions().is_empty());
+    }
 }
