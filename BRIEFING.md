@@ -82,3 +82,11 @@ and never persist captures. Report only generic protocol behavior: advertised se
 versions, TAN flow class, or a rounded/non-identifying result. Never commit or paste
 authenticated wire messages, challenges, credentials, account identifiers, or balances
 into Codex context, issues, commits, or fixtures.
+
+When a live exchange fails, work in this order before forming any protocol hypothesis:
+(a) rule out non-protocol causes—product-registration propagation, changed endpoints,
+and institute maintenance; the bank's response text usually states these plainly;
+(b) capture the structural skeleton of the offending message—component counts, occupied
+slots, and block and tag inventory—which is redaction-safe and takes seconds; (c) only
+then reason from the specification. Deducing intent before observing structure has
+produced every misdiagnosis so far.

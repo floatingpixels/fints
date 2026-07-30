@@ -11,8 +11,8 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# Temporary, owner-attended live diagnostics. Never enable this for normal consumers.
-# Remove after live verification of the three target banks is complete.
+# Supported, opt-in structural diagnostics. Default builds carry no diagnostic code or
+# storage, and the diagnostics never emit inspected field values.
 development-diagnostics = []
 # Internal harness entry points for the separate owner-run fuzz crate.
 fuzzing = []

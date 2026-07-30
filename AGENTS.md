@@ -68,8 +68,33 @@ Keep optional features out until a current gate proves them necessary.
 
 - Official Deutsche Kreditwirtschaft FinTS specifications are authoritative. Record the
   exact document and version used in `docs/SPECIFICATIONS.md`.
-- `fints-rs` may be inspected as implementation reference only. Do not copy it, use it
-  as an oracle, or depend on it at runtime or in tests.
+- Independent FinTS implementations (for example `fints-rs`, `python-fints`,
+  `hbci4java`) may be consulted as evidence only. Prefer observing their behaviour—the
+  wire traffic a working client produces against a real institution—over reading their
+  source: observed protocol behaviour is a fact about the institution, carries no
+  licence obligation, and answers structural questions faster than inference. Reading
+  their source is permitted solely to generate hypotheses; the implementation must then
+  be derived from a registered official source and cited to it. Never copy code,
+  transcribe tables or constants, translate functions, write code while consulting
+  theirs, treat their output as an oracle of correctness, or depend on them at runtime
+  or in tests. Most are copyleft—`python-fints` and `hbci4java` are LGPL—so deriving
+  from them would attach their obligations to this crate; this is prohibited regardless
+  of intent, and it would also foreclose a permissive licence for this repository. Where
+  consultation informed a change, record in `docs/SPECIFICATIONS.md` that it was
+  corroboration only, naming the project, revision, and licence, alongside the official
+  section the behaviour actually rests on. Behaviour with no official basis is an
+  observed interoperability fact requiring an owner decision and a fictional regression
+  fixture—never “implementation X does this”.
+- Owner-run behavioural observation—running such a client against the owner's own bank
+  access and reading the resulting message structure—is explicitly permitted and
+  encouraged when a live question resists the specification. Only generic structural
+  facts cross back into this repository: no captured payloads, credentials, or account
+  data.
+- Data-dictionary field numbers are not wire component indices. A nested data element
+  group flattens into its own components (`ktv` occupies four, `kti` six), shifting
+  every field after it. Every parser derived from a specification table records its
+  field-to-component derivation in a comment and is covered by fixtures with each nested
+  group both populated and absent.
 - The crate owns FinTS 3.0 wire syntax, dialog and synchronization state, BPD/UPD
   parsing, TAN continuation, pagination, and only the read operations named in
   `SCOPE.md`.
@@ -121,7 +146,10 @@ Keep optional features out until a current gate proves them necessary.
 - Test malformed lengths, escaping, ordering, response codes, unknown optional data,
   and redaction at the gate where they become relevant.
 - Round trips alone are insufficient because encoder and decoder can share the same
-  mistake. Include independently written expected wire messages.
+  mistake. Expected wire messages must be independently derived, not merely independently
+  typed: where a specification prints a full example message, that example is the
+  fixture source. A fixture written from the same reading of a field table that produced
+  the parser proves nothing—this failure mode has already reached production once.
 - Network-independent tests are the primary evidence. Live tests are owner-run,
   opt-in, never part of the default verification stack, and never persist captures.
 - A bank-specific workaround requires a fictional regression fixture and a comment
@@ -160,3 +188,8 @@ same toolchain.
 Prefer, in order: the smallest official-spec-backed implementation that closes the
 current gate, an explicit typed limitation, then an owner question. Never resolve
 uncertainty by implementing the more general protocol model.
+
+Before implementing a fix for observed live behavior, state the hypothesis, the
+observation that would falsify it, and the cheapest way to obtain that observation.
+When observing costs about as much as reasoning, observe. A confident conclusion
+reached without a cheap available check is a defect risk, not a finding.

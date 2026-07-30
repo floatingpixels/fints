@@ -296,15 +296,14 @@ credential-bearing request and response payloads to stdout as hexadecimal and es
 Latin-1 text. Use it only in an owner-controlled terminal; never redirect it to a file,
 paste its output into an issue or agent conversation, or enable it in normal consumers.
 
-### Temporary development diagnostics
+### Gated development diagnostics
 
 The non-default `development-diagnostics` feature exposes initialization decision
 booleans plus TAN-medium-discovery segment/response facts, the HITANS requirement
 code and active-medium count with their field positions, the emitted HKTAB selector
 shape, HITAB TAN usage option, and returned-medium classification/occupancy booleans
-for bounded, owner-attended interoperability work. It never exposes segment contents,
-response text or parameters, medium names, or generator-card values. Normal consumers
-must leave it disabled; the public API and its storage fields are absent without the
-feature. Remove the feature, `src/development_diagnostics.rs`, and its explicitly
-marked call sites together once live verification of the three target banks is
-complete.
+for owner-attended interoperability work. This is a supported, gated capability that is
+off by default. It never exposes inspected field values, segment contents, response text
+or parameters, medium names, or generator-card values. Default builds carry no
+diagnostic code or storage; the public API and its storage fields exist only when the
+feature is explicitly enabled.

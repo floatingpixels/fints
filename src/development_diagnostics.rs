@@ -1,9 +1,9 @@
-//! Temporary, opt-in diagnostics for owner-attended live interoperability work.
+//! Supported, opt-in structural diagnostics for owner-attended interoperability work.
 //!
 //! This module is compiled only with the `development-diagnostics` feature. It exposes
 //! decision booleans and bounded segment code/version facts only: no raw wire values,
-//! response text, credentials, identifiers, medium names, or financial data. Normal
-//! consumers and production builds must leave the feature off.
+//! response text, credentials, identifiers, medium names, or financial data. Default
+//! builds contain none of this module's code or storage.
 
 use crate::{TanMedium, TanMediumClass, TanMediumStatus};
 

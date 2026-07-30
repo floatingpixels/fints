@@ -241,7 +241,7 @@ impl Client {
         self.last_initialization_stage
     }
 
-    /// Temporary redacted initialization-decision facts for owner-attended development.
+    /// Opt-in redacted initialization-decision facts for owner-attended diagnostics.
     ///
     /// This API exists only with the opt-in `development-diagnostics` feature.
     #[cfg(feature = "development-diagnostics")]
@@ -251,7 +251,7 @@ impl Client {
         self.engine.development_initialization_recovery()
     }
 
-    /// Temporary redacted structure of the most recent TAN-medium discovery.
+    /// Opt-in redacted structure of the most recent TAN-medium discovery.
     ///
     /// This survives the internal HKEND exchange that replaces [`Self::last_responses`]
     /// with the termination response. It contains only ordered segment codes/versions,

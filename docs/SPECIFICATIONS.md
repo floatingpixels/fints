@@ -759,3 +759,7 @@ here. Tests must cite the applicable section and use independently written ficti
 messages rather than copied confidential or live data. Do not commit specification
 PDFs unless their redistribution terms have been reviewed and the owner explicitly
 requests it.
+
+A finding recorded here that later proves wrong is replaced by the accurate finding
+together with one line stating what was incorrect. Superseded conclusions about a real
+institution's behavior must not remain in the register.
