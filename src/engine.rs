@@ -758,6 +758,26 @@ impl Engine {
 
     pub(crate) fn accept_termination(&mut self, input: &[u8]) -> Result<(), Error> {
         let response = self.accept_dialog_response(input)?;
+        self.finish_termination(response)
+    }
+
+    pub(crate) fn accept_discovery_refresh_termination(
+        &mut self,
+        input: &[u8],
+    ) -> Result<(), Error> {
+        let response = self.accept_dialog_response(input)?;
+        if response.is_exact_global_discovery_termination() {
+            // PIN/TAN B.4.3.1 requires the open function-999 discovery dialog
+            // to be closed with HKEND. Formals C.1.2 says 9800 proves that the
+            // institute has ended it. Preserve only the already-decided T8
+            // refresh outcome; normal termination errors remain unchanged.
+            self.abort_dialog();
+            return Ok(());
+        }
+        self.finish_termination(response)
+    }
+
+    fn finish_termination(&mut self, response: Response) -> Result<(), Error> {
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
         }

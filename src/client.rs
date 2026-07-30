@@ -944,6 +944,7 @@ fn finish_initialization_with_send(
     now: NaiveDateTime,
     mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<Initialization, Error> {
+    let preserves_discovery_refresh = matches!(&result, InitializationResult::RefreshParameters);
     let outcome = match result {
         InitializationResult::Connected => return Ok(Initialization::Connected),
         InitializationResult::ChooseTanMethod => Initialization::ChooseTanMethod,
@@ -960,7 +961,11 @@ fn finish_initialization_with_send(
         let response = send(&request).inspect_err(|_error| {
             engine.abort_dialog();
         })?;
-        engine.accept_termination(&response)?;
+        if preserves_discovery_refresh {
+            engine.accept_discovery_refresh_termination(&response)?;
+        } else {
+            engine.accept_termination(&response)?;
+        }
     }
     Ok(outcome)
 }
@@ -1071,6 +1076,31 @@ mod tests {
              HNVSK:998:3+PIN:2+998+1+1::fictional-system+1+2:2:13:@8@"
         )
         .into_bytes();
+        wire.extend_from_slice(&[0; 8]);
+        wire.extend_from_slice(b":5:1+280:12345678:fictional-bank:V:0:0+0'HNVSD:999:1+@");
+        wire.extend_from_slice(inner.len().to_string().as_bytes());
+        wire.push(b'@');
+        wire.extend_from_slice(inner);
+        wire.extend_from_slice(format!("'HNHBS:{trailer_number}:1+{message_number}'").as_bytes());
+        let length = format!("{:012}", wire.len());
+        wire[10..22].copy_from_slice(length.as_bytes());
+        wire
+    }
+
+    fn function_999_response(
+        dialog_id: &str,
+        inner: &[u8],
+        message_number: u16,
+        trailer_number: u16,
+    ) -> Vec<u8> {
+        // Independently assembled PIN/TAN B.9/F.2 envelope for a profile-1
+        // institute response. No production response builder is reused.
+        let mut wire =
+            format!("HNHBK:1:3+000000000000+300+{dialog_id}+{message_number}").into_bytes();
+        wire.extend_from_slice(
+            format!("+{dialog_id}:{message_number}'HNVSK:998:3+PIN:1+998+1+1::0+1").as_bytes(),
+        );
+        wire.extend_from_slice(b"+2:2:13:@8@");
         wire.extend_from_slice(&[0; 8]);
         wire.extend_from_slice(b":5:1+280:12345678:fictional-bank:V:0:0+0'HNVSD:999:1+@");
         wire.extend_from_slice(inner.len().to_string().as_bytes());
@@ -1450,6 +1480,186 @@ mod tests {
         ));
         assert_eq!(sends, 1);
         assert!(!open_engine.has_active_dialog());
+    }
+
+    // PIN/TAN B.4.3.1 and F.2.5 require HKEND after an open function-999
+    // discovery. Formals C.1.2 says 9800 proves institute-side termination,
+    // while the current return-code register gives unpublished 9952 no
+    // standalone meaning. Preserve the pending T8 refresh outcome only for
+    // this exact, fully validated two-response sequence.
+    #[test]
+    fn open_discovery_refresh_survives_exact_bank_terminated_hkend_response() {
+        let initial = function_999_response(
+            "open-discovery",
+            b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942'",
+            1,
+            4,
+        );
+        let termination = function_999_response(
+            "open-discovery",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional bank termination",
+                "+9952::fictional unpublished companion'"
+            )
+            .as_bytes(),
+            2,
+            3,
+        );
+        let mut client = fresh_client([initial, termination]);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::RefreshParameters
+        ));
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+        assert!(!client.engine.has_active_dialog());
+        assert_eq!(
+            client
+                .last_responses()
+                .iter()
+                .map(|response| (response.code(), response.segment_number()))
+                .collect::<Vec<_>>(),
+            [(9050, None), (9800, None), (9952, None)]
+        );
+
+        let request = &client.transport.fixture_requests()[1];
+        let message = Message::parse(request).unwrap();
+        let outer = message.segments();
+        assert_eq!(
+            outer
+                .iter()
+                .map(|segment| {
+                    let header = segment.header().unwrap();
+                    (header.code.to_vec(), header.number, header.version)
+                })
+                .collect::<Vec<_>>(),
+            [
+                (b"HNHBK".to_vec(), 1, 3),
+                (b"HNVSK".to_vec(), 998, 3),
+                (b"HNVSD".to_vec(), 999, 1),
+                (b"HNHBS".to_vec(), 5, 1),
+            ]
+        );
+        let payload = message.payload_segments().unwrap();
+        assert_eq!(
+            payload
+                .iter()
+                .map(|segment| {
+                    let header = segment.header().unwrap();
+                    (header.code.to_vec(), header.number, header.version)
+                })
+                .collect::<Vec<_>>(),
+            [
+                (b"HNSHK".to_vec(), 2, 4),
+                (b"HKEND".to_vec(), 3, 1),
+                (b"HNSHA".to_vec(), 4, 2),
+            ]
+        );
+        let hnshk = &payload[0];
+        assert_eq!(
+            hnshk.elements()[1].components()[0].as_text().unwrap(),
+            "PIN"
+        );
+        assert_eq!(hnshk.elements()[1].components()[1].as_text().unwrap(), "1");
+        assert_eq!(
+            hnshk.elements()[2].components()[0].as_text().unwrap(),
+            "999"
+        );
+        assert_eq!(hnshk.elements()[3].components()[0].as_text().unwrap(), "2");
+        assert_eq!(hnshk.elements()[6].components()[2].as_text().unwrap(), "0");
+        assert_eq!(
+            payload[1].elements()[1].components()[0].as_text().unwrap(),
+            "open-discovery"
+        );
+        assert_eq!(
+            payload[2].elements()[1].components()[0].as_text().unwrap(),
+            "2"
+        );
+        #[cfg(feature = "development-diagnostics")]
+        {
+            let facts = client.development_initialization_recovery().unwrap();
+            assert!(facts.has_tan_method_response());
+            assert!(!facts.global_abort_shape());
+            assert!(!facts.eligible());
+            assert!(!format!("{facts:?}").contains("fictional"));
+        }
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    // Adjacent termination shapes remain fatal: a published credential error
+    // cannot be absorbed by the discovery-refresh outcome, even alongside the
+    // three otherwise matching global errors.
+    #[test]
+    fn discovery_refresh_does_not_absorb_published_hkend_error() {
+        let initial = function_999_response(
+            "open-discovery",
+            b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942'",
+            1,
+            4,
+        );
+        let termination = function_999_response(
+            "open-discovery",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional bank termination",
+                "+9952::fictional unpublished companion",
+                "+9942::fictional credential error'"
+            )
+            .as_bytes(),
+            2,
+            3,
+        );
+        let mut client = fresh_client([initial, termination]);
+
+        let error = initialization_error(client.initialize(now()));
+
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert!(!format!("{error:?}").contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    // The same termination response is not generally successful. When the
+    // discovery already has a usable HITANS description, the pending outcome
+    // is ChooseTanMethod and the ordinary HKEND error remains fatal.
+    #[test]
+    fn exact_hkend_error_is_not_accepted_for_choose_method_outcome() {
+        let initial = function_999_response(
+            "open-discovery",
+            concat!(
+                "HIRMG:2:2+0010::accepted'",
+                "HIRMS:3:2:4+3920::methods:942'",
+                "HIBPA:4:3:3+58+280:12345678+Fictional Bank+9+1+300'",
+                "HITANS:5:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1'"
+            )
+            .as_bytes(),
+            1,
+            6,
+        );
+        let termination = function_999_response(
+            "open-discovery",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional bank termination",
+                "+9952::fictional unpublished companion'"
+            )
+            .as_bytes(),
+            2,
+            3,
+        );
+        let mut client = fresh_client([initial, termination]);
+
+        let error = initialization_error(client.initialize(now()));
+
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(client.tan_methods().len(), 1);
+        assert_eq!(client.allowed_tan_methods(), ["942"]);
+        assert!(!format!("{error:?}").contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
     }
 
     // HBCI Security 2024 B.5.1/DD permits HNSHK timestamp type without

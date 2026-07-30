@@ -72,6 +72,45 @@ fn authenticated_message_keeps_pin_inside_binary_payload() {
     );
 }
 
+// FinTS Formals 2017-10-06, C.4.2-C.4.3; PIN/TAN 2020-07-10,
+// B.4.3.1, B.9.1-B.9.7 and F.2.5: an open function-999 discovery
+// dialog is closed by a PIN:1, security-function-999 HKEND message.
+// The expected wire is independently written rather than built from segments.
+#[test]
+fn function_999_termination_matches_independent_wire_fixture() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let credentials = Credentials::new("fictional-user", None, "private-pin").unwrap();
+    let context = SecurityContext {
+        institute: &institute,
+        credentials: &credentials,
+        system_id: "0",
+        security_function: "999",
+        profile_version: "1",
+        dialog_id: "open-discovery",
+        message_number: 2,
+        date: NaiveDate::from_ymd_opt(2026, 7, 30).unwrap(),
+        time: NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+    };
+
+    let encoded = termination(&context).unwrap();
+    let expected = concat!(
+        "HNHBK:1:3+000000000331+300+open-discovery+2'",
+        "HNVSK:998:3+PIN:1+998+1+1::0+1:20260730:120000",
+        "+2:2:13:@8@\0\0\0\0\0\0\0\0:5:1",
+        "+280:12345678:fictional-user:V:0:0+0'",
+        "HNVSD:999:1+@151@",
+        "HNSHK:2:4+PIN:1+999+2+1+1+1::0+1",
+        "+1:20260730:120000+1:999:1+6:10:16",
+        "+280:12345678:fictional-user:S:0:0'",
+        "HKEND:3:1+open-discovery'",
+        "HNSHA:4:2+2++private-pin''",
+        "HNHBS:5:1+2'"
+    )
+    .as_bytes();
+
+    assert_eq!(encoded, expected);
+}
+
 fn security_context<'a>(
     institute: &'a InstituteId,
     credentials: &'a Credentials,

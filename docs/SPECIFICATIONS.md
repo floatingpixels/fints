@@ -46,7 +46,10 @@ access date for each source below is 2026-07-28.
   Data Dictionary entry (`UPD-Verwendung` values 0 and 1); and the message,
   segment, and HIUPD `Erlaubte GV` repetition maxima. C.5-C.5.1 defines the
   unsigned anonymous dialog that retrieves current BPD; HKVVB sends BPD version
-  zero when none are retained.
+  zero when none are retained. C.1.2 defines response 9800 as institute-side
+  dialog termination and forbids a later HKEND; C.4.2-C.4.3 require a signed,
+  encrypted `HNHBK/HNSHK/HKEND/HNSHA/HNHBS` customer termination and normally
+  confirm it with response 0100.
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -59,7 +62,11 @@ access date for each source below is 2026-07-28.
   validating the logical institute-response order inside HNVSD before requiring
   HIRMG. It also authorizes surfacing exact mid-dialog aborts as bank errors,
   treating omitted allowed-operation entries according to `UPD-Verwendung`, and
-  replacing a changed complete BPD without assuming numeric monotonicity.
+  replacing a changed complete BPD without assuming numeric monotonicity. For an
+  already-decided parameter-refresh outcome, a validated HKEND response carrying
+  the exact global 9050/9800/unpublished-9952 set proves only that the discovery
+  dialog ended; it does not assign a meaning to the unpublished companion or
+  relax any other termination error.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -178,12 +185,15 @@ access date for each source below is 2026-07-28.
   filler rules and B.9.9's non-normative filler examples); C.3.1 and the
   TAN-Medium-Liste version 5 Data Dictionary entry (mobile-media name mandatory,
   both phone-number fields optional); F.2 (each institute response has
-  HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and response data).
+  HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and response data);
+  F.2.5 (profile-1, security-function-999 HKEND composition).
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
-  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. It also
+  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. B.4.3.1 and
+  F.2.5 additionally authorize closing an open function-999 discovery with a
+  profile-1, security-function-999 HKEND using the active dialog state. It also
   authorizes treating the specification-defined function-999
   9050/9800/9955/3920 response set as completed method discovery without a
   client-side HKEND. T8 additionally authorizes a typed anonymous-parameter

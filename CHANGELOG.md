@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Preserved a pending parameter refresh when its open function-999 discovery ends with the exact validated global 9050/9800/unpublished-9952 HKEND response.
+  Normal termination errors stay fatal; independent profile-1 HKEND and two-response fixtures cover envelope, numbering, lifecycle, adjacent published errors, and redaction.
+
 - **2026-07-30** — Added explicitly opt-in, boolean-only development diagnostics for the bounded initialization-recovery decision.
   Normal builds contain neither the temporary public API nor its storage; fictional feature-enabled tests preserve redaction and existing protocol behavior.
 

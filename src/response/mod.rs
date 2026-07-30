@@ -234,7 +234,14 @@ impl Response {
         // containing exactly global 9050/9800 plus unpublished 9952 is
         // classified only as a bank-terminated attempt that did not reach the
         // mandatory method result. The unpublished code receives no meaning.
-        !self.has_tan_method_response
+        !self.has_tan_method_response && self.is_exact_global_discovery_termination()
+    }
+
+    pub(crate) fn is_exact_global_discovery_termination(&self) -> bool {
+        // Formals C.1.2 defines 9800 as institute-side dialog termination. This
+        // deliberately narrow shape gives unpublished 9952 no standalone
+        // meaning: it only proves that an otherwise validated dialog has ended.
+        self.segments.len() == 1
             && self.responses.len() == 3
             && self.responses.iter().all(|response| {
                 response.class() == ResponseClass::Error
