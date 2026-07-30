@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 
 mod client;
+#[cfg(feature = "development-diagnostics")]
+mod development_diagnostics;
 mod engine;
 mod error;
 mod model;
@@ -21,6 +23,8 @@ pub use client::{
     PollingMode, SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
     SynchronizationContinuation,
 };
+#[cfg(feature = "development-diagnostics")]
+pub use development_diagnostics::InitializationRecoveryFacts;
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
 pub use model::{
     Account, Amount, Balance, BookedEntry, BookedTransactionDetail, BookedTransactions, Challenge,

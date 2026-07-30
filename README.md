@@ -212,3 +212,11 @@ cargo doc --no-deps
 
 Live bank access is never part of the default test suite. Owner credentials and captures
 must stay outside the repository.
+
+### Temporary development diagnostics
+
+The non-default `development-diagnostics` feature exposes boolean-only initialization
+decision facts for bounded, owner-attended interoperability work. Normal consumers must
+leave it disabled; the public API and its storage field are absent without the feature.
+Remove the feature, `src/development_diagnostics.rs`, and its explicitly marked call
+sites together once the live initialization issue is closed.

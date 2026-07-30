@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Added explicitly opt-in, boolean-only development diagnostics for the bounded initialization-recovery decision.
+  Normal builds contain neither the temporary public API nor its storage; fictional feature-enabled tests preserve redaction and existing protocol behavior.
+
 - **2026-07-30** — Exposed the last initialization request stage as a typed, process-memory-only diagnostic for owner-run compatibility checks.
   The four fixed stage values contain no credentials, identifiers, response values, or wire data; fictional tests cover initial, anonymous-refresh, and rediscovery failures.
 

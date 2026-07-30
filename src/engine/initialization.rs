@@ -121,19 +121,44 @@ impl Engine {
         input: &[u8],
         received_at: NaiveDateTime,
     ) -> Result<InitializationResult, Error> {
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_initialization_recovery = None;
+        }
         let requested_method = self.selected_method().ok().cloned();
         let response = Response::parse(input)?;
         self.record_responses(&response);
         self.apply_parameters(&response)?;
+        let usable_selected_method_present = requested_method.is_some();
+        let bpd_zero = self.state.bpd_version == 0;
+        let upd_zero = self.state.upd_version == 0;
+        let tan_parameters_empty = self.parameters().tan_methods.is_empty();
+        #[cfg(feature = "development-diagnostics")]
+        let has_tan_method_response = response.has_tan_method_response();
+        let global_abort_shape = response.is_global_bpdless_tan_method_discovery_abort();
+        let refresh_before_rediscovery = !usable_selected_method_present
+            && bpd_zero
+            && upd_zero
+            && tan_parameters_empty
+            && global_abort_shape;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_initialization_recovery = Some(
+                crate::development_diagnostics::InitializationRecoveryFacts::new(
+                    usable_selected_method_present,
+                    bpd_zero,
+                    upd_zero,
+                    tan_parameters_empty,
+                    has_tan_method_response,
+                    global_abort_shape,
+                    refresh_before_rediscovery,
+                ),
+            );
+        }
         let bank_terminated_discovery =
             requested_method.is_none() && response.is_bank_terminated_tan_method_discovery();
         let unclassified_terminated_discovery = requested_method.is_none()
             && response.is_unclassified_bank_terminated_tan_method_discovery();
-        let refresh_before_rediscovery = requested_method.is_none()
-            && self.state.bpd_version == 0
-            && self.state.upd_version == 0
-            && self.parameters().tan_methods.is_empty()
-            && response.is_global_bpdless_tan_method_discovery_abort();
         if refresh_before_rediscovery {
             // B.4.3.1 makes anonymous BPD a prerequisite for function-999
             // discovery. Repair that prerequisite once at the Client layer;

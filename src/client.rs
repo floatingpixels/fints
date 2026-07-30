@@ -196,6 +196,16 @@ impl Client {
         self.last_initialization_stage
     }
 
+    /// Temporary redacted initialization-decision facts for owner-attended development.
+    ///
+    /// This API exists only with the opt-in `development-diagnostics` feature.
+    #[cfg(feature = "development-diagnostics")]
+    pub fn development_initialization_recovery(
+        &self,
+    ) -> Option<crate::InitializationRecoveryFacts> {
+        self.engine.development_initialization_recovery()
+    }
+
     pub fn select_tan_method(&mut self, security_function: &str) -> Result<(), Error> {
         self.engine.choose_tan_method(security_function)
     }
@@ -1275,6 +1285,17 @@ mod tests {
             format!("{:?}", client.last_initialization_stage()),
             "Some(AnonymousBpdRefresh)"
         );
+        #[cfg(feature = "development-diagnostics")]
+        {
+            let facts = client.development_initialization_recovery().unwrap();
+            assert!(!facts.usable_selected_method_present());
+            assert!(facts.bpd_zero());
+            assert!(facts.upd_zero());
+            assert!(facts.tan_parameters_empty());
+            assert!(!facts.has_tan_method_response());
+            assert!(facts.global_abort_shape());
+            assert!(facts.eligible());
+        }
         assert!(!format!("{error:?}").contains("fictional"));
         assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
     }
@@ -1331,6 +1352,13 @@ mod tests {
         );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(client.transport.fixture_requests().len(), 1);
+        #[cfg(feature = "development-diagnostics")]
+        {
+            let facts = client.development_initialization_recovery().unwrap();
+            assert!(!facts.global_abort_shape());
+            assert!(!facts.eligible());
+            assert!(!format!("{facts:?}").contains("fictional"));
+        }
         assert!(!format!("{error:?}").contains("fictional"));
         assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
 
@@ -1345,6 +1373,12 @@ mod tests {
             Some(InitializationStage::InitialDiscovery)
         );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        #[cfg(feature = "development-diagnostics")]
+        {
+            let facts = selected.development_initialization_recovery().unwrap();
+            assert!(facts.usable_selected_method_present());
+            assert!(!facts.eligible());
+        }
         let requests = selected.transport.fixture_requests();
         assert_eq!(requests.len(), 1);
         assert_security_function(&requests[0], "942");

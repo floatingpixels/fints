@@ -9,6 +9,11 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+# Temporary, owner-attended live diagnostics. Never enable this for normal consumers.
+development-diagnostics = []
+
 [dependencies]
 base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
