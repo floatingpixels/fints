@@ -98,12 +98,16 @@ impl Response {
                         })?;
                         let class = match numeric_code / 1000 {
                             0 => ResponseClass::Success,
+                            // Rückmeldungscodes 2026-02-03 B.2 defines class-1
+                            // notices as non-error diagnostics, while marking them
+                            // FinTS-4-only. Owner-observed FinTS 3 interoperability
+                            // requires retaining the same bounded, meaning-neutral
+                            // shape without changing aggregate result semantics.
+                            1 => ResponseClass::Notice,
                             3 => ResponseClass::Warning,
                             9 => ResponseClass::Error,
                             _ => {
-                                return Err(Error::InvalidValue {
-                                    field: "response code class",
-                                });
+                                return Err(Error::InvalidResponseCodeClass { code: numeric_code });
                             }
                         };
                         // Formals 2017-10-06, F "Rückmeldung": the DEG carries

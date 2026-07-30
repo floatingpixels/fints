@@ -2040,14 +2040,17 @@ fn unpublished_99xx_classification_excludes_every_published_code() {
     }
 }
 
-// FinTS Formals 2017-10-06, B.7.5.2: class 0 accepts, class 3 warns,
-// and class 9 rejects the referenced request.
+// FinTS Formals 2017-10-06 B.7.5.2 permits additional notices alongside the
+// aggregate success/warning/error result. Rückmeldungscodes 2026-02-03 B.2
+// defines class 1 and its bounded DEG shape, while marking it FinTS-4-only.
+// The owner-authorized FinTS 3 interoperability tolerance retains notices
+// non-fatally in exact wire order.
 #[test]
-fn response_classes_are_typed_and_only_normative_classes_are_accepted() {
+fn response_notices_are_nonfatal_ordered_and_explicitly_accessible() {
     let fixture = message(
         &[
-            "HIRMG:2:2+0010::accepted+9942::rejected".into(),
-            "HIRMS:3:2:4+3040::qualified:fictional-next".into(),
+            "HIRMG:2:2+0010::Akzeptiert+1010:1,2:Hinweis für Konto 12345678:alpha".into(),
+            "HIRMS:3:2:4+1040:3:Parameter geändert:beta+3076::Freigabe nicht erforderlich".into(),
         ],
         "dialog1",
         1,
@@ -2055,23 +2058,88 @@ fn response_classes_are_typed_and_only_normative_classes_are_accepted() {
 
     let response = Response::parse(&fixture).unwrap();
     assert_eq!(
+        response
+            .responses()
+            .iter()
+            .map(|response| response.code())
+            .collect::<Vec<_>>(),
+        [10, 1010, 1040, 3076]
+    );
+    assert_eq!(
         response.responses()[0].class(),
         crate::ResponseClass::Success
     );
     assert_eq!(
+        response.responses()[1].class(),
+        crate::ResponseClass::Notice
+    );
+    assert_eq!(
         response.responses()[2].class(),
+        crate::ResponseClass::Notice
+    );
+    assert_eq!(
+        response.responses()[3].class(),
         crate::ResponseClass::Warning
+    );
+    assert_eq!(response.responses()[1].text(), "Hinweis für Konto 12345678");
+    assert_eq!(response.responses()[2].text(), "Parameter geändert");
+    assert_eq!(
+        response.responses()[1].data_element_reference(),
+        Some("1,2")
+    );
+    assert_eq!(response.responses()[1].parameters(), ["alpha"]);
+    assert_eq!(response.responses()[2].segment_number(), Some(4));
+    assert_eq!(response.responses()[2].parameters(), ["beta"]);
+    assert!(response.first_error().is_none());
+
+    let rendered = format!("{:?}", Error::Bank(response.responses()[1].clone()));
+    assert!(rendered.contains("1010"));
+    assert!(!rendered.contains("Hinweis für Konto 12345678"));
+    assert!(!rendered.contains("1,2"));
+    assert!(!rendered.contains("alpha"));
+}
+
+// Formals B.7.5.2: only class 9 rejects the referenced request. A preceding
+// class-1 notice therefore cannot become first_error() or mask the bank error.
+#[test]
+fn response_notice_does_not_mask_a_later_error() {
+    let fixture = message(
+        &["HIRMG:2:2+1010::Nur ein Hinweis+9942::Abgelehnt".into()],
+        "dialog1",
+        1,
+    );
+
+    let response = Response::parse(&fixture).unwrap();
+    assert_eq!(
+        response.responses()[0].class(),
+        crate::ResponseClass::Notice
     );
     assert_eq!(response.responses()[1].class(), crate::ResponseClass::Error);
     assert_eq!(response.first_error().unwrap().code(), 9942);
+}
 
-    let invalid = message(&["HIRMG:2:2+1010::invalid class".into()], "dialog1", 1);
+// The response-code DE remains exactly four digits. No specification defines
+// class 2, so the parser rejects it while retaining only the safe numeric code
+// as structural error context and never formatting the accompanying text.
+#[test]
+fn undefined_response_class_retains_only_the_safe_numeric_code() {
+    let fixture = message(
+        &["HIRMG:2:2+2010::Fictional account 12345678".into()],
+        "dialog1",
+        1,
+    );
+
+    let error = match Response::parse(&fixture) {
+        Err(error) => error,
+        Ok(_) => panic!("undefined response class was accepted"),
+    };
     assert!(matches!(
-        Response::parse(&invalid),
-        Err(Error::InvalidValue {
-            field: "response code class"
-        })
+        error,
+        Error::InvalidResponseCodeClass { code: 2010 }
     ));
+    let rendered = format!("{error:?} {error}");
+    assert!(rendered.contains("2010"));
+    assert!(!rendered.contains("Fictional account 12345678"));
 }
 
 // FinTS Formals 2017-10-06, B.7.1 and B.7.5: HIRMG begins the response

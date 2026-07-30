@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Accepted and retained bounded class-1 bank notices as
+  non-fatal ordered responses, with a new public `ResponseClass::Notice` branch.
+  Undefined classes remain rejected with only their safe numeric code exposed.
+
 - **2026-07-30** — Corrected first contact to acquire the PIN/TAN system ID
   through function-999 HKSYN/HISYN before selected-method initialization, with
   bounded fictional lifecycle fixtures.

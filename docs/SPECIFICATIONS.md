@@ -40,6 +40,8 @@ access date for each source below is 2026-07-28.
   HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
   segment sequence, including any security controls, with continuous numbering);
   B.4.1-B.4.2 (`bin`, `code`, `dat`, and `tim` format and restriction rules);
+  B.7.5.2 (class 0 acceptance, class 3 warnings, class 9 rejection, and
+  additional notices alongside those aggregate outcomes);
   B.7.6 (unsigned `HNHBK+HIRMG+HNHBS` dialog-abort message, including
   `unbekannt` and `9999` sentinels); C.3.2.2 and F.2 process condition [IF3]
   (dialog-transient BPD version zero and version wrap-around); E.2 and the HIUPA
@@ -312,9 +314,14 @@ access date for each source below is 2026-07-28.
   9951, 9955, and 9997.
 - **Gate 4 live-interoperability sections:** A (the 0900-0999, 3900-3999,
   and 9900-9999 exception ranges historically permit institution-specific and
-  differing meanings) and B.4 (the complete published 99xx error-code set).
+  differing meanings), B.2 (class-1 notice codes, explicitly marked FinTS
+  4-only by this joint register), and B.4 (the complete published 99xx
+  error-code set).
   Absence from that set does not authorize assigning an unpublished code a
   semantic meaning; it only permits retaining it as a redacted generic fact.
+  The B.2 class shape and non-error meaning also bound an owner-approved
+  FinTS 3 interoperability tolerance after a conforming four-digit 1xxx code
+  was observed there; it does not change aggregate result handling.
 - **Gate 2 sections:** B.1-B.4, especially code 3040 and its mandatory
   Aufsetzpunkt parameter, plus 9210 for a rejected continuation point.
 - **Gate 3 sections:** B.1-B.4, especially 3050 and 3081 (parameter refresh),
@@ -326,11 +333,12 @@ access date for each source below is 2026-07-28.
 - **Apply alongside:** Formals B.6-B.7 and the operation-specific selected
   response-code examples. The online register has the same 2026-02-03 release
   date and must be checked for later changes before implementation.
-- **Authorizes:** typed Gate 1 through Gate 3 success, warning, error,
+- **Authorizes:** typed Gate 1 through Gate 3 success, notice, warning, error,
   pagination, SCA, synchronization, parameter-refresh, and unsupported-version
-  outcomes without exposing bank response text; and the same redacted,
-  bounded response treatment for Gate 4 reads.
-- **Access/redistribution:** accessed 2026-07-29; the same implementation
+  outcomes. It also defines the bounded notice shape used by the narrow FinTS 3
+  compatibility tolerance. Bank text remains reachable only through explicit
+  caller accessors and absent from crate-owned formatting.
+- **Access/redistribution:** accessed 2026-07-30; the same implementation
   grant and unchanged, free-redistribution conditions. No PDF is committed.
 
 ## Mandatory corrections and extensions

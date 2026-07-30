@@ -24,6 +24,11 @@ pub enum Recovery {
 pub enum ResponseClass {
     /// Class 0: the referenced request was accepted.
     Success,
+    /// Class 1: a non-fatal informational notice about the referenced request.
+    ///
+    /// This additive variant requires exhaustive callers to handle notices
+    /// separately from successes and warnings.
+    Notice,
     /// Class 3: the request was accepted with a warning.
     Warning,
     /// Class 9: the referenced request was rejected.
@@ -123,6 +128,14 @@ pub enum InputError {
 /// The caller owns display and logging policy for [`Self::text`],
 /// [`Self::data_element_reference`], and [`Self::parameters`]. Those values are
 /// deliberately omitted from this type's `Debug` output and crate-owned errors.
+///
+/// Bank responses are process-memory diagnostics and intentionally do not implement
+/// `Serialize` or `Deserialize`.
+///
+/// ```compile_fail
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<fints::BankResponse>();
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct BankResponse {
     code: u16,
@@ -223,6 +236,12 @@ pub enum Error {
     InvalidResponse { structure: &'static str },
     #[error("FinTS response uses unsupported segment {code} version {version}")]
     UnsupportedSegment { code: &'static str, version: u16 },
+    /// A numeric response code whose first digit is not a supported response class.
+    ///
+    /// The four-digit code is a non-secret protocol fact. No response text or
+    /// bank-supplied parameters are included.
+    #[error("FinTS response code {code:04} has an invalid response class")]
+    InvalidResponseCodeClass { code: u16 },
     #[error("FinTS response has an invalid value in {field}")]
     InvalidValue { field: &'static str },
     #[error("FinTS response is missing {field}")]
