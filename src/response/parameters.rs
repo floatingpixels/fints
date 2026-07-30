@@ -41,6 +41,7 @@ pub(super) fn apply(
     let mut legacy_transactions_require_tan = None;
     let mut depot_positions_advertised = false;
     let mut depot_positions_supported = false;
+    let mut received_depot_position_versions = Vec::new();
     let mut depot_positions_requires_tan = None;
     let mut securities_transactions_advertised = false;
     let mut securities_transactions_seen = false;
@@ -135,15 +136,21 @@ pub(super) fn apply(
                 }
             }
             b"HIWPDS" if replace_bpd => {
-                // Messages C.4.3.1: HIWPDS field 5 is a linear three-value
-                // parameter DEG. Gate 4 consumes only the advertised version.
+                // HBCI 2.2 VII.4.3.1/IV.6 and Messages 2022 C.4.3.1:
+                // HIWPDS 5 uses the legacy parameter envelope, whose field 4
+                // parameter DEG is segment element 3. HIWPDS 6 adds the generic
+                // security-class field, shifting its field 5 parameter DEG to
+                // element 4. Both operation-specific DEGs are three flat J/N
+                // fields. Gate 4 consumes only the advertised segment version,
+                // so meaning-neutral parameter values are read past.
                 depot_positions_advertised = true;
-                if header.version == 6 {
-                    if depot_positions_supported {
+                if (5..=6).contains(&header.version) {
+                    if received_depot_position_versions.contains(&header.version) {
                         return Err(Error::InvalidResponse {
-                            structure: "duplicate HIWPDS version 6",
+                            structure: "duplicate supported HIWPDS version",
                         });
                     }
+                    received_depot_position_versions.push(header.version);
                     depot_positions_supported = true;
                 }
             }
@@ -261,6 +268,8 @@ pub(super) fn apply(
         state.legacy_transactions_require_tan = legacy_transactions_require_tan;
         state.depot_positions_advertised = depot_positions_advertised;
         state.depot_positions_supported = depot_positions_supported;
+        received_depot_position_versions.sort_unstable_by(|a, b| b.cmp(a));
+        state.depot_position_versions = received_depot_position_versions;
         state.depot_positions_requires_tan = depot_positions_requires_tan;
         state.securities_transactions_advertised = securities_transactions_advertised;
         state.securities_transactions_supported = securities_transactions_supported;

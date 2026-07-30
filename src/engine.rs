@@ -145,6 +145,14 @@ impl Engine {
             state.balance_versions.sort_unstable_by(|a, b| b.cmp(a));
             state.balance_versions.dedup();
         }
+        if state.depot_position_versions.is_empty() && state.depot_positions_supported {
+            state.depot_position_versions.push(6);
+        }
+        state
+            .depot_position_versions
+            .sort_unstable_by(|a, b| b.cmp(a));
+        state.depot_position_versions.dedup();
+        state.depot_positions_supported = !state.depot_position_versions.is_empty();
         validate_reusable_state(&state)?;
         Ok(Self {
             institute,
@@ -1256,6 +1264,10 @@ fn validate_reusable_state(state: &ReusableState) -> Result<(), Error> {
             .advertised_balance_versions
             .iter()
             .any(|version| *version > 999)
+        || state
+            .depot_position_versions
+            .iter()
+            .any(|version| !(5..=6).contains(version))
         || state
             .advertised_camt_descriptors
             .iter()

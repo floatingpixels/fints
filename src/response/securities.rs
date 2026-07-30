@@ -32,8 +32,20 @@ pub(crate) struct SecuritiesTransactionPage {
     pub(crate) development_facts: crate::DepotResponseFacts,
 }
 
-pub(super) fn positions(segments: &[Segment]) -> Result<Option<DepotPositionPage>, Error> {
-    let payload = response_binary(segments, b"HIWPD", "HIWPD", 6)?;
+pub(super) fn positions(
+    segments: &[Segment],
+    version: u16,
+) -> Result<Option<DepotPositionPage>, Error> {
+    // HBCI 2.2 VII.4.3.1 assigns MT535 to HIWPD 5; Messages 2022 C.4.3.1
+    // retains the same SRG-1998 MT535 payload for HIWPD 6. Version 4 carries
+    // MT571 and is deliberately unsupported.
+    if !(5..=6).contains(&version) {
+        return Err(Error::UnsupportedSegment {
+            code: "HIWPD",
+            version,
+        });
+    }
+    let payload = response_binary(segments, b"HIWPD", "HIWPD", version)?;
     payload.map(parse_positions).transpose()
 }
 

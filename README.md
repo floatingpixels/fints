@@ -188,7 +188,7 @@ the crate reports the typed protocol or transport evidence it can verify.
 
 ## Supported Gate 4 products
 
-- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 6
+- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 5-6
   for account types 30-39. Its bounded MT535 parser preserves supplied
   instrument identifiers, quantities and signs, market or indicative prices,
   currencies, dates, market values, and amount- or percentage-denominated cost

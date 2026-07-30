@@ -43,6 +43,7 @@ impl ProductStates {
 
 struct PositionState {
     account: Account,
+    version: u16,
     requires_tan: bool,
     continuation_point: Option<String>,
     seen: HashSet<String>,
@@ -128,6 +129,11 @@ impl Engine {
             }
             .into());
         }
+        let version = parameters
+            .depot_position_versions
+            .first()
+            .copied()
+            .ok_or(Limitation::DepotPositionsVersion)?;
         let requires_tan = required_tan(
             parameters.depot_positions_requires_tan,
             Limitation::PinTanParameters,
@@ -138,6 +144,7 @@ impl Engine {
             segments::depot_positions_request(
                 &context,
                 &account,
+                version,
                 None,
                 tan.as_ref()
                     .map(|(method, medium)| (method, medium.as_deref())),
@@ -145,6 +152,7 @@ impl Engine {
         };
         self.products.positions = Some(PositionState {
             account,
+            version,
             requires_tan,
             continuation_point: None,
             seen: HashSet::new(),
@@ -190,6 +198,7 @@ impl Engine {
             segments::depot_positions_request(
                 &context,
                 &state.account,
+                state.version,
                 Some(continuation_point),
                 tan.as_ref()
                     .map(|(method, medium)| (method, medium.as_deref())),
@@ -242,7 +251,13 @@ impl Engine {
         if let Some(challenge) = challenge {
             return Ok(DepotPositionsResult::Challenge(Box::new(challenge)));
         }
-        let page = match response.depot_positions() {
+        let version = self
+            .products
+            .positions
+            .as_ref()
+            .ok_or(Error::InconsistentState)?
+            .version;
+        let page = match response.depot_positions(version) {
             Ok(Some(page)) => page,
             Ok(None)
                 if response

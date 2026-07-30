@@ -461,6 +461,8 @@ pub struct ReusableState {
     #[serde(default)]
     pub(crate) depot_positions_supported: bool,
     #[serde(default)]
+    pub(crate) depot_position_versions: Vec<u16>,
+    #[serde(default)]
     pub(crate) depot_positions_requires_tan: Option<bool>,
     #[serde(default)]
     pub(crate) securities_transactions_advertised: bool,
@@ -1505,6 +1507,13 @@ mod tests {
                 .descriptors()
                 .is_empty()
         );
+        assert!(
+            state
+                .advertised_capabilities()
+                .depot_positions()
+                .advertised_versions()
+                .is_empty()
+        );
         assert_eq!(
             state
                 .advertised_capabilities()
@@ -1737,6 +1746,7 @@ mod tests {
                     | "balance_versions"
                     | "advertised_balance_versions"
                     | "advertised_tan_media_versions"
+                    | "depot_position_versions"
                     | "camt_storage_period_days"
                     | "securities_transactions_storage_period_days"
                     | "credit_card_transactions_storage_period_days"
@@ -1949,12 +1959,14 @@ mod tests {
     // persisted version fields through the actual derived Serialize/Deserialize
     // implementations without adding a direct dev dependency.
     #[test]
-    fn advertised_balance_five_survives_serde_round_trip() {
+    fn advertised_versions_survive_serde_round_trip() {
         let mut original = ReusableState::new();
         original.bpd_version = 57;
         original.upd_version = 1;
         original.advertised_balance_versions = vec![5];
         original.advertised_tan_media_versions = vec![4, 2];
+        original.depot_position_versions = vec![6, 5];
+        original.depot_positions_supported = true;
         original.camt_storage_period_days = Some(90);
         original.securities_transactions_storage_period_days = Some(60);
         original.credit_card_transactions_storage_period_days = Some(30);
@@ -1999,6 +2011,8 @@ mod tests {
         );
         assert_eq!(restored.advertised_tan_media_versions(), [4, 2]);
         let capabilities = restored.advertised_capabilities();
+        assert_eq!(capabilities.depot_positions().advertised_versions(), [6, 5]);
+        assert!(capabilities.depot_positions().supports_version(5));
         assert_eq!(
             capabilities.camt_cash_transactions().storage_period_days(),
             Some(90)

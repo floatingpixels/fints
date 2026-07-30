@@ -1367,6 +1367,68 @@ fn advertised_capability_snapshot_is_complete_redacted_and_operation_typed() {
     assert!(!format!("{snapshot:?}").contains("12345678"));
 }
 
+// HBCI 2.2 IV.6 and VII.4.3.1: legacy HIWPDS 5 has maximum orders and
+// minimum signatures followed immediately by its three-component operation
+// parameter DEG. FinTS Messages 2022 C.4.3.1 inserts security class before the
+// otherwise equivalent HIWPDS 6 DEG. These independently derived segments
+// prove both envelopes are retained and ordered by implemented operation
+// version, rather than by arrival order.
+#[test]
+fn depot_position_parameter_versions_five_and_six_are_negotiated() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+62+280:12345678+Fictional Bank+9+1+300".into(),
+            "HIWPDS:4:5:3+1+1+J:N:J".into(),
+            "HIWPDS:5:6:3+1+1+0+N:J:N".into(),
+            "HIWPDS:6:4:3+1+1+N:N:N".into(),
+            "HIPINS:7:1:3+1+1+0+1:6:6:::HKWPD:N".into(),
+        ],
+        "depot-versions",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(state.depot_position_versions, [6, 5]);
+    assert!(state.depot_positions_supported);
+    assert_eq!(state.depot_positions_requires_tan, Some(false));
+    let capability = state.advertised_capabilities().depot_positions().clone();
+    assert_eq!(capability.advertised_versions(), [6, 5, 4]);
+    assert!(capability.supports_version(6));
+    assert!(capability.supports_version(5));
+    assert!(!capability.supports_version(4));
+}
+
+// HBCI 2.2 VII.4.3.1 advertises HIWPDS 5 independently of the current
+// version-6 definition. A version-5-only BPD must therefore remain executable
+// instead of degrading to DepotPositionsVersion.
+#[test]
+fn depot_position_parameter_version_five_is_supported_alone() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300".into(),
+            "HIWPDS:4:5:3+1+1+J:J:J".into(),
+        ],
+        "depot-five-only",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    let capability = state.advertised_capabilities().depot_positions().clone();
+    assert_eq!(capability.advertised_versions(), [5]);
+    assert!(capability.supports_version(5));
+    assert!(capability.supported_by_crate());
+}
+
 // FinTS parameter-segment DD entries distinguish operation-defining fields
 // from values this crate never sends or consumes. Unusable sub-records degrade
 // only their operation while well-formed sibling capabilities survive.
@@ -1486,7 +1548,7 @@ fn duplicate_product_parameter_segments_remain_rejected() {
         (
             "HIWPDS:4:6:3",
             "HIWPDS:5:6:3+1+1+0+J:J:J",
-            "duplicate HIWPDS version 6",
+            "duplicate supported HIWPDS version",
         ),
         (
             "HIWDUS:4:5:3+1+1+0+unreadable",

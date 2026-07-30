@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added officially archived HKWPD/HIWPD/HIWPDS 5
+  negotiation, exact national-account requests, and version-bound MT535
+  parsing with deterministic 5/6 selection and persisted capability state.
+
 - **2026-07-30** — Added value-free MT535/MT536 block and field-presence
   diagnostics, safe depot probe result counts, and static block/tag parser
   contexts without changing protocol acceptance.

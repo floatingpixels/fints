@@ -67,7 +67,7 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
-    let page = response.depot_positions().unwrap().unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
 
     assert!(!page.more);
     assert_eq!(page.positions.len(), 1);
@@ -116,6 +116,85 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     }
 }
 
+// HBCI 2.2 VII.4.3.1 and IX.2.4: HIWPD 5 contains exactly one binary
+// SRG-1998 MT535 statement. This fixture is independently derived from the
+// archived full-message example and uses fictional identities and values.
+// HIWPD 4 is not accepted here because that version carries MT571.
+#[test]
+fn hiwpd_five_parses_its_official_mt535_payload_and_requires_version_match() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":98A::STAT//20260730\r\n",
+        ":22F::STTY//CUST\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS15\r\n",
+        "/DE/FICT15\r\n",
+        "Fictional Legacy Holding\r\n",
+        ":90B::MRKT//ACTU/EUR12,50\r\n",
+        ":98A::PRIC//20260730\r\n",
+        ":93B::AGGR//UNIT/4,\r\n",
+        ":16R:SUBBAL\r\n",
+        ":93C::TAVI//UNIT/AVAI/4,\r\n",
+        ":16S:SUBBAL\r\n",
+        ":19A::HOLD//EUR50,00\r\n",
+        ":16S:FIN\r\n",
+        ":16R:ADDINFO\r\n",
+        ":19A::HOLP//EUR50,00\r\n",
+        ":16S:ADDINFO\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 5, payload)).unwrap();
+    let page = response.depot_positions(5).unwrap().unwrap();
+
+    assert!(!page.more);
+    assert_eq!(page.positions.len(), 1);
+    assert_eq!(page.positions[0].instrument().isin(), Some("DE000FINTS15"));
+    assert_eq!(page.positions[0].quantity().coefficient(), 4);
+    assert_eq!(page.total_values.len(), 1);
+
+    assert!(matches!(
+        response.depot_positions(6),
+        Err(Error::UnsupportedSegment {
+            code: "HIWPD",
+            version: 5
+        })
+    ));
+    assert!(matches!(
+        response.depot_positions(4),
+        Err(Error::UnsupportedSegment {
+            code: "HIWPD",
+            version: 4
+        })
+    ));
+
+    let malformed = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS15\r\n",
+        "Fictional Legacy Holding\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    );
+    let response = Response::parse(&message_with_binary("HIWPD", 5, malformed.as_bytes())).unwrap();
+    assert!(matches!(
+        response.depot_positions(5),
+        Err(Error::MalformedSecuritiesData { .. })
+    ));
+}
+
 // DK Anlage 3 v3.9, 4.3: AGGR can be negative, INDC can carry a
 // percentage quote, 35B can identify by WKN, and a structured line-two
 // cost basis without currency is percentage-denominated.
@@ -147,7 +226,7 @@ fn mt535_variants_preserve_sign_quality_and_percentage_cost_basis() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
-    let page = response.depot_positions().unwrap().unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
     let position = &page.positions[0];
 
     assert_eq!(position.instrument.wkn(), Some("FICT02"));
@@ -410,7 +489,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, mismatched)).unwrap();
-    let mismatched_site = match response.depot_positions() {
+    let mismatched_site = match response.depot_positions(6) {
         Err(Error::MalformedSecuritiesData { site }) => site,
         _ => panic!("expected malformed MT535 block"),
     };
@@ -435,7 +514,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, missing_quantity)).unwrap();
-    let missing_quantity_site = match response.depot_positions() {
+    let missing_quantity_site = match response.depot_positions(6) {
         Err(Error::MalformedSecuritiesData { site }) => site,
         _ => panic!("expected malformed MT535 position"),
     };
@@ -463,7 +542,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
     ))
     .unwrap();
     assert!(matches!(
-        response.depot_positions(),
+        response.depot_positions(6),
         Err(Error::MalformedSecuritiesData { .. })
     ));
 
@@ -483,7 +562,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
     ))
     .unwrap();
     assert!(matches!(
-        response.depot_positions(),
+        response.depot_positions(6),
         Err(Error::MalformedSecuritiesData { .. })
     ));
 }
@@ -508,7 +587,7 @@ fn securities_document_rejects_missing_leading_crlf() {
     let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
 
     assert!(matches!(
-        response.depot_positions(),
+        response.depot_positions(6),
         Err(Error::MalformedSecuritiesData { .. })
     ));
 }
@@ -547,7 +626,7 @@ fn securities_documents_accept_exactly_one_trailing_crlf() {
         let response =
             Response::parse(&message_with_binary(code, version, one.as_bytes())).unwrap();
         let accepted = if code == "HIWPD" {
-            response.depot_positions().map(|value| value.is_some())
+            response.depot_positions(6).map(|value| value.is_some())
         } else {
             response
                 .securities_transactions()
@@ -559,7 +638,7 @@ fn securities_documents_accept_exactly_one_trailing_crlf() {
         let response =
             Response::parse(&message_with_binary(code, version, two.as_bytes())).unwrap();
         let rejected = if code == "HIWPD" {
-            response.depot_positions().map(|_| ())
+            response.depot_positions(6).map(|_| ())
         } else {
             response.securities_transactions().map(|_| ())
         };
@@ -610,7 +689,7 @@ fn securities_date_with_latin1_high_byte_is_typed_error() {
     let response = Response::parse(&message_with_binary("HIWPD", 6, &payload)).unwrap();
 
     assert!(matches!(
-        response.depot_positions(),
+        response.depot_positions(6),
         Err(Error::MalformedSecuritiesData { .. })
     ));
 }
@@ -640,7 +719,7 @@ fn mt535_unconsumed_general_subbalance_and_cost_basis_fields_are_nonfatal() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
-    let page = response.depot_positions().unwrap().unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
 
     assert_eq!(page.positions.len(), 1);
     assert!(page.positions[0].cost_basis().is_none());
@@ -658,7 +737,7 @@ fn mt535_unconsumed_general_subbalance_and_cost_basis_fields_are_nonfatal() {
         Response::parse(&message_with_binary("HIWPD", 6, active_empty.as_bytes())).unwrap();
     assert!(
         response
-            .depot_positions()
+            .depot_positions(6)
             .unwrap()
             .unwrap()
             .positions

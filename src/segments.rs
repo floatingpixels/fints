@@ -247,11 +247,18 @@ pub(crate) fn transaction_request(
 pub(crate) fn depot_positions_request(
     context: &SecurityContext<'_>,
     account: &Account,
+    version: u16,
     continuation_point: Option<&str>,
     tan: Option<(&TanMethod, Option<&str>)>,
 ) -> Result<Vec<u8>, Error> {
-    // FinTS Messages 2022 C.4.3.1, HKWPD 6. Currency, price quality, and
-    // maximum-entry inputs are deliberately left unoccupied.
+    // HBCI 2.2 VII.4.3.1 and FinTS Messages 2022 C.4.3.1:
+    // HKWPD 5/6 have the same field sequence. DD field 2 is the four-component
+    // national `ktv`; scalar fields 3..6 remain segment elements 2..5.
+    if !(5..=6).contains(&version) {
+        return Err(Limitation::DepotPositionsVersion.into());
+    }
+    // Currency, price quality, and maximum-entry inputs are deliberately left
+    // unoccupied.
     let mut elements = vec![
         national_account(account, Limitation::DepotPositionsVersion)?,
         text("")?,
@@ -265,7 +272,7 @@ pub(crate) fn depot_positions_request(
             elements.pop();
         }
     }
-    authenticated_operation(context, "HKWPD", 6, elements, tan)
+    authenticated_operation(context, "HKWPD", version, elements, tan)
 }
 
 pub(crate) fn securities_transactions_request(

@@ -47,8 +47,9 @@ fn operation(encoded: &[u8], code: &[u8]) -> Vec<u8> {
     .unwrap()
 }
 
-// FinTS Messages 2022-04-15 C.4.3.1-C.4.3.2. These exact segments are
-// independent golden fixtures for the current HKWPD 6 and HKWDU 5 layouts.
+// HBCI 2.2 VII.4.3.1 and FinTS Messages 2022-04-15
+// C.4.3.1-C.4.3.2. These exact segments are independently derived from the
+// printed HKWPD 5 example and the registered HKWPD 6/HKWDU 5 field tables.
 #[test]
 fn depot_requests_match_independent_wire_fixtures() {
     let institute = InstituteId::new("280", "12345678").unwrap();
@@ -57,11 +58,23 @@ fn depot_requests_match_independent_wire_fixtures() {
     let account = product_account(30, "300001");
 
     let positions =
-        depot_positions_request(&context, &account, Some("position-next"), None).unwrap();
+        depot_positions_request(&context, &account, 6, Some("position-next"), None).unwrap();
     assert_eq!(
         operation(&positions, b"HKWPD"),
         b"HKWPD:3:6+300001:CARD-CUST:280:12345678++++position-next'"
     );
+
+    let legacy_positions =
+        depot_positions_request(&context, &account, 5, Some("legacy-next"), None).unwrap();
+    assert_eq!(
+        operation(&legacy_positions, b"HKWPD"),
+        b"HKWPD:3:5+300001:CARD-CUST:280:12345678++++legacy-next'"
+    );
+
+    assert!(matches!(
+        depot_positions_request(&context, &account, 4, None, None),
+        Err(Error::Unsupported(Limitation::DepotPositionsVersion))
+    ));
 
     let transactions = securities_transactions_request(
         &context,

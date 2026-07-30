@@ -422,8 +422,11 @@ impl Response {
         transactions::parse(&self.segments, format)
     }
 
-    pub(crate) fn depot_positions(&self) -> Result<Option<securities::DepotPositionPage>, Error> {
-        securities::positions(&self.segments)
+    pub(crate) fn depot_positions(
+        &self,
+        version: u16,
+    ) -> Result<Option<securities::DepotPositionPage>, Error> {
+        securities::positions(&self.segments, version)
     }
 
     pub(crate) fn securities_transactions(

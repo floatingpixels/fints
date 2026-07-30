@@ -240,6 +240,38 @@ fn gate46_state_reclassifies_advertised_balance_five_as_supported() {
     );
 }
 
+// ReusableState before HKWPD 5 support retained only the Gate-4
+// depot_positions_supported boolean, whose implemented meaning was version 6.
+// Preserve that migration while rejecting invented serialized version numbers.
+#[test]
+fn legacy_depot_position_state_migrates_to_six_and_invalid_versions_fail() {
+    let institute = InstituteId::new("280", "12345678").unwrap();
+    let product = ProductIdentity::new("PROD123", "1.0").unwrap();
+    let mut legacy = ReusableState::new();
+    legacy.depot_positions_supported = true;
+
+    let engine = Engine::new(
+        institute.clone(),
+        product.clone(),
+        Credentials::new("fictional-user", None, "private-pin").unwrap(),
+        legacy,
+    )
+    .unwrap();
+    assert_eq!(engine.state.depot_position_versions, [6]);
+
+    let mut malformed = ReusableState::new();
+    malformed.depot_position_versions = vec![7];
+    assert!(matches!(
+        Engine::new(
+            institute,
+            product,
+            Credentials::new("fictional-user", None, "private-pin").unwrap(),
+            malformed
+        ),
+        Err(Error::Input(InputError::ReusableState))
+    ));
+}
+
 // FinTS 3.0 Formals 2017-10-06, C.5.1 and C.5.3.
 #[test]
 fn anonymous_parameter_dialog_uses_unsecured_termination_fixture() {
@@ -1509,6 +1541,7 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
     let mut depot = engine_with_method(TanProcess::ProcessVariantTwo);
     depot.state.depot_positions_advertised = true;
     depot.state.depot_positions_supported = true;
+    depot.state.depot_position_versions = vec![6];
     depot.state.depot_positions_requires_tan = Some(false);
     depot.state.accounts.push(account(30, true));
     let mut depot = connected(depot);
@@ -1530,6 +1563,7 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
         denied.state.camt_requires_tan = Some(false);
         denied.state.depot_positions_advertised = true;
         denied.state.depot_positions_supported = true;
+        denied.state.depot_position_versions = vec![6];
         denied.state.depot_positions_requires_tan = Some(false);
         denied
             .state
@@ -2016,6 +2050,7 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
     engine.state.accounts = vec![account];
     engine.state.depot_positions_advertised = true;
     engine.state.depot_positions_supported = true;
+    engine.state.depot_position_versions = vec![6];
     engine.state.depot_positions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
     assert!(matches!(
@@ -2087,6 +2122,143 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
     );
 }
 
+// HBCI 2.2 VII.4.3.1/IX.2.4 and Formals B.6: a version-5-only BPD emits
+// HKWPD 5 without HKTAN when HIPINS advertises TAN-free execution, accepts
+// only HIWPD 5 MT535 pages, and preserves that version across pagination.
+#[test]
+fn depot_positions_version_five_is_selected_and_paginated_tan_free() {
+    let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+    account.account_type = Some(30);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.depot_positions_advertised = true;
+    engine.state.depot_positions_supported = true;
+    engine.state.depot_position_versions = vec![5];
+    engine.state.depot_positions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+
+    let first_request = engine
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+    let first_payload = crate::wire::Message::parse(&first_request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    assert!(first_payload.iter().any(|segment| {
+        let header = segment.header().unwrap();
+        header.code == b"HKWPD" && header.version == 5
+    }));
+    assert!(
+        first_payload
+            .iter()
+            .all(|segment| segment.header().unwrap().code != b"HKTAN")
+    );
+
+    let first = binary_response(
+        "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:5:3+@",
+        &mt535_page(1, "MORE"),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        engine.accept_depot_positions(&first, now()).unwrap(),
+        DepotPositionsResult::Continue
+    ));
+    let next_request = engine
+        .next_depot_positions_page_request(now().date(), now().time())
+        .unwrap();
+    let next_payload = crate::wire::Message::parse(&next_request)
+        .unwrap()
+        .payload_segments()
+        .unwrap();
+    let request = next_payload
+        .iter()
+        .find(|segment| segment.header().unwrap().code == b"HKWPD")
+        .unwrap();
+    assert_eq!(request.header().unwrap().version, 5);
+    assert!(matches!(
+        &request.elements().last().unwrap().components()[0],
+        crate::wire::Value::Text(value) if value == b"position-next"
+    ));
+
+    let terminal = binary_response(
+        "HIWPD:3:5:3+@",
+        &mt535_page(2, "LAST"),
+        "'HNHBS:4:1+3'",
+        "dialog1",
+        3,
+    );
+    let result = match engine.accept_depot_positions(&terminal, now()).unwrap() {
+        DepotPositionsResult::Complete(result) => result,
+        _ => panic!("expected completed version-5 depot positions"),
+    };
+    assert_eq!(result.positions().len(), 2);
+}
+
+// The selected operation version binds the response. A version-5 request must
+// not reinterpret HIWPD 6, and identity mismatches stay typed and redacted.
+#[test]
+fn depot_positions_version_five_rejects_wrong_version_and_identity() {
+    let connected = || {
+        let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+        account.account_type = Some(30);
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        engine.state.accounts = vec![account];
+        engine.state.depot_positions_advertised = true;
+        engine.state.depot_positions_supported = true;
+        engine.state.depot_position_versions = vec![5];
+        engine.state.depot_positions_requires_tan = Some(false);
+        let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine.accept_initialization(&initialized, now()).unwrap(),
+            InitializationResult::Connected
+        ));
+        engine
+    };
+
+    let mut wrong_version = connected();
+    wrong_version
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+    let wrong = binary_response(
+        "HIWPD:3:6:3+@",
+        &mt535_page(1, "ONLY"),
+        "'HNHBS:4:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        wrong_version.accept_depot_positions(&wrong, now()),
+        Err(Error::UnsupportedSegment {
+            code: "HIWPD",
+            version: 6
+        })
+    ));
+
+    let mut wrong_identity = connected();
+    wrong_identity
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+    let payload = String::from_utf8(mt535_page(1, "ONLY"))
+        .unwrap()
+        .replace("12345678/300001", "12345678/399999")
+        .into_bytes();
+    let mismatched = binary_response("HIWPD:3:5:3+@", &payload, "'HNHBS:4:1+2'", "dialog1", 2);
+    let error = match wrong_identity.accept_depot_positions(&mismatched, now()) {
+        Err(error @ Error::InconsistentState) => error,
+        _ => panic!("expected a redacted identity mismatch"),
+    };
+    let rendered = format!("{error:?} {error}");
+    assert!(!rendered.contains("399999"));
+    assert!(!rendered.contains("300001"));
+    assert!(!rendered.contains("12345678"));
+}
+
 // FinTS Messages 2022 C.4.3.1 and return codes 3040/3010: a terminal
 // no-entry page completes exhaustive pagination without erasing earlier pages.
 #[test]
@@ -2097,6 +2269,7 @@ fn terminal_empty_depot_page_preserves_collected_positions() {
     engine.state.accounts = vec![account];
     engine.state.depot_positions_advertised = true;
     engine.state.depot_positions_supported = true;
+    engine.state.depot_position_versions = vec![6];
     engine.state.depot_positions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
     assert!(matches!(
