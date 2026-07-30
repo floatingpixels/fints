@@ -30,6 +30,8 @@ The crate owns:
 - Pagination and continuation for scoped read operations.
 - Product-neutral request, result, reusable-state, continuation, limitation, and error
   types.
+- A redacted advertised-capability snapshot containing segment codes, versions, and
+  parameter facts the institution advertises, without account or personal data.
 - HTTPS transport using rustls TLS.
 
 The caller owns:

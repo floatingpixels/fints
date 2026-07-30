@@ -76,7 +76,9 @@ committed path dependency.
 
 ## Live verification
 
-The owner performs live verification through Finanzplaner. Report only generic protocol
-behavior: advertised segment versions, TAN flow class, or a rounded/non-identifying
-result. Never commit or paste authenticated wire messages, challenges, credentials,
-account identifiers, or balances into Codex context, issues, commits, or fixtures.
+The owner performs live verification through Finanzplaner or through the crate's own
+owner-run probe example. Both are opt-in, never part of the default verification stack,
+and never persist captures. Report only generic protocol behavior: advertised segment
+versions, TAN flow class, or a rounded/non-identifying result. Never commit or paste
+authenticated wire messages, challenges, credentials, account identifiers, or balances
+into Codex context, issues, commits, or fixtures.

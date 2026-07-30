@@ -1,4 +1,5 @@
 use crate::{
+    capabilities::ParameterSegmentAdvertisement,
     error::Error,
     model::{
         Account, CamtCapability, CreditCardCapability, InstituteState, OperationPermission,
@@ -48,11 +49,18 @@ pub(super) fn apply(
     let mut credit_card_balance_advertised = false;
     let mut credit_card_balance_account_required = None;
     let mut credit_card_balance_requires_tan = None;
+    let mut advertised_parameter_segments = Vec::new();
 
     for segment in segments {
         let header = segment.header().ok_or(Error::InvalidResponse {
             structure: "segment header",
         })?;
+        if replace_bpd && is_parameter_segment(header.code) {
+            advertised_parameter_segments.push(ParameterSegmentAdvertisement::new(
+                header.code.iter().copied().map(char::from).collect(),
+                header.version,
+            ));
+        }
         match header.code {
             b"HIBPA" => {}
             b"HIUPA" => {
@@ -179,6 +187,12 @@ pub(super) fn apply(
         received_legacy_transaction_versions.dedup();
         received_camt_descriptors.sort();
         received_camt_descriptors.dedup();
+        advertised_parameter_segments.sort_by(|left, right| {
+            left.code()
+                .cmp(right.code())
+                .then_with(|| right.version().cmp(&left.version()))
+        });
+        advertised_parameter_segments.dedup();
         received_methods.sort_by(|left, right| {
             left.security_function
                 .cmp(&right.security_function)
@@ -210,6 +224,7 @@ pub(super) fn apply(
         state.credit_card_balance_advertised = credit_card_balance_advertised;
         state.credit_card_balance_account_required = credit_card_balance_account_required;
         state.credit_card_balance_requires_tan = credit_card_balance_requires_tan;
+        state.advertised_parameter_segments = advertised_parameter_segments;
         state.tan_methods = received_methods;
     }
 
@@ -228,6 +243,10 @@ pub(super) fn apply(
         }
     }
     Ok(transient_accounts)
+}
+
+fn is_parameter_segment(code: &[u8]) -> bool {
+    code != b"HIRMS" && code.starts_with(b"HI") && code.ends_with(b"S")
 }
 
 pub(super) fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {

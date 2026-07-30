@@ -186,7 +186,12 @@ fn gate46_state_reclassifies_advertised_balance_five_as_supported() {
     state.bpd_version = 57;
     state.advertised_balance_versions = vec![5];
     assert!(state.balance_versions.is_empty());
-    assert!(state.supports_balance_version(5));
+    assert!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .supports_version(5)
+    );
 
     let engine = Engine::new(
         InstituteId::new("280", "12345678").unwrap(),
@@ -197,7 +202,14 @@ fn gate46_state_reclassifies_advertised_balance_five_as_supported() {
     .unwrap();
 
     assert_eq!(engine.state.balance_versions, [5]);
-    assert_eq!(engine.state().advertised_balance_versions(), [5]);
+    assert_eq!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [5]
+    );
 }
 
 // FinTS 3.0 Formals 2017-10-06, C.5.1 and C.5.3.
@@ -299,7 +311,14 @@ fn bpd_version_zero_is_effective_only_for_the_active_dialog() {
         InitializationResult::ChooseTanMethod
     ));
     assert_eq!(engine.state().bpd_version(), 57);
-    assert_eq!(engine.state().advertised_balance_versions(), [5]);
+    assert_eq!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [5]
+    );
 
     let request = engine
         .balance_request(0, now().date(), now().time())
@@ -317,7 +336,14 @@ fn bpd_version_zero_is_effective_only_for_the_active_dialog() {
 
     engine.abort_dialog();
     assert_eq!(engine.state().bpd_version(), 57);
-    assert_eq!(engine.state().advertised_balance_versions(), [5]);
+    assert_eq!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [5]
+    );
 }
 
 // FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1 and response code 3920.
@@ -1194,9 +1220,28 @@ fn balance_request_requires_advertised_version_and_account_permission() {
         .unwrap();
 
     assert_eq!(hksal.header().unwrap().version, 8);
-    assert_eq!(engine.state().advertised_balance_versions(), [9, 8, 6]);
-    assert!(engine.state().supports_balance_version(8));
-    assert!(!engine.state().supports_balance_version(9));
+    assert_eq!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [9, 8, 6]
+    );
+    assert!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .supports_version(8)
+    );
+    assert!(
+        !engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .supports_version(9)
+    );
     assert_eq!(
         hksal.elements()[1].components()[2].as_text().unwrap(),
         "123456"
@@ -1479,7 +1524,14 @@ fn gate3_wrong_endpoint_parameters_are_rejected_before_state_mutation() {
     ));
     assert_eq!(engine.state().bpd_version(), 0);
     assert!(engine.state.balance_versions.is_empty());
-    assert!(engine.state().advertised_balance_versions().is_empty());
+    assert!(
+        engine
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions()
+            .is_empty()
+    );
 }
 
 // FinTS Formals D and Messages C.2.1.2: an advertised but unsupported HISALS
@@ -1506,8 +1558,21 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
         &error,
         Error::Unsupported(Limitation::BalanceVersion)
     ));
-    assert_eq!(unsupported.state().advertised_balance_versions(), [4]);
-    assert!(!unsupported.state().supports_balance_version(4));
+    assert_eq!(
+        unsupported
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [4]
+    );
+    assert!(
+        !unsupported
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .supports_version(4)
+    );
     assert!(!error.to_string().contains('4'));
 
     let mut absent = engine_with_method(TanProcess::ProcessVariantTwo);
@@ -1521,7 +1586,14 @@ fn gate3_balance_capability_errors_distinguish_version_from_absence() {
         absent.balance_request(0, now().date(), now().time()),
         Err(Error::Unsupported(Limitation::BalanceNotAdvertised))
     ));
-    assert!(absent.state().advertised_balance_versions().is_empty());
+    assert!(
+        absent
+            .state()
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions()
+            .is_empty()
+    );
 }
 
 // FinTS Messages 2022-04-15, C.2.1.1.1: HKKAZ 6 requires the national

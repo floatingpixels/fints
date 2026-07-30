@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod capabilities;
 mod client;
 #[cfg(feature = "development-diagnostics")]
 mod development_diagnostics;
@@ -15,6 +16,9 @@ mod segments;
 mod transport;
 mod wire;
 
+pub use capabilities::{
+    AdvertisedCapabilitySnapshot, OperationCapabilitySnapshot, ParameterSegmentAdvertisement,
+};
 pub use client::{
     BalanceContinuation, BalanceRequest, BookedTransactionContinuation, BookedTransactionRequest,
     Client, ContinuationKind, CreditCardBalanceContinuation, CreditCardBalanceRequest,
@@ -35,5 +39,5 @@ pub use model::{
     SecurityPrice, SignedAmount, StatementPosition, Tan, TanMedium, TanMediumClass,
     TanMediumStatus, TanMethod, TanProcess, Timestamp,
 };
-pub use transport::TransportError;
+pub use transport::{TraceDirection, TraceEvent, TraceSink, TransportError};
 pub use wire::WireError;

@@ -76,6 +76,12 @@ data-element reference, and parameters through explicit accessors. The caller ow
 display and logging policy for that diagnostic text; crate error messages and `Debug`
 output omit it. Raw authenticated messages are not retained.
 
+`Client::new_with_trace` optionally accepts a per-client `TraceSink`. It receives raw
+outgoing and Base64-decoded incoming FinTS payloads with a monotonically increasing
+exchange index. These payloads can contain credentials and all private protocol data;
+installing a sink explicitly makes the caller responsible for its handling. `Client::new`
+has no trace path, and the crate never logs or stores traced payloads itself.
+
 ## Supported Gate 1 profile
 
 - FinTS 3.0 delimiter syntax using the Latin-1 code set, strict byte lengths,
@@ -147,8 +153,10 @@ log them.
   from an operation that was never advertised.
 - A same-version HIBPA does not erase retained capabilities when business
   parameter segments are omitted; a changed BPD version replaces the complete set.
-- `advertised_balance_versions()` exposes only the generic HISALS version numbers;
-  pair each with `supports_balance_version()` for redacted compatibility diagnostics.
+- `advertised_capabilities()` derives one redacted snapshot for balance, camt and MT940
+  cash transactions, depot positions and transactions, and credit-card reads. It
+  includes advertised and supported versions, HIPINS TAN facts, camt descriptors, and
+  every safe parameter-segment code/version observed in the current BPD.
 - Non-account-bound HIUPD records are accepted without fabricating accounts, and the
   official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
 - HIBPA parameters whose institute identity differs from the configured institute
@@ -218,6 +226,40 @@ cargo doc --no-deps
 
 Live bank access is never part of the default test suite. Owner credentials and captures
 must stay outside the repository.
+
+### Owner-run live probe
+
+`examples/live_probe.rs` is an opt-in diagnostic caller and persists nothing. It refuses
+to run unless `FINTS_LIVE_PROBE=1` is set:
+
+```sh
+FINTS_LIVE_PROBE=1 \
+FINTS_ENDPOINT='https://bank.example/fints' \
+FINTS_BLZ='12345678' \
+FINTS_USER_ID='owner-input' \
+FINTS_PIN='owner-input' \
+FINTS_PRODUCT_ID='registered-caller-input' \
+FINTS_PRODUCT_VERSION='1.0' \
+FINTS_PROBE_SYNCHRONIZE=1 \
+cargo run --example live_probe
+```
+
+`FINTS_CUSTOMER_ID` and `FINTS_COUNTRY_CODE` are optional. Method selection uses
+`FINTS_TAN_METHOD` or `FINTS_TAN_METHOD_INDEX`; a required medium uses
+`FINTS_TAN_MEDIUM_INDEX`. Each one-time TAN is read interactively from stdin and the
+terminal may echo it.
+
+The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
+`FINTS_PROBE_DEPOT_POSITIONS_ACCOUNT`, `FINTS_PROBE_DEPOT_TRANSACTIONS_ACCOUNT`,
+`FINTS_PROBE_CARD_BALANCE_ACCOUNT`, and `FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT`
+enable the corresponding read without printing its private result. The probe prints
+all caller-visible bank response texts, which may reference the owner's accounts or
+orders.
+
+`FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
+credential-bearing request and response payloads to stdout as hexadecimal and escaped
+Latin-1 text. Use it only in an owner-controlled terminal; never redirect it to a file,
+paste its output into an issue or agent conversation, or enable it in normal consumers.
 
 ### Temporary development diagnostics
 

@@ -1285,6 +1285,99 @@ fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
     assert!(state.accounts()[0].allows_booked_transactions());
 }
 
+// FinTS Formals D/E and the registered Messages parameter segments: BPD
+// advertisements are safe generic protocol facts. The snapshot retains all
+// parameter codes/versions while operation support remains independently bounded.
+#[test]
+fn advertised_capability_snapshot_is_complete_redacted_and_operation_typed() {
+    let descriptor = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+61+280:12345678+Fictional Bank+9+1+300".into(),
+            "HISALS:4:8:3+1+1+0+N".into(),
+            format!("HICAZS:5:1:3+1+1+0+90:J:N:{descriptor}"),
+            "HIKAZS:6:7:3+1+1+0+90:J:N".into(),
+            "HIKAZS:7:9:3+fictional unsupported parameters".into(),
+            "HIWPDS:8:6:3+1+1+0+J:J:J".into(),
+            "HIWDUS:9:5:3+1+1+0+90".into(),
+            "HIKKUS:10:1:3+1+1+0+90:J:J:J".into(),
+            "HIKKSS:11:1:3+1+1+0+J".into(),
+            concat!(
+                "HIPINS:12:1:3+1+1+0+4:6:6:::HKSAL:N:HKCAZ:N:HKKAZ:J:",
+                "HKWPD:N:HKWDU:J:HKKKU:N:HKKKS:J"
+            )
+            .into(),
+            "HITANS:13:8:3+fictional unsupported parameters".into(),
+            "HIXYZS:14:2:3+fictional unknown parameters".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    let snapshot = state.advertised_capabilities();
+    assert_eq!(snapshot.balance().advertised_versions(), [8]);
+    assert!(snapshot.balance().supported_by_crate());
+    assert_eq!(snapshot.balance().tan_required(), Some(false));
+
+    assert_eq!(snapshot.camt_cash_transactions().advertised_versions(), [1]);
+    assert!(snapshot.camt_cash_transactions().supported_by_crate());
+    assert_eq!(
+        snapshot.camt_cash_transactions().descriptors(),
+        ["urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"]
+    );
+    assert_eq!(
+        snapshot.mt940_cash_transactions().advertised_versions(),
+        [9, 7]
+    );
+    assert!(snapshot.mt940_cash_transactions().supports_version(7));
+    assert!(!snapshot.mt940_cash_transactions().supports_version(9));
+    assert_eq!(
+        snapshot.mt940_cash_transactions().tan_required(),
+        Some(true)
+    );
+
+    assert_eq!(snapshot.depot_positions().advertised_versions(), [6]);
+    assert_eq!(snapshot.depot_positions().tan_required(), Some(false));
+    assert_eq!(snapshot.depot_transactions().advertised_versions(), [5]);
+    assert_eq!(snapshot.depot_transactions().tan_required(), Some(true));
+    assert_eq!(
+        snapshot.credit_card_transactions().advertised_versions(),
+        [1]
+    );
+    assert_eq!(
+        snapshot.credit_card_transactions().tan_required(),
+        Some(false)
+    );
+    assert_eq!(snapshot.credit_card_balance().advertised_versions(), [1]);
+    assert_eq!(snapshot.credit_card_balance().tan_required(), Some(true));
+
+    assert!(
+        snapshot
+            .parameter_segments()
+            .iter()
+            .any(|segment| { segment.code() == "HIXYZS" && segment.version() == 2 })
+    );
+    assert!(
+        snapshot
+            .parameter_segments()
+            .iter()
+            .any(|segment| { segment.code() == "HITANS" && segment.version() == 8 })
+    );
+    assert!(
+        snapshot
+            .parameter_segments()
+            .iter()
+            .all(|segment| segment.code() != "HIRMS")
+    );
+    assert!(!format!("{snapshot:?}").contains("12345678"));
+}
+
 // Messages 2022 HICAZS and the camt format registration treat the optional
 // ".xsd" suffix and ASCII case as identifier normalization. Every advertised
 // descriptor remains a safe generic fact; malformed empty descriptors still fail.
@@ -1307,7 +1400,14 @@ fn camt_descriptors_are_retained_and_supported_by_normalized_identity() {
         .apply_parameters(&mut state)
         .unwrap();
 
-    assert_eq!(state.advertised_camt_descriptors().len(), 2);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .camt_cash_transactions()
+            .descriptors()
+            .len(),
+        2
+    );
     assert_eq!(
         state.camt_capability.as_ref().unwrap().descriptor,
         "URN:ISO:STD:ISO:20022:TECH:XSD:CAMT.052.001.08.XSD"
@@ -1434,10 +1534,26 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
         .apply_parameters(&mut state)
         .unwrap();
 
-    assert_eq!(state.advertised_balance_versions(), [9, 8, 6, 4]);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [9, 8, 6, 4]
+    );
     assert_eq!(state.balance_versions, [8, 6]);
-    assert!(state.supports_balance_version(8));
-    assert!(!state.supports_balance_version(9));
+    assert!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .supports_version(8)
+    );
+    assert!(
+        !state
+            .advertised_capabilities()
+            .balance()
+            .supports_version(9)
+    );
 
     let unsupported_only = message(
         &[
@@ -1452,7 +1568,13 @@ fn balance_advertisements_preserve_unsupported_versions_without_selecting_them()
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.advertised_balance_versions(), [4]);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [4]
+    );
     assert!(state.balance_versions.is_empty());
 }
 
@@ -1474,9 +1596,20 @@ fn hisals_five_is_validated_and_selected_deterministically() {
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [5]
+    );
     assert_eq!(state.balance_versions, [5]);
-    assert!(state.supports_balance_version(5));
+    assert!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .supports_version(5)
+    );
 
     let mixed = message(
         &[
@@ -1493,7 +1626,13 @@ fn hisals_five_is_validated_and_selected_deterministically() {
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.advertised_balance_versions(), [8, 6, 5]);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [8, 6, 5]
+    );
     assert_eq!(state.balance_versions, [8, 6, 5]);
 
     for parameters in ["1", "1+4"] {
@@ -1511,7 +1650,13 @@ fn hisals_five_is_validated_and_selected_deterministically() {
             .apply_parameters(&mut state)
             .unwrap();
         assert_eq!(state.bpd_version(), 59);
-        assert_eq!(state.advertised_balance_versions(), [5]);
+        assert_eq!(
+            state
+                .advertised_capabilities()
+                .balance()
+                .advertised_versions(),
+            [5]
+        );
         assert!(state.balance_versions.is_empty());
     }
 }
@@ -1583,7 +1728,13 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         .unwrap();
 
     assert_eq!(state.balance_versions, [5]);
-    assert_eq!(state.advertised_balance_versions(), [5]);
+    assert_eq!(
+        state
+            .advertised_capabilities()
+            .balance()
+            .advertised_versions(),
+        [5]
+    );
     assert_eq!(
         state.camt_capability.as_ref().unwrap().descriptor,
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"

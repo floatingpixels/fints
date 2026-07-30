@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added the gated owner-run live probe, an explicit per-client raw
+  transport trace sink, and one derived redacted BPD capability snapshot. Default
+  clients remain trace-free; tests cover exchange pairing, redaction, and serde confinement.
+
 - **2026-07-30** — Retained bounded bank response text, data-element references, and
   parameters behind explicit caller accessors while keeping crate errors and `Debug`
   output redacted. Added Latin-1, embedded-account, ordered-error, and bound fixtures.

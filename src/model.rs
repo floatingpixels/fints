@@ -2,7 +2,7 @@ use chrono::{NaiveDate, NaiveTime};
 use encoding_rs::mem;
 use serde::{Deserialize, Serialize};
 
-use crate::error::InputError;
+use crate::{capabilities::ParameterSegmentAdvertisement, error::InputError};
 
 #[derive(Clone)]
 pub struct ProductIdentity {
@@ -457,6 +457,8 @@ pub struct ReusableState {
     pub(crate) credit_card_balance_account_required: Option<bool>,
     #[serde(default)]
     pub(crate) credit_card_balance_requires_tan: Option<bool>,
+    #[serde(skip)]
+    pub(crate) advertised_parameter_segments: Vec<ParameterSegmentAdvertisement>,
     pub(crate) tan_methods: Vec<TanMethod>,
     pub(crate) accounts: Vec<Account>,
     pub(crate) selected_tan_method: Option<String>,
@@ -478,33 +480,6 @@ impl ReusableState {
 
     pub fn upd_version(&self) -> u16 {
         self.upd_version
-    }
-
-    /// HISALS segment versions advertised by the latest retained BPD.
-    ///
-    /// Segment codes and versions are generic protocol facts and contain no
-    /// account or parameter values. Versions unsupported by this crate remain
-    /// present so callers can report a typed compatibility diagnostic.
-    pub fn advertised_balance_versions(&self) -> &[u16] {
-        &self.advertised_balance_versions
-    }
-
-    /// Whether a HISALS version is implemented for HKSAL requests.
-    ///
-    /// State written before advertised-version facts existed falls back to its
-    /// retained supported-version list.
-    pub fn supports_balance_version(&self, version: u16) -> bool {
-        (self.advertised_balance_versions.contains(&version) && (5..=8).contains(&version))
-            || (self.advertised_balance_versions.is_empty()
-                && self.balance_versions.contains(&version))
-    }
-
-    /// HICAZS camt descriptors advertised by the latest retained BPD.
-    ///
-    /// Descriptors are generic protocol capability facts. Unsupported values remain
-    /// present for redacted compatibility diagnostics.
-    pub fn advertised_camt_descriptors(&self) -> &[String] {
-        &self.advertised_camt_descriptors
     }
 
     pub fn accounts(&self) -> &[Account] {
@@ -1488,8 +1463,20 @@ mod tests {
 
         assert_eq!(state.bpd_version(), 57);
         assert_eq!(state.upd_version(), 1);
-        assert!(state.advertised_balance_versions().is_empty());
-        assert!(state.advertised_camt_descriptors().is_empty());
+        assert!(
+            state
+                .advertised_capabilities()
+                .balance()
+                .advertised_versions()
+                .is_empty()
+        );
+        assert!(
+            state
+                .advertised_capabilities()
+                .camt_cash_transactions()
+                .descriptors()
+                .is_empty()
+        );
     }
 
     #[derive(Debug)]
@@ -1911,8 +1898,16 @@ mod tests {
         original.bpd_version = 57;
         original.upd_version = 1;
         original.advertised_balance_versions = vec![5];
+        original
+            .advertised_parameter_segments
+            .push(ParameterSegmentAdvertisement::new("HISALS".to_owned(), 5));
 
         let projected = original.serialize(ProjectionSerializer).unwrap();
+        assert!(
+            !projected
+                .iter()
+                .any(|(field, _)| field == "advertised_parameter_segments")
+        );
         let mut fields = vec![
             ("system_id".to_owned(), PreviousValue::None),
             ("balance_requires_tan".to_owned(), PreviousValue::None),
@@ -1929,7 +1924,24 @@ mod tests {
         assert_eq!(restored.bpd_version(), 57);
         assert_eq!(restored.upd_version(), 1);
         assert!(restored.balance_versions.is_empty());
-        assert_eq!(restored.advertised_balance_versions(), [5]);
-        assert!(restored.supports_balance_version(5));
+        assert_eq!(
+            restored
+                .advertised_capabilities()
+                .balance()
+                .advertised_versions(),
+            [5]
+        );
+        assert!(
+            restored
+                .advertised_capabilities()
+                .balance()
+                .supports_version(5)
+        );
+        assert!(
+            restored
+                .advertised_capabilities()
+                .parameter_segments()
+                .is_empty()
+        );
     }
 }

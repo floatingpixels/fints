@@ -21,7 +21,7 @@ other sibling checkout.
 
 Stop and ask the owner before proceeding when:
 
-- Non-test code under `src/` would exceed about 11,250 lines. Fixtures, generated test
+- Non-test code under `src/` would exceed about 12,500 lines. Fixtures, generated test
   data, and tests do not count.
 - Module boundaries follow Rust convention: split by cohesive responsibility (e.g.
   codec, dialog state, segment parsing, typed results), not by line count. Splitting a
@@ -95,6 +95,11 @@ Keep optional features out until a current gate proves them necessary.
   response free text is retained verbatim for explicit caller access but never appears
   through these implicit formatting paths; the caller owns its display and logging
   policy.
+- A caller-installed diagnostic trace hook may receive raw outgoing and incoming
+  transport payloads. It is opt-in per client construction, never enabled by any
+  default path, and documented as carrying credential-bearing traffic; the caller owns
+  everything it does with the data. The crate itself still never logs, stores, or
+  embeds raw traffic in errors.
 - Product registration ID and version are caller inputs. The real Finanzplaner
   registration ID never enters this repository, its fixtures, or its history.
 - One-time TANs, challenges, dialog identifiers, tokens, and live sessions remain

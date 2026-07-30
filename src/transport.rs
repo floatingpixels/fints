@@ -1,7 +1,7 @@
-use std::{io::Read, time::Duration};
+use std::{cell::Cell, io::Read, time::Duration};
 
 #[cfg(test)]
-use std::{cell::RefCell, collections::VecDeque};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Url, blocking::Client, header::CONTENT_TYPE, redirect::Policy};
@@ -22,6 +22,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) struct Transport {
     endpoint: Url,
     client: Client,
+    trace_sink: Option<TraceSink>,
+    next_exchange_index: Cell<u64>,
     #[cfg(test)]
     fixture: Option<FixtureTransport>,
 }
@@ -31,6 +33,40 @@ struct FixtureTransport {
     responses: RefCell<VecDeque<Vec<u8>>>,
     requests: RefCell<Vec<Vec<u8>>>,
 }
+
+/// Direction of one raw transport payload delivered to an opt-in trace sink.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceDirection {
+    Outgoing,
+    Incoming,
+}
+
+/// Borrowed raw FinTS payload delivered to a caller-installed diagnostic sink.
+///
+/// Payloads can contain credentials, account data, challenges, and other private
+/// protocol values. This type intentionally has no `Debug` implementation.
+pub struct TraceEvent<'a> {
+    direction: TraceDirection,
+    payload: &'a [u8],
+    exchange_index: u64,
+}
+
+impl<'a> TraceEvent<'a> {
+    pub fn direction(&self) -> TraceDirection {
+        self.direction
+    }
+
+    pub fn payload(&self) -> &'a [u8] {
+        self.payload
+    }
+
+    pub fn exchange_index(&self) -> u64 {
+        self.exchange_index
+    }
+}
+
+/// Opt-in callback for credential-bearing raw FinTS transport payloads.
+pub type TraceSink = Box<dyn for<'a> Fn(TraceEvent<'a>) + 'static>;
 
 /// Failures in the bounded HTTPS transport.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -50,7 +86,15 @@ pub enum TransportError {
 }
 
 impl Transport {
+    #[cfg(test)]
     pub(crate) fn new(endpoint: &str) -> Result<Self, TransportError> {
+        Self::new_with_trace(endpoint, None)
+    }
+
+    pub(crate) fn new_with_trace(
+        endpoint: &str,
+        trace_sink: Option<TraceSink>,
+    ) -> Result<Self, TransportError> {
         let endpoint = Url::parse(endpoint).map_err(|_| TransportError::InvalidEndpoint)?;
         if endpoint.scheme() != "https"
             || endpoint.host_str().is_none()
@@ -70,20 +114,31 @@ impl Transport {
         Ok(Self {
             endpoint,
             client,
+            trace_sink,
+            next_exchange_index: Cell::new(1),
             #[cfg(test)]
             fixture: None,
         })
     }
 
     pub(crate) fn send(&self, message: &[u8]) -> Result<Vec<u8>, TransportError> {
+        let exchange_index = self.next_exchange_index.get();
+        let next_exchange_index = exchange_index
+            .checked_add(1)
+            .ok_or(TransportError::Request)?;
+        self.next_exchange_index.set(next_exchange_index);
+        self.trace(TraceDirection::Outgoing, message, exchange_index);
+
         #[cfg(test)]
         if let Some(fixture) = &self.fixture {
             fixture.requests.borrow_mut().push(message.to_vec());
-            return fixture
+            let response = fixture
                 .responses
                 .borrow_mut()
                 .pop_front()
-                .ok_or(TransportError::Request);
+                .ok_or(TransportError::Request)?;
+            self.trace(TraceDirection::Incoming, &response, exchange_index);
+            return Ok(response);
         }
 
         let body = encode_body(message);
@@ -111,13 +166,40 @@ impl Transport {
             .take((MAX_TRANSPORT_RESPONSE_BYTES + 1) as u64)
             .read_to_end(&mut encoded)
             .map_err(|_| TransportError::Request)?;
-        decode_body(&encoded)
+        let decoded = decode_body(&encoded)?;
+        self.trace(TraceDirection::Incoming, &decoded, exchange_index);
+        Ok(decoded)
+    }
+
+    fn trace(&self, direction: TraceDirection, payload: &[u8], exchange_index: u64) {
+        if let Some(sink) = &self.trace_sink {
+            sink(TraceEvent {
+                direction,
+                payload,
+                exchange_index,
+            });
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn fixture(responses: impl IntoIterator<Item = Vec<u8>>) -> Self {
         let mut transport =
             Self::new("https://fictional.invalid/fints").expect("fictional HTTPS endpoint");
+        transport.fixture = Some(FixtureTransport {
+            responses: RefCell::new(responses.into_iter().collect()),
+            requests: RefCell::new(Vec::new()),
+        });
+        transport
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_with_trace(
+        responses: impl IntoIterator<Item = Vec<u8>>,
+        trace_sink: TraceSink,
+    ) -> Self {
+        let mut transport =
+            Self::new_with_trace("https://fictional.invalid/fints", Some(trace_sink))
+                .expect("fictional HTTPS endpoint");
         transport.fixture = Some(FixtureTransport {
             responses: RefCell::new(responses.into_iter().collect()),
             requests: RefCell::new(Vec::new()),
@@ -249,5 +331,63 @@ mod tests {
             Transport::new("https://user:secret@bank.invalid/fints").err(),
             Some(TransportError::InvalidEndpoint)
         );
+    }
+
+    #[test]
+    fn tracing_exists_only_for_an_explicitly_installed_sink() {
+        let untraced = Transport::fixture([b"fictional response".to_vec()]);
+        assert!(untraced.trace_sink.is_none());
+        assert_eq!(
+            untraced.send(b"fictional request").unwrap(),
+            b"fictional response"
+        );
+
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        let traced = Transport::fixture_with_trace(
+            [b"first response".to_vec(), b"second response".to_vec()],
+            Box::new(move |event| {
+                captured.borrow_mut().push((
+                    event.exchange_index(),
+                    event.direction(),
+                    event.payload().to_vec(),
+                ));
+            }),
+        );
+        traced.send(b"first request").unwrap();
+        traced.send(b"second request").unwrap();
+
+        assert_eq!(
+            *events.borrow(),
+            [
+                (1, TraceDirection::Outgoing, b"first request".to_vec()),
+                (1, TraceDirection::Incoming, b"first response".to_vec()),
+                (2, TraceDirection::Outgoing, b"second request".to_vec()),
+                (2, TraceDirection::Incoming, b"second response".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn trace_payloads_never_enter_transport_error_formatting() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        let transport = Transport::fixture_with_trace(
+            std::iter::empty(),
+            Box::new(move |event| {
+                captured.borrow_mut().push(event.payload().to_vec());
+            }),
+        );
+
+        let error = transport
+            .send(b"fictional credential-bearing payload")
+            .unwrap_err();
+        assert_eq!(
+            *events.borrow(),
+            [b"fictional credential-bearing payload".to_vec()]
+        );
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.contains("fictional"));
+        assert!(!rendered.contains("credential"));
     }
 }

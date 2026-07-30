@@ -12,7 +12,7 @@ use crate::{
         CreditCardTransactions, DepotPositions, InstituteId, ProductIdentity, ReusableState,
         SecuritiesTransactions, Tan, TanMedium, TanMethod, TanProcess,
     },
-    transport::Transport,
+    transport::{TraceSink, Transport},
 };
 
 /// The user action accepted by a process-memory continuation.
@@ -154,15 +154,36 @@ impl Client {
         credentials: Credentials,
         state: ReusableState,
     ) -> Result<Self, Error> {
+        Self::new_with_trace(endpoint, institute, product, credentials, state, None)
+    }
+
+    /// Constructs a client with an optional raw transport trace sink.
+    ///
+    /// Trace events carry credential-bearing outgoing and incoming FinTS payloads.
+    /// Installing a sink is an explicit per-client decision; the crate never stores,
+    /// logs, formats, or otherwise retains those payloads.
+    pub fn new_with_trace(
+        endpoint: &str,
+        institute: InstituteId,
+        product: ProductIdentity,
+        credentials: Credentials,
+        state: ReusableState,
+        trace_sink: Option<TraceSink>,
+    ) -> Result<Self, Error> {
         Ok(Self {
             engine: Engine::new(institute, product, credentials, state)?,
-            transport: Transport::new(endpoint)?,
+            transport: Transport::new_with_trace(endpoint, trace_sink)?,
             last_initialization_stage: None,
         })
     }
 
     pub fn state(&self) -> &ReusableState {
         self.engine.state()
+    }
+
+    /// Derives a redacted snapshot of the currently retained BPD advertisements.
+    pub fn advertised_capabilities(&self) -> crate::AdvertisedCapabilitySnapshot {
+        self.state().advertised_capabilities()
     }
 
     pub fn into_state(self) -> ReusableState {
