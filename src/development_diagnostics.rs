@@ -29,21 +29,55 @@ impl ReceivedSegmentFact {
     }
 }
 
+/// One validated HIRMG/HIRMS response observed during TAN-medium discovery.
+///
+/// The code and optional request-segment reference are generic protocol facts. This
+/// type contains no response text, parameters, data-element references, or wire data
+/// and deliberately does not implement serialization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReceivedResponseFact {
+    code: u16,
+    segment_number: Option<u16>,
+}
+
+impl ReceivedResponseFact {
+    pub(crate) fn new(code: u16, segment_number: Option<u16>) -> Self {
+        Self {
+            code,
+            segment_number,
+        }
+    }
+
+    pub fn code(self) -> u16 {
+        self.code
+    }
+
+    pub fn segment_number(self) -> Option<u16> {
+        self.segment_number
+    }
+}
+
 /// Redacted structure of the most recent TAN-medium discovery response.
 ///
-/// The ordered segment facts exclude security controls and all segment contents.
-/// `discovered_medium_count` is `None` only when medium parsing failed before a
-/// complete list could be established.
+/// The ordered segment facts exclude security controls and all segment contents. The
+/// ordered response facts retain only four-digit codes and request-segment references.
+/// `discovered_medium_count` is `None` only when medium parsing failed before a complete
+/// list could be established.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TanMediaDiscoveryFacts {
     received_segments: Vec<ReceivedSegmentFact>,
+    received_responses: Vec<ReceivedResponseFact>,
     discovered_medium_count: Option<usize>,
 }
 
 impl TanMediaDiscoveryFacts {
-    pub(crate) fn new(received_segments: Vec<ReceivedSegmentFact>) -> Self {
+    pub(crate) fn new(
+        received_segments: Vec<ReceivedSegmentFact>,
+        received_responses: Vec<ReceivedResponseFact>,
+    ) -> Self {
         Self {
             received_segments,
+            received_responses,
             discovered_medium_count: None,
         }
     }
@@ -54,6 +88,10 @@ impl TanMediaDiscoveryFacts {
 
     pub fn received_segments(&self) -> &[ReceivedSegmentFact] {
         &self.received_segments
+    }
+
+    pub fn received_responses(&self) -> &[ReceivedResponseFact] {
+        &self.received_responses
     }
 
     pub fn discovered_medium_count(&self) -> Option<usize> {

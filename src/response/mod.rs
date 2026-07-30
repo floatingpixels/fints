@@ -1,5 +1,5 @@
 #[cfg(feature = "development-diagnostics")]
-use crate::development_diagnostics::ReceivedSegmentFact;
+use crate::development_diagnostics::{ReceivedResponseFact, ReceivedSegmentFact};
 use crate::{
     error::{BankResponse, Error, Recovery, ResponseClass},
     model::{Balance, ReusableState, TanMedium, TransactionFormat},
@@ -378,6 +378,14 @@ impl Response {
                     .ok()
                     .map(|code| ReceivedSegmentFact::new(code.to_owned(), header.version))
             })
+            .collect()
+    }
+
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_response_facts(&self) -> Vec<ReceivedResponseFact> {
+        self.responses
+            .iter()
+            .map(|response| ReceivedResponseFact::new(response.code(), response.segment_number()))
             .collect()
     }
 

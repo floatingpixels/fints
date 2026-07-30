@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Retained redacted ordered TAN-media response codes/references
+  across HKEND and validated process-4 HITAN acknowledgements without treating
+  them as substitutes for mandatory HITAB or as continuations.
+
 - **2026-07-30** — Added explicit missing-HITAB and
   `TanMediumUnavailable` outcomes, bounded discovery structure diagnostics, and
   exactly-once HKEND handling for accepted but unusable medium discovery.

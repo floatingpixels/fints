@@ -46,7 +46,8 @@ A new connection follows this bounded sequence:
    `select_tan_medium`. A missing HITAB response fails as a typed missing value;
    an empty or non-selectable required list returns
    `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
-   closed exactly once.
+   closed exactly once. A process-4 HITAN may acknowledge the embedded HKTAN but
+   does not replace HITAB or create another media-discovery continuation.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.
@@ -286,9 +287,10 @@ paste its output into an issue or agent conversation, or enable it in normal con
 ### Temporary development diagnostics
 
 The non-default `development-diagnostics` feature exposes initialization decision
-booleans and TAN-medium-discovery segment code/version facts for bounded, owner-attended
-interoperability work. It never exposes segment contents or medium names. Normal
-consumers must leave it disabled; the public API and its storage fields are absent
-without the feature.
+booleans plus TAN-medium-discovery segment code/version and response-code/request-
+segment-reference facts for bounded, owner-attended interoperability work. It never
+exposes segment contents, response text or parameters, or medium names. Normal consumers
+must leave it disabled; the public API and its storage fields are absent without the
+feature.
 Remove the feature, `src/development_diagnostics.rs`, and its explicitly marked call
 sites together once live verification of the three target banks is complete.

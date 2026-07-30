@@ -102,6 +102,7 @@ impl Engine {
             self.development_tan_media_discovery =
                 Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
                     response.development_segment_facts(),
+                    response.development_response_facts(),
                 ));
         }
         self.record_responses(&response);
@@ -126,11 +127,15 @@ impl Engine {
             method: Some(method.clone()),
             anonymous: false,
         });
-        if let Some(tan_response) = response.tan(method.hktan_version)?
-            && tan_response.challenge.reference != "noref"
-        {
+        if let Some(tan_response) = response.tan(method.hktan_version)? {
+            // PIN/TAN B.5.1/B.5.2 fixes the institute response to the same
+            // process 4 used by the embedded HKTAN. A dummy noref HITAN only
+            // records that no SCA is needed; it never substitutes for the
+            // mandatory HITAB result from B.4.3.1.3/C.3.1.1.
             validate_tan_process(&tan_response.process, "4")?;
-            return Err(Limitation::TanMedium.into());
+            if tan_response.challenge.reference != "noref" {
+                return Err(Limitation::TanMedium.into());
+            }
         }
         let tan_media = response.tan_media();
         #[cfg(feature = "development-diagnostics")]

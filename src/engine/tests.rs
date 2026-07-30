@@ -891,6 +891,37 @@ fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialo
     assert!(empty.has_active_dialog());
 }
 
+// PIN/TAN B.5.1/B.5.2: an institute HITAN answering a process-4 HKTAN must
+// itself carry process 4, including when its reference is the no-SCA filler.
+// A different process never changes the missing-HITAB result into a continuation.
+#[test]
+fn tan_medium_discovery_rejects_mismatched_dummy_hitan_process() {
+    for (process, version) in [
+        (TanProcess::ProcessVariantTwo, 6),
+        (TanProcess::Decoupled, 7),
+    ] {
+        let mut engine = engine_with_method(process);
+        engine.state.tan_methods[0].medium_name_required = true;
+        engine
+            .tan_media_initialization_request(now().date(), now().time())
+            .unwrap();
+        let hitan = format!("HITAN:3:{version}:5+2++noref+nochallenge");
+        let response = response(
+            &["HIRMG:2:2+0010::accepted", &hitan],
+            "mismatched-media-process",
+            1,
+        );
+
+        assert!(matches!(
+            engine.accept_tan_media_initialization(&response),
+            Err(Error::InvalidValue {
+                field: "HITAN process"
+            })
+        ));
+        assert!(engine.has_active_dialog());
+    }
+}
+
 // Formals B.7.5 and PIN/TAN C.3.1.1: message responses, the HITAB data
 // segment, and segment responses retain wire order while the media parser
 // consumes only HITAB. Institution-authored text remains absent from Debug.

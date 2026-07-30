@@ -232,8 +232,9 @@ impl Client {
     /// Temporary redacted structure of the most recent TAN-medium discovery.
     ///
     /// This survives the internal HKEND exchange that replaces [`Self::last_responses`]
-    /// with the termination response. It contains only ordered segment codes/versions
-    /// and a parsed medium count, never medium names or segment contents.
+    /// with the termination response. It contains only ordered segment codes/versions,
+    /// response codes/request-segment references, and a parsed medium count, never
+    /// medium names, response text/parameters, or segment contents.
     #[cfg(feature = "development-diagnostics")]
     pub fn development_tan_media_discovery(&self) -> Option<&crate::TanMediaDiscoveryFacts> {
         self.engine.development_tan_media_discovery()
@@ -1176,6 +1177,50 @@ mod tests {
         state
     }
 
+    fn process_four_hitan_without_hitab(hitan_version: u16) -> Vec<u8> {
+        // Independently assembled from PIN/TAN B.4.3.1.3, B.5.1/B.5.2,
+        // C.3.1.1, and correction T33. The parameter segments intentionally
+        // mirror a broad fictional BPD response; none is derived from live
+        // contents or from the request serializer under test.
+        let (function_six, function_seven) = if hitan_version == 6 {
+            ("942", "943")
+        } else {
+            ("943", "942")
+        };
+        let method_six = format!(
+            "{function_six}:2:fictional-medium-method::1.0:Fictional medium approval:\
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:1"
+        );
+        let method_seven = format!(
+            "{function_seven}:2:fictional-push:Decoupled:1.0:Fictional push approval:\
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:1:5:2:3:J:J"
+        );
+        let segments = vec![
+            "HIRMG:2:2+0010::fictional accepted".to_owned(),
+            "HIRMS:3:2:4+0020::fictional product accepted:private-parameter".to_owned(),
+            "HIRMS:4:2:5+3076::fictional SCA not required".to_owned(),
+            "HIBPA:5:3:4+78+280:12345678+Fictional Bank+9+1+300".to_owned(),
+            "HIKOM:6:4:4+3+fints.example.invalid:443".to_owned(),
+            "HIPINS:7:1:4+1+1+0+4:6:6:::HKTAB:N:HKTAN:N".to_owned(),
+            "DIPINS:8:1:4+fictional unparsed parameters".to_owned(),
+            "HIPAES:9:1:4+fictional unparsed parameters".to_owned(),
+            "DIPAES:10:1:4+fictional unparsed parameters".to_owned(),
+            format!("HITANS:11:6:4+1+1+0+N:N:0:{method_six}"),
+            format!("HITANS:12:7:4+1+1+0+N:N:0:{method_seven}"),
+            "HITABS:13:2:4+1+1+0".to_owned(),
+            "HITABS:14:4:4+1+1+0".to_owned(),
+            "HIPROS:15:3:4+fictional unparsed parameters".to_owned(),
+            "HISPAS:16:1:4+fictional unparsed parameters".to_owned(),
+            "HIFRDS:17:4:4+fictional unparsed parameters".to_owned(),
+            "HIKKSS:18:1:4+1+1+0+J".to_owned(),
+            "HIKKUS:19:1:4+1+1+0+90:J:J:J".to_owned(),
+            format!("HITAN:20:{hitan_version}:5+4++noref+nochallenge"),
+        ];
+        let mut inner = segments.join("'");
+        inner.push('\'');
+        secured_response(inner.as_bytes(), 1, 21)
+    }
+
     fn client_with_state(
         state: ReusableState,
         responses: impl IntoIterator<Item = Vec<u8>>,
@@ -1360,8 +1405,11 @@ mod tests {
     // the required HKEND response replaces last_responses.
     #[test]
     fn missing_hitab_is_typed_and_still_terminates_once_for_both_hktan_versions() {
-        for process in [TanProcess::ProcessVariantTwo, TanProcess::Decoupled] {
-            let discovery = secured_response(b"HIRMG:2:2+0010::fictional accepted'", 1, 3);
+        for (process, version) in [
+            (TanProcess::ProcessVariantTwo, 6),
+            (TanProcess::Decoupled, 7),
+        ] {
+            let discovery = process_four_hitan_without_hitab(version);
             let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 2, 3);
             let mut client = client_with_state(tan_media_state(process), [discovery, termination]);
 
@@ -1373,6 +1421,7 @@ mod tests {
             ));
             assert_eq!(client.transport.fixture_requests().len(), 2);
             assert_eq!(client.last_responses()[0].code(), 100);
+            assert_eq!(client.state().bpd_version(), 78);
 
             #[cfg(feature = "development-diagnostics")]
             {
@@ -1383,9 +1432,41 @@ mod tests {
                         .iter()
                         .map(|segment| (segment.code(), segment.version()))
                         .collect::<Vec<_>>(),
-                    [("HIRMG", 2)]
+                    [
+                        ("HIRMG", 2),
+                        ("HIRMS", 2),
+                        ("HIRMS", 2),
+                        ("HIBPA", 3),
+                        ("HIKOM", 4),
+                        ("HIPINS", 1),
+                        ("DIPINS", 1),
+                        ("HIPAES", 1),
+                        ("DIPAES", 1),
+                        ("HITANS", 6),
+                        ("HITANS", 7),
+                        ("HITABS", 2),
+                        ("HITABS", 4),
+                        ("HIPROS", 3),
+                        ("HISPAS", 1),
+                        ("HIFRDS", 4),
+                        ("HIKKSS", 1),
+                        ("HIKKUS", 1),
+                        ("HITAN", version),
+                    ]
+                );
+                assert_eq!(
+                    facts
+                        .received_responses()
+                        .iter()
+                        .map(|response| (response.code(), response.segment_number()))
+                        .collect::<Vec<_>>(),
+                    [(10, None), (20, Some(4)), (3076, Some(5))]
                 );
                 assert_eq!(facts.discovered_medium_count(), Some(0));
+                let rendered = format!("{facts:?}");
+                assert!(!rendered.contains("fictional"));
+                assert!(!rendered.contains("private-parameter"));
+                assert!(!rendered.contains("942"));
             }
         }
     }

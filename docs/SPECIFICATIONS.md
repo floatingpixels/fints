@@ -203,7 +203,12 @@ access date for each source below is 2026-07-28.
   C.3.1.1 defines HKTAB/HITAB 5 and permits an empty repeated medium list only
   when no medium is available. The HKTAN 6 and 7 Data Dictionary entries place
   the optional medium name at DE 12; correction T33 permits `Segmentkennung`
-  during process 4 for both versions.
+  during process 4 for both versions. The corresponding HITAN 6 and 7 entries
+  permit a process-4 institute response and require its order reference for that
+  process; their `noref`/challenge filler rule records that no TAN is required.
+  Neither that HITAN nor the correction register defines a continuation or
+  parameter-refresh step for HKTAB, while B.4.3.1.3 still requires HITAB before
+  the client closes the dialog.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
@@ -211,7 +216,9 @@ access date for each source below is 2026-07-28.
   HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. The
   medium-discovery sections authorize requiring HITAB after an accepted request
   and returning a typed limitation when an advertised required name is not
-  selectable; they do not authorize a medium-free continuation. B.4.3.1 and
+  selectable. A process-4 HITAN is validated as the response to the embedded
+  HKTAN but does not substitute for HITAB or authorize a media-discovery
+  continuation. B.4.3.1 and
   F.2.5 additionally authorize closing an open function-999 discovery with a
   profile-1, security-function-999 HKEND using the active dialog state. It also
   authorizes treating the specification-defined function-999
