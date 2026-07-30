@@ -49,6 +49,11 @@ product.
 - Credentials, PINs, TANs, challenges, tokens, raw authenticated messages, private
   account data, and consumer product registration values never appear in logs, errors,
   panic messages, or ordinary `Debug` output.
+- Bank-sent response free text (Rückmeldungstext) is retained verbatim, bounded by its
+  specified length, and exposed to the caller as typed display/diagnostic data. The
+  institution authors this text and it may reference accounts or orders; the caller
+  owns all display and logging policy for it. It never appears in the crate's own error
+  messages, `Debug` output, or panic messages.
 - Typed TANs, decoupled approvals, challenges, dialog identifiers, tokens, and live
   sessions remain process-memory values.
 - Only assigned system ID, selected TAN method/medium, and the minimum required BPD/UPD

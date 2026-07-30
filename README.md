@@ -70,9 +70,11 @@ read. After a TAN or decoupled approval completes, the client automatically exha
 any remaining same-dialog pages before returning the result.
 
 The most recently parsed bank response codes are available through
-`last_responses()`. They retain only the numeric code, optional segment reference,
-response class, and bounded recovery category. Bank free text and raw authenticated
-messages are not retained.
+`last_responses()`. Alongside the numeric code, optional segment reference, response
+class, and bounded recovery category, they retain the bank-authored free text,
+data-element reference, and parameters through explicit accessors. The caller owns
+display and logging policy for that diagnostic text; crate error messages and `Debug`
+output omit it. Raw authenticated messages are not retained.
 
 ## Supported Gate 1 profile
 
@@ -151,7 +153,7 @@ log them.
   official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
 - HIBPA parameters whose institute identity differs from the configured institute
   fail before reusable state changes. Codes such as 9075 and 9185 retain distinct
-  actionable recovery categories without retaining bank free text.
+  actionable recovery categories without interpreting bank free text.
 
 Gate 3 adds no institution registry, provider abstraction, endpoint discovery, new
 operation, or dependency. Stale or wrong endpoint selection remains caller-owned;

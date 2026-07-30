@@ -185,9 +185,10 @@ impl Client {
         self.engine.tan_media()
     }
 
-    /// Redacted response codes from the most recently parsed bank message.
+    /// Typed responses from the most recently parsed bank message.
     ///
-    /// Free response text and raw authenticated messages are never retained.
+    /// Explicit response-text accessors are caller-owned display/logging data and
+    /// remain omitted from crate error messages and `Debug` output.
     pub fn last_responses(&self) -> &[BankResponse] {
         self.engine.last_responses()
     }
@@ -1296,6 +1297,18 @@ mod tests {
                 .map(|response| (response.code(), response.segment_number()))
                 .collect::<Vec<_>>(),
             [(9050, None), (9800, None), (9952, None)]
+        );
+        assert_eq!(
+            client
+                .last_responses()
+                .iter()
+                .map(BankResponse::text)
+                .collect::<Vec<_>>(),
+            [
+                "fictional summary",
+                "fictional bank termination",
+                "fictional unpublished companion"
+            ]
         );
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("fictional"));

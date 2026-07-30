@@ -12,9 +12,10 @@ fn message(segments: &[String], dialog_id: &str, message_number: u16) -> Vec<u8>
         wire.push('\'');
     }
     wire.push_str(&format!("HNHBS:{trailer_number}:1+{message_number}'"));
+    let mut wire = encoding_rs::mem::encode_latin1_lossy(&wire).into_owned();
     let length = format!("{:012}", wire.len());
-    wire.replace_range(10..22, &length);
-    wire.into_bytes()
+    wire[10..22].copy_from_slice(length.as_bytes());
+    wire
 }
 
 // Deliberately assembled without the crate serializer. FinTS Formals B.8 and
@@ -1783,21 +1784,95 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     ));
 }
 
-// Formals 2017-10-06, B.7.5: free bank text is not retained in public errors.
+// Formals 2017-10-06, B.7.5 and F "Rückmeldung": bank text should be shown
+// unchanged; its DEG also supplies an optional offending-field position and
+// up to ten parameters. Explicit access retains them while formatting stays silent.
 #[test]
-fn bank_response_preserves_code_but_not_private_text() {
+fn bank_response_retains_diagnostics_but_implicit_formatting_stays_redacted() {
     let fixture = message(
-        &["HIRMG:2:2+9942::private credential detail".into()],
+        &["HIRMG:2:2+0010::Akzeptiert+9942:3,2:Ungültiges Konto 12345678:Feld:Wert".into()],
         "dialog1",
         1,
     );
 
     let response = Response::parse(&fixture).unwrap();
-    let error = Error::Bank(response.first_error().unwrap());
+    let responses = response.responses();
+    assert_eq!(responses[1].text(), "Ungültiges Konto 12345678");
+    assert_eq!(responses[1].data_element_reference(), Some("3,2"));
+    assert_eq!(
+        responses[1].parameters(),
+        &["Feld".to_owned(), "Wert".to_owned()]
+    );
+
+    let error = Error::Bank(responses[1].clone());
     let rendered = format!("{error:?} {error}");
 
     assert!(rendered.contains("9942"));
-    assert!(!rendered.contains("private credential detail"));
+    assert!(!rendered.contains("Ungültiges Konto 12345678"));
+    assert!(!rendered.contains("3,2"));
+    assert!(!rendered.contains("Feld"));
+    assert!(!rendered.contains("Wert"));
+}
+
+// Formals 2017-10-06, F "Rückmeldung": Rückmeldungstext is an..80 and
+// Rückmeldungsparameter is an..35; values are never truncated.
+#[test]
+fn bank_response_diagnostic_wire_bounds_are_enforced() {
+    let overlong_text = "x".repeat(81);
+    let fixture = message(&[format!("HIRMG:2:2+9942::{overlong_text}")], "dialog1", 1);
+    assert!(matches!(
+        Response::parse(&fixture),
+        Err(Error::InvalidValue {
+            field: "response text"
+        })
+    ));
+
+    let overlong_parameter = "x".repeat(36);
+    let fixture = message(
+        &[
+            "HIRMG:2:2+9050::Fehler".into(),
+            format!("HIRMS:3:2:4+9942:1:Fehler:{overlong_parameter}"),
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&fixture),
+        Err(Error::InvalidValue {
+            field: "response parameter"
+        })
+    ));
+
+    let fixture = message(
+        &[
+            "HIRMG:2:2+9050::Fehler".into(),
+            "HIRMS:3:2:4+9942:12345678:Fehler".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&fixture),
+        Err(Error::InvalidValue {
+            field: "response data-element reference"
+        })
+    ));
+
+    let parameters = std::iter::repeat_n("x", 11).collect::<Vec<_>>().join(":");
+    let fixture = message(
+        &[
+            "HIRMG:2:2+9050::Fehler".into(),
+            format!("HIRMS:3:2:4+9942:1:Fehler:{parameters}"),
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&fixture),
+        Err(Error::InvalidResponse {
+            structure: "response parameter count"
+        })
+    ));
 }
 
 // Rückmeldungscodes 2026-02-03 A and B.4: 99xx historically permits

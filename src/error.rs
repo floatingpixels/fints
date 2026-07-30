@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{transport::TransportError, wire::WireError};
 
-/// A recovery decision the caller can present without exposing bank response text.
+/// A recovery decision derived without interpreting bank response free text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recovery {
     RetryLater,
@@ -118,13 +118,20 @@ pub enum InputError {
     TransactionDateRange,
 }
 
-/// A bank response code stripped of its potentially private free text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A typed bank response with explicitly accessible institution-authored diagnostics.
+///
+/// The caller owns display and logging policy for [`Self::text`],
+/// [`Self::data_element_reference`], and [`Self::parameters`]. Those values are
+/// deliberately omitted from this type's `Debug` output and crate-owned errors.
+#[derive(Clone, PartialEq, Eq)]
 pub struct BankResponse {
     code: u16,
     class: ResponseClass,
     segment_number: Option<u16>,
     recovery: Option<Recovery>,
+    text: String,
+    data_element_reference: Option<String>,
+    parameters: Vec<String>,
 }
 
 impl BankResponse {
@@ -133,33 +140,72 @@ impl BankResponse {
         class: ResponseClass,
         segment_number: Option<u16>,
         recovery: Option<Recovery>,
+        text: String,
+        data_element_reference: Option<String>,
+        parameters: Vec<String>,
     ) -> Self {
         Self {
             code,
             class,
             segment_number,
             recovery,
+            text,
+            data_element_reference,
+            parameters,
         }
     }
 
     /// The four-digit FinTS response code.
-    pub fn code(self) -> u16 {
+    pub fn code(&self) -> u16 {
         self.code
     }
 
     /// The referenced request segment, when `HIRMS` supplied one.
-    pub fn segment_number(self) -> Option<u16> {
+    pub fn segment_number(&self) -> Option<u16> {
         self.segment_number
     }
 
     /// The bounded recovery category known for this response code.
-    pub fn recovery(self) -> Option<Recovery> {
+    pub fn recovery(&self) -> Option<Recovery> {
         self.recovery
     }
 
     /// The response class derived from the first digit of the four-digit code.
-    pub fn class(self) -> ResponseClass {
+    pub fn class(&self) -> ResponseClass {
         self.class
+    }
+
+    /// The institution-authored response text, retained verbatim from the wire.
+    ///
+    /// The caller owns display and logging policy for this diagnostic text.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The offending data-element position supplied for a segment response.
+    ///
+    /// The caller owns display and logging policy for this diagnostic value.
+    pub fn data_element_reference(&self) -> Option<&str> {
+        self.data_element_reference.as_deref()
+    }
+
+    /// The bank-supplied parameters that further qualify this response.
+    ///
+    /// The caller owns display and logging policy for these diagnostic values.
+    pub fn parameters(&self) -> &[String] {
+        &self.parameters
+    }
+}
+
+impl std::fmt::Debug for BankResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BankResponse")
+            .field("code", &self.code)
+            .field("class", &self.class)
+            .field("segment_number", &self.segment_number)
+            .field("recovery", &self.recovery)
+            .finish_non_exhaustive()
     }
 }
 

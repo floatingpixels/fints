@@ -89,9 +89,12 @@ Keep optional features out until a current gate proves them necessary.
 ## Security and personal data
 
 - Forbid unsafe Rust in library code.
-- Never log or include in `Debug`, `Display`, panic messages, snapshots, or errors:
-  credentials, PINs, TANs, challenges, tokens, raw authenticated messages, account
-  identifiers, balances, positions, or transaction data.
+- Never log or include in `Debug`, `Display`, panic messages, snapshots, or crate-owned
+  error formatting: credentials, PINs, TANs, challenges, tokens, raw authenticated
+  messages, account identifiers, balances, positions, or transaction data. Bank-sent
+  response free text is retained verbatim for explicit caller access but never appears
+  through these implicit formatting paths; the caller owns its display and logging
+  policy.
 - Product registration ID and version are caller inputs. The real Finanzplaner
   registration ID never enters this repository, its fixtures, or its history.
 - One-time TANs, challenges, dialog identifiers, tokens, and live sessions remain

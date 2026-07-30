@@ -106,11 +106,44 @@ impl Response {
                                 });
                             }
                         };
+                        // Formals 2017-10-06, F "Rückmeldung": the DEG carries
+                        // an optional ..7 Bezugsdatenelement, mandatory an..80
+                        // text, and at most ten an..35 parameters.
+                        let data_element_reference = optional_component(components, 1);
+                        ensure_latin1_wire_length(
+                            data_element_reference.as_deref(),
+                            7,
+                            "response data-element reference",
+                        )?;
+                        let text = component(components, 2, "response text")?;
+                        ensure_latin1_wire_length(Some(&text), 80, "response text")?;
+                        if components.len() > 13 {
+                            return Err(Error::InvalidResponse {
+                                structure: "response parameter count",
+                            });
+                        }
+                        let parameters = components
+                            .iter()
+                            .skip(3)
+                            .map(|value| {
+                                value.as_text().map(|value| value.into_owned()).ok_or(
+                                    Error::InvalidValue {
+                                        field: "response parameter",
+                                    },
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        for parameter in &parameters {
+                            ensure_latin1_wire_length(Some(parameter), 35, "response parameter")?;
+                        }
                         responses.push(BankResponse::new(
                             numeric_code,
                             class,
                             reference,
                             recovery_for(numeric_code),
+                            text,
+                            data_element_reference,
+                            parameters,
                         ));
                         if numeric_code == 3040 {
                             let segment_number = reference.ok_or(Error::InvalidResponse {
@@ -295,8 +328,8 @@ impl Response {
     pub(crate) fn first_error(&self) -> Option<BankResponse> {
         self.responses
             .iter()
-            .copied()
             .find(|response| response.class() == ResponseClass::Error)
+            .cloned()
     }
 
     pub(crate) fn apply_parameters(
@@ -864,6 +897,19 @@ pub(super) fn optional_component(
         .and_then(|value| value.as_text())
         .filter(|value| !value.is_empty())
         .map(|value| value.into_owned())
+}
+
+fn ensure_latin1_wire_length(
+    value: Option<&str>,
+    maximum: usize,
+    field: &'static str,
+) -> Result<(), Error> {
+    // Value::as_text decoded one Latin-1 byte to one Unicode scalar, so this
+    // counts the original data value without re-encoding it.
+    if value.is_some_and(|value| value.chars().count() > maximum) {
+        return Err(Error::InvalidValue { field });
+    }
+    Ok(())
 }
 
 fn recovery_for(code: u16) -> Option<Recovery> {
