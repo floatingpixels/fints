@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Accepted an entirely absent, unconsumed HITAB generator-card
+  pair across versions 2, 4, and 5 while rejecting partial pairs and prohibited
+  card fields on other medium classes.
+
 - **2026-07-30** — Added highest-common HKTAB/HITAB 2, 4, and 5 negotiation,
   exact legacy medium layouts, and the same-dialog HKTAB order after an
   initialization acknowledgement without HITAB.

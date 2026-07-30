@@ -1995,6 +1995,109 @@ fn legacy_hitab_two_and_four_use_their_independent_media_layouts() {
     assert_eq!(media_four[0].security_function(), None);
 }
 
+// PIN/TAN 2020 archived E.2.1.2/E.2.1.4 and DD TAN-Medium-Liste
+// 2/4/5: card number and sequence form one conditional class-G group. The
+// crate does not expose or consume either meaning-neutral identifier.
+#[test]
+fn hitab_generator_accepts_a_completely_absent_discarded_card_group() {
+    let fixtures = [
+        (
+            2,
+            "G:1::::::::Fictional Generator 2",
+            "Fictional Generator 2",
+        ),
+        (
+            4,
+            "G:1::::::::Fictional Generator 4",
+            "Fictional Generator 4",
+        ),
+        (
+            5,
+            "G:1:::::::::Fictional Generator 5",
+            "Fictional Generator 5",
+        ),
+    ];
+
+    for (version, medium, expected_name) in fixtures {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "generator-without-card-group",
+            1,
+        );
+        let media = Response::parse(&fixture)
+            .unwrap()
+            .tan_media(version, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].class(), crate::TanMediumClass::Generator);
+        assert_eq!(media[0].name(), Some(expected_name));
+    }
+}
+
+// The same DD makes a one-sided class-G group ambiguous and prohibits both
+// fields for all other classes. These adjacent malformed occupancies remain
+// hard errors without placing the fictional identifiers in error formatting.
+#[test]
+fn hitab_card_group_rejects_partial_and_prohibited_occupancy() {
+    let partial = [
+        (2, "G:1:fictional-card-2:::::::Fictional Generator 2"),
+        (4, "G:1::4::::::Fictional Generator 4"),
+        (5, "G:1::fictional-card-5:::::::Fictional Generator 5"),
+    ];
+    for (version, medium) in partial {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "partial-generator-card-group",
+            1,
+        );
+        let error = match Response::parse(&fixture).unwrap().tan_media(version, None) {
+            Err(error) => error,
+            Ok(_) => panic!("partial generator card group was accepted"),
+        };
+        assert!(matches!(
+            error,
+            Error::InvalidResponse {
+                structure: "tan_media.HITAB.generator_card_group"
+            }
+        ));
+        assert!(!format!("{error:?}").contains("fictional-card"));
+    }
+
+    let prohibited = [
+        (2, "M:1:prohibited-card-2:2::::::Fictional SMS 2"),
+        (4, "M:1:prohibited-card-4:4::::::Fictional SMS 4:?+49***444"),
+        (5, "M:1::prohibited-card-5:5::::::Fictional SMS 5"),
+    ];
+    for (version, medium) in prohibited {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "prohibited-card-group",
+            1,
+        );
+        let error = match Response::parse(&fixture).unwrap().tan_media(version, None) {
+            Err(error) => error,
+            Ok(_) => panic!("prohibited card group was accepted"),
+        };
+        assert!(matches!(
+            error,
+            Error::InvalidResponse {
+                structure: "tan_media.HITAB.prohibited_card_group"
+            }
+        ));
+        assert!(!format!("{error:?}").contains("prohibited-card"));
+    }
+}
+
 // Formals C.10: every HITABS occurrence advertises the same HKTAB/HITAB
 // version, and the complete BPD set must remain available after persistence.
 #[test]
@@ -2024,25 +2127,20 @@ fn hitabs_versions_are_retained_as_ordered_media_discovery_capabilities() {
 // and a mismatched request reference remain rejected.
 #[test]
 fn legacy_hitab_malformed_conditional_fields_and_references_are_rejected() {
-    for (version, medium, expected_field) in [
-        (2, "G:1:fictional-card", "TAN generator card sequence"),
-        (4, "M:1::::::::Fictional Push", "mobile TAN phone"),
-    ] {
-        let fixture = message(
-            &[
-                "HIRMG:2:2+0010::accepted".into(),
-                format!("HITAB:3:{version}:4+1+{medium}"),
-            ],
-            "malformed-media",
-            1,
-        );
-        assert!(matches!(
-            Response::parse(&fixture)
-                .unwrap()
-                .tan_media(version, None),
-            Err(Error::MissingValue { field }) if field == expected_field
-        ));
-    }
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HITAB:3:4:4+1+M:1::::::::Fictional Push".into(),
+        ],
+        "malformed-media",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&fixture).unwrap().tan_media(4, None),
+        Err(Error::MissingValue {
+            field: "mobile TAN phone"
+        })
+    ));
 
     let invalid_class = message(
         &[

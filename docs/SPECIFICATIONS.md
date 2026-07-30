@@ -208,7 +208,15 @@ access date for each source below is 2026-07-28.
   HITABS/HKTAB/HITAB version triples for legacy versions 2 and 4: HKTAB 2
   carries only `TAN-Medium-Art`, while versions 4 and 5 also carry
   `TAN-Medium-Klasse`; their HITAB responses use TAN-Medium-Liste element
-  versions 2, 4, and 5 respectively. Formals C.10 makes a BPD
+  versions 2, 4, and 5 respectively. E.2.1.4 and the TAN-Medium-Liste 4 Data
+  Dictionary place class, status, card number, and card sequence first and mark
+  both card fields conditionally mandatory for class `G` and prohibited
+  otherwise; versions 2 and 5 use the same conditional pair at their
+  version-specific positions. Because the crate neither exposes nor consumes
+  these two identifiers, the acceptance-space policy reads a wholly absent or
+  wholly present pair past, rejects a partial pair as ambiguous, and still
+  rejects either field for every non-`G` class. No placeholder value is
+  fabricated. Formals C.10 makes a BPD
   parameter-segment version the advertisement of that same operation version
   and calls for the highest common version. F.2 separates dialog
   initialization from subsequent order messages, authorizing a same-dialog

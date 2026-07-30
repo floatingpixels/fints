@@ -431,19 +431,30 @@ pub(super) fn tan_media(
                 });
             }
         };
-        match class {
-            TanMediumClass::Generator => {
-                if optional_component(components, layout.card_number).is_none() {
-                    return Err(Error::MissingValue {
-                        field: "TAN generator card number",
-                    });
-                }
-                if optional_component(components, layout.card_sequence).is_none() {
-                    return Err(Error::MissingValue {
-                        field: "TAN generator card sequence",
-                    });
-                }
+        let card_number_present = optional_component(components, layout.card_number).is_some();
+        let card_sequence_present = optional_component(components, layout.card_sequence).is_some();
+        match (class, card_number_present, card_sequence_present) {
+            (TanMediumClass::Generator, false, false)
+            | (TanMediumClass::Generator, true, true)
+            | (_, false, false) => {}
+            (TanMediumClass::Generator, _, _) => {
+                return Err(Error::InvalidResponse {
+                    structure: "tan_media.HITAB.generator_card_group",
+                });
             }
+            _ => {
+                return Err(Error::InvalidResponse {
+                    structure: "tan_media.HITAB.prohibited_card_group",
+                });
+            }
+        }
+        // PIN/TAN 2020 DD TAN-Medium-Liste 2/4/5 marks both discarded card
+        // fields M for class G and N otherwise. Observed protocol condition:
+        // an app-based decoupled medium can be encoded as G with the complete
+        // card group absent. The crate neither exposes nor uses this group, so
+        // the acceptance-space policy reads both-present or both-absent past;
+        // a partial group remains ambiguous and is rejected above.
+        match class {
             TanMediumClass::List
                 if optional_component(components, layout.list_number).is_none() =>
             {
