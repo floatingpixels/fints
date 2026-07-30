@@ -187,6 +187,14 @@ impl TanMethod {
         self.medium_name_required
     }
 
+    /// Redacted source fields used to compute [`Self::medium_name_required`].
+    ///
+    /// This accessor exists only for owner-attended development diagnostics.
+    #[cfg(feature = "development-diagnostics")]
+    pub fn development_medium_requirement(&self) -> Option<crate::HitansMediumRequirementFact> {
+        self.development_medium_requirement
+    }
+
     pub fn hhd_response_required(&self) -> bool {
         self.hhd_response_required
     }

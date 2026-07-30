@@ -327,3 +327,19 @@ HKEND only when the initialization opened. Output includes the initialization's
 caller-visible bank texts and therefore remains owner-controlled diagnostic data. A
 successful experiment is deployment evidence only and does not enable that wire shape
 in production.
+
+Before attempting variant B, `FINTS_TAN_MEDIUM_RESEARCH=1` performs the bounded
+source-backed recheck: one anonymous BPD-zero refresh, normal highest-version
+discovery, then—only if that still returns `TanMediumUnavailable`—one explicitly
+advertised HITAB-2 discovery. It does not alter production version selection:
+
+```sh
+FINTS_LIVE_PROBE=1 \
+FINTS_TAN_MEDIUM_RESEARCH=1 \
+cargo run --features tan-medium-selector-experiment --example live_probe
+```
+
+The diagnostic output reports refreshed HITANS requirement/count facts for every
+method and HITAB component occupancy only. Version 2 and 4 both read the medium
+designation from one-based component 10; no component values or identifiers are
+retained. Each discovery dialog is closed exactly once.

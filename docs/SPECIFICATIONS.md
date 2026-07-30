@@ -40,8 +40,9 @@ access date for each source below is 2026-07-28.
   HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
   segment sequence, including any security controls, with continuous numbering);
   B.4.1-B.4.2 (`bin`, `code`, `dat`, and `tim` format and restriction rules);
-  B.7.5.2 (class 0 acceptance, class 3 warnings, class 9 rejection, and
-  additional notices alongside those aggregate outcomes);
+  B.7.5.2 (class 0 acceptance, class 3 warnings, class 9 rejection of the
+  referenced message or segment while valid sibling segments remain
+  processable, and additional notices alongside those aggregate outcomes);
   B.7.6 (unsigned `HNHBK+HIRMG+HNHBS` dialog-abort message, including
   `unbekannt` and `9999` sentinels); C.3.2.2 and F.2 process condition [IF3]
   (dialog-transient BPD version zero and version wrap-around); E.2 and the HIUPA
@@ -73,7 +74,10 @@ access date for each source below is 2026-07-28.
   dialog ended; it does not assign a meaning to the unpublished companion or
   relax any other termination error. C.3.2.2 requires a BPD-version-zero request
   to receive the complete current BPD; the Formals define no alternate BPD
-  acquisition if that anonymous initialization is rejected. C.8 additionally
+  acquisition if that anonymous initialization is rejected. It also makes
+  complete BPD supplied during initialization immediately active, including
+  when a segment-level error rejects only the accompanying HKTAN; absent 9800,
+  the otherwise successful dialog still requires HKEND. C.8 additionally
   authorizes combining first system-ID acquisition with the function-999
   initialization instead of sending a regular initialization with system ID
   `0`; the response may carry BPD and must carry HISYN.
@@ -232,9 +236,9 @@ access date for each source below is 2026-07-28.
   medium class, and no rule replaces it with the number of records returned for
   one user by HITAB. Archived E.2.1.4 and the DD define HKTAB 4
   `TAN-Medium-Art=0` as all media and `TAN-Medium-Klasse=A` as all classes, so
-  `+0+A` requests the complete relevant set. In TAN-Medium-Liste 4, component
-  10 is the only `Bezeichnung des TAN-Mediums`; it is mandatory for class `M`
-  and optional for class `G`. Class-G card number and card sequence do not
+  `+0+A` requests the complete relevant set. In both TAN-Medium-Liste 2 and 4,
+  component 10 is the only `Bezeichnung des TAN-Mediums`; it is mandatory for
+  class `M` and optional for class `G`. Class-G card number and card sequence do not
   become HKTAN DE 12 selectors, and neither E.2.1.4 nor the Data Dictionary
   defines an implicit selection for a sole unnamed record. Correction T17
   introduced HKTAB/HITAB 4 and is incorporated in Release 2020's archived E.2.1.4;
@@ -389,9 +393,9 @@ access date for each source below is 2026-07-28.
   differing meanings), B.2 (class-1 notice codes, explicitly marked FinTS
   4-only by this joint register), and B.4 (the complete published 99xx
   error-code set).
-  B.2 defines 1040 as notice that the prior BPD is outdated and the current
-  version is included; it does not prescribe another dialog or refresh after
-  the included HIBPA and parameter segments are applied. Code 0940 is within
+  B.2 defines 1040 and 1050 as notices that the prior BPD/UPD is outdated and
+  the current version is included; neither prescribes another dialog or refresh
+  after the included parameter segments are applied. Code 0940 is within
   A's historical exception range but is absent from the register even though A
   says meanings observed in those ranges are listed, so it has no
   specification-defined control-flow meaning. B.2 marks 1040 as FinTS 4-only
@@ -415,8 +419,9 @@ access date for each source below is 2026-07-28.
   date and must be checked for later changes before implementation.
 - **Authorizes:** typed Gate 1 through Gate 3 success, notice, warning, error,
   pagination, SCA, synchronization, parameter-refresh, and unsupported-version
-  outcomes. In TAN-media discovery, 1040 authorizes applying the included BPD
-  but neither it nor unpublished 0940 authorizes substituting HITAN for HITAB,
+  outcomes. In TAN-media discovery, 1040 and 1050 authorize applying the
+  included BPD/UPD, but neither they nor unpublished 0940 authorize
+  substituting HITAN for HITAB,
   retrying discovery, or starting another initialization. It also defines the
   bounded notice shape used by the narrow FinTS 3
   compatibility tolerance. Bank text remains reachable only through explicit

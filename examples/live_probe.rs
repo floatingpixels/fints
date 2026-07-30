@@ -200,6 +200,22 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<MethodSelectionOutcome>
     client.select_tan_method(&security_function)?;
 
     if medium_required {
+        #[cfg(feature = "tan-medium-selector-experiment")]
+        if enabled("FINTS_TAN_MEDIUM_RESEARCH") {
+            if env::var_os("FINTS_TAN_MEDIUM_EXPERIMENT").is_some() {
+                return Err(input_error(
+                    "FINTS_TAN_MEDIUM_RESEARCH and FINTS_TAN_MEDIUM_EXPERIMENT are mutually exclusive",
+                ));
+            }
+            run_tan_medium_parameter_recheck(client)?;
+            return Ok(MethodSelectionOutcome::ExperimentComplete);
+        }
+        #[cfg(not(feature = "tan-medium-selector-experiment"))]
+        if env::var_os("FINTS_TAN_MEDIUM_RESEARCH").is_some() {
+            return Err(input_error(
+                "FINTS_TAN_MEDIUM_RESEARCH requires --features tan-medium-selector-experiment",
+            ));
+        }
         println!(
             "tan_media_versions advertised={:?} selected=none",
             client.advertised_tan_media_versions()
@@ -265,6 +281,56 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<MethodSelectionOutcome>
         client.select_tan_medium(&names[selected_index])?;
     }
     Ok(MethodSelectionOutcome::Continue)
+}
+
+#[cfg(feature = "tan-medium-selector-experiment")]
+fn run_tan_medium_parameter_recheck(client: &mut Client) -> ProbeResult<()> {
+    // Formals C.3.2.2/P26 makes a version-zero anonymous request the bounded
+    // way to reacquire complete, immediately active BPD without repeating
+    // selector experiment variant A.
+    let refresh = client.refresh_parameters(now());
+    print_bank_responses(client, "tan_medium_research_bpd_refresh");
+    refresh?;
+    println!(
+        "parameter_state operation=tan_medium_research_bpd_refresh bpd_version={} upd_version={}",
+        client.state().bpd_version(),
+        client.state().upd_version()
+    );
+    print_tan_methods(client);
+
+    let highest = client.discover_tan_media(now()).map(|_| ());
+    print_responses(
+        client.last_tan_media_discovery_responses(),
+        "tan_medium_research_highest_version",
+    );
+    print_tan_media_discovery_facts(client);
+    match highest {
+        Ok(()) => {
+            println!("tan_medium_research highest_version=selectable");
+            return Ok(());
+        }
+        Err(FintsError::Unsupported(Limitation::TanMediumUnavailable)) => {
+            println!("tan_medium_research highest_version=unnamed_required");
+        }
+        Err(error) => return Err(Box::new(error)),
+    }
+
+    let version_two = client
+        .experiment_tan_media_discovery_version_two(now())
+        .map(|_| ());
+    print_responses(
+        client.last_tan_media_discovery_responses(),
+        "tan_medium_research_version_two",
+    );
+    print_tan_media_discovery_facts(client);
+    match version_two {
+        Ok(()) => println!("tan_medium_research version_two=selectable"),
+        Err(FintsError::Unsupported(Limitation::TanMediumUnavailable)) => {
+            println!("tan_medium_research version_two=unnamed_required");
+        }
+        Err(error) => return Err(Box::new(error)),
+    }
+    Ok(())
 }
 
 #[cfg(feature = "tan-medium-selector-experiment")]
@@ -529,6 +595,23 @@ fn print_tan_methods(client: &Client) {
             method.display_name(),
             method.medium_name_required()
         );
+        #[cfg(feature = "development-diagnostics")]
+        if let Some(requirement) = method.development_medium_requirement() {
+            println!(
+                "tan_method_hitans index={index} hktan={} requirement_code={} requirement_field={} requirement_index={} active_count={} active_count_field={} active_count_index={} medium_name_required={}",
+                requirement.hktan_version(),
+                requirement.requirement_code(),
+                requirement.requirement_field_number(),
+                requirement.requirement_component_index(),
+                requirement
+                    .active_media_count()
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                requirement.active_media_count_field_number(),
+                requirement.active_media_count_component_index(),
+                requirement.medium_name_required(),
+            );
+        }
     }
 }
 
@@ -598,6 +681,13 @@ fn print_tan_media_discovery_facts(client: &Client) {
             medium.name_present(),
             medium.card_number_present(),
             medium.card_sequence_present(),
+        );
+    }
+    for (index, shape) in facts.returned_medium_shapes().iter().enumerate() {
+        println!(
+            "tan_media_hitab_shape index={index} component_count={} occupied_components={:?}",
+            shape.component_count(),
+            shape.occupied_components()
         );
     }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Applied BPD/UPD returned with an experimental HKTAN rejection,
+  added redacted HITAB component-shape facts, and added an opt-in version-2
+  comparison without changing production negotiation.
+
 - **2026-07-30** — Added an opt-in, single-shot experiment for omitted versus
   explicitly empty HKTAN DE 12 after contradictory unnamed-media discovery.
   Production behavior remains `TanMediumUnavailable`.

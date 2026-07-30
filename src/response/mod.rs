@@ -374,6 +374,19 @@ impl Response {
     }
 
     #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_tan_medium_shapes(
+        &self,
+        expected_version: u16,
+        expected_reference: Option<u16>,
+    ) -> Vec<crate::development_diagnostics::TanMediumElementShapeFact> {
+        parameters::development_tan_medium_shapes(
+            &self.segments,
+            expected_version,
+            expected_reference,
+        )
+    }
+
+    #[cfg(feature = "development-diagnostics")]
     pub(crate) fn development_segment_facts(&self) -> Vec<ReceivedSegmentFact> {
         self.segments
             .iter()

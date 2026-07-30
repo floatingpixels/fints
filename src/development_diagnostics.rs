@@ -159,6 +159,34 @@ impl ReturnedTanMediumFact {
     }
 }
 
+/// Redacted component occupancy of one repeated TAN-medium DEG.
+///
+/// Component positions are one-based Data Dictionary positions. Only the
+/// component count and occupied positions are retained; no values or
+/// identifiers are exposed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TanMediumElementShapeFact {
+    component_count: usize,
+    occupied_components: Vec<usize>,
+}
+
+impl TanMediumElementShapeFact {
+    pub(crate) fn new(component_count: usize, occupied_components: Vec<usize>) -> Self {
+        Self {
+            component_count,
+            occupied_components,
+        }
+    }
+
+    pub fn component_count(&self) -> usize {
+        self.component_count
+    }
+
+    pub fn occupied_components(&self) -> &[usize] {
+        &self.occupied_components
+    }
+}
+
 /// One validated response/business segment observed during an owner-attended diagnostic.
 ///
 /// Segment codes and versions are generic protocol facts. This type contains no segment
@@ -228,6 +256,7 @@ pub struct TanMediaDiscoveryFacts {
     hitans_requirement: Option<HitansMediumRequirementFact>,
     hktab_request: Option<HktabRequestFact>,
     returned_media: Vec<ReturnedTanMediumFact>,
+    returned_medium_shapes: Vec<TanMediumElementShapeFact>,
     tan_usage_option: Option<u8>,
     initialization_hktan_medium_name_supplied: Option<bool>,
 }
@@ -250,6 +279,7 @@ impl TanMediaDiscoveryFacts {
             hitans_requirement,
             hktab_request: None,
             returned_media: Vec::new(),
+            returned_medium_shapes: Vec::new(),
             tan_usage_option: None,
             initialization_hktan_medium_name_supplied,
         }
@@ -274,6 +304,10 @@ impl TanMediaDiscoveryFacts {
             .iter()
             .map(ReturnedTanMediumFact::from_medium)
             .collect();
+    }
+
+    pub(crate) fn set_returned_medium_shapes(&mut self, shapes: Vec<TanMediumElementShapeFact>) {
+        self.returned_medium_shapes = shapes;
     }
 
     pub(crate) fn set_tan_usage_option(&mut self, option: Option<u8>) {
@@ -310,6 +344,10 @@ impl TanMediaDiscoveryFacts {
 
     pub fn returned_media(&self) -> &[ReturnedTanMediumFact] {
         &self.returned_media
+    }
+
+    pub fn returned_medium_shapes(&self) -> &[TanMediumElementShapeFact] {
+        &self.returned_medium_shapes
     }
 
     /// HITAB's TAN usage option (`0`, `1`, or `2`), when valid and present.

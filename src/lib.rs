@@ -39,6 +39,7 @@ pub use client::{
 pub use development_diagnostics::{
     HitansMediumRequirementFact, HktabRequestFact, InitializationRecoveryFacts,
     ReceivedResponseFact, ReceivedSegmentFact, ReturnedTanMediumFact, TanMediaDiscoveryFacts,
+    TanMediumElementShapeFact,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
 pub use model::{

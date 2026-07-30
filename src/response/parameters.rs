@@ -487,6 +487,44 @@ pub(super) fn development_tan_usage_option(
     }
 }
 
+#[cfg(feature = "development-diagnostics")]
+pub(super) fn development_tan_medium_shapes(
+    segments: &[Segment],
+    expected_version: u16,
+    expected_reference: Option<u16>,
+) -> Vec<crate::development_diagnostics::TanMediumElementShapeFact> {
+    let Some(segment) = segments.iter().find(|segment| {
+        segment.header().is_some_and(|header| {
+            header.code == b"HITAB"
+                && header.version == expected_version
+                && expected_reference.is_none_or(|reference| header.reference == Some(reference))
+        })
+    }) else {
+        return Vec::new();
+    };
+    segment
+        .elements()
+        .iter()
+        .skip(2)
+        .map(|element| {
+            let components = element.components();
+            let occupied = components
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    let occupied = value.as_text().is_some_and(|value| !value.is_empty())
+                        || value.as_binary().is_some_and(|value| !value.is_empty());
+                    occupied.then_some(index + 1)
+                })
+                .collect();
+            crate::development_diagnostics::TanMediumElementShapeFact::new(
+                components.len(),
+                occupied,
+            )
+        })
+        .collect()
+}
+
 struct TanMediumLayout {
     name: usize,
     masked_phone: Option<usize>,
