@@ -112,22 +112,13 @@ impl Response {
                                 return Err(Error::InvalidResponseCodeClass { code: numeric_code });
                             }
                         };
-                        // Formals 2017-10-06, F "Rückmeldung": the DEG carries
-                        // an optional ..7 Bezugsdatenelement, mandatory an..80
-                        // text, and at most ten an..35 parameters.
+                        // Formals 2017-10-06, F "Rückmeldung" defines short
+                        // diagnostic fields. They do not affect response
+                        // classification or recovery, so interoperability
+                        // retains longer or additional bank-supplied values
+                        // verbatim under the bounded 1 MiB wire-message limit.
                         let data_element_reference = optional_component(components, 1);
-                        ensure_latin1_wire_length(
-                            data_element_reference.as_deref(),
-                            7,
-                            "response data-element reference",
-                        )?;
                         let text = component(components, 2, "response text")?;
-                        ensure_latin1_wire_length(Some(&text), 80, "response text")?;
-                        if components.len() > 13 {
-                            return Err(Error::InvalidResponse {
-                                structure: "response.feedback.parameters",
-                            });
-                        }
                         let parameters = components
                             .iter()
                             .skip(3)
@@ -139,9 +130,6 @@ impl Response {
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
-                        for parameter in &parameters {
-                            ensure_latin1_wire_length(Some(parameter), 35, "response parameter")?;
-                        }
                         responses.push(BankResponse::new(
                             numeric_code,
                             class,
@@ -513,8 +501,9 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
 
 // HBCI Security B.5.3 supplies the shared HNVSK 3 layout; PIN/TAN
 // B.9.1 and B.9.8-B.9.9 constrain it to the cleartext-over-TLS profile.
-// The PIN/TAN definition of FinTS-Füllwert makes the key bytes and key
-// parameter identifier processing-irrelevant: only format and restrictions are checked.
+// The PIN/TAN definition of FinTS-Füllwert makes role, timestamp, key bytes,
+// and key-parameter identifier processing-irrelevant; their bounded element
+// geometry is retained while their discarded contents are read past.
 fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
     let header = segment
         .header()
@@ -563,15 +552,6 @@ fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
         ));
     }
 
-    // The HBCI Security Data Dictionary says the role is not to be interpreted
-    // currently. All three defined code values remain syntactically valid.
-    if !matches!(
-        segment.elements()[3].components()[0].as_text().as_deref(),
-        Some("1" | "3" | "4")
-    ) {
-        return Err(invalid_encryption_header("encryption_header.security_role"));
-    }
-
     let security_identity = segment.elements()[4].components();
     // The shared Data Dictionary defines 1 (sender) and 2 (receiver), while
     // PIN/TAN B.9.3 forbids CID and requires the customer system identifier.
@@ -583,12 +563,6 @@ fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
     {
         return Err(invalid_encryption_header(
             "encryption_header.security_identity_shape",
-        ));
-    }
-
-    if !valid_security_timestamp(segment.elements()[5].components()) {
-        return Err(invalid_encryption_header(
-            "encryption_header.security_timestamp_shape",
         ));
     }
 
@@ -607,11 +581,6 @@ fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
     {
         return Err(invalid_encryption_header(
             "encryption_header.key_filler_shape",
-        ));
-    }
-    if !valid_key_identifier_filler(&encryption[4]) {
-        return Err(invalid_encryption_header(
-            "encryption_header.key_identifier_shape",
         ));
     }
     if encryption[5].as_text().as_deref() != Some("1")
@@ -633,46 +602,11 @@ fn invalid_encryption_header(structure: &'static str) -> Error {
     Error::InvalidResponse { structure }
 }
 
-fn valid_security_timestamp(components: &[crate::wire::Value]) -> bool {
-    if components
-        .first()
-        .and_then(crate::wire::Value::as_text)
-        .as_deref()
-        != Some("1")
-    {
-        return false;
-    }
-    let date = components.get(1);
-    let time = components.get(2);
-    match date {
-        None => time.is_none(),
-        Some(date) => {
-            let Some(date) = date.as_text() else {
-                return false;
-            };
-            if date.is_empty() {
-                return time.is_none_or(|time| time.as_text().is_some_and(|time| time.is_empty()));
-            }
-            chrono::NaiveDate::parse_from_str(&date, "%Y%m%d").is_ok()
-                && time.is_none_or(|time| {
-                    time.as_text().is_some_and(|time| {
-                        time.is_empty()
-                            || chrono::NaiveTime::parse_from_str(&time, "%H%M%S").is_ok()
-                    })
-                })
-        }
-    }
-}
-
-fn valid_key_identifier_filler(value: &crate::wire::Value) -> bool {
-    matches!(value.as_text().as_deref(), Some("5" | "6"))
-}
-
 // HBCI Security 2024 B.5.1/DD supplies the mandatory HNSHK 4 layout and
 // field formats. PIN/TAN 2020 B.9.1-B.9.6 fixes the profile, function, area,
-// identity occupancy, and certificate prohibition; filler contents retain
-// only their declared formats. The role is checked against its defined codes
-// but is not interpreted.
+// identity occupancy, and certificate prohibition. Processing-irrelevant role,
+// timestamp, hash, and key-name contents are read past inside their bounded
+// element geometry.
 fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
     let header = segment
         .header()
@@ -726,14 +660,6 @@ fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
             "signature_header.application_area",
         ));
     }
-    if !matches!(
-        segment.elements()[5].components()[0].as_text().as_deref(),
-        Some("1" | "3" | "4")
-    ) {
-        return Err(invalid_signature_header(
-            "signature_header.security_role_shape",
-        ));
-    }
     let identity = segment.elements()[6].components();
     if !matches!(identity[0].as_text().as_deref(), Some("1" | "2"))
         || identity[1].as_text().as_deref() != Some("")
@@ -748,19 +674,6 @@ fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
             "signature_header.security_reference_shape",
         ));
     }
-    if !valid_security_timestamp(segment.elements()[8].components()) {
-        return Err(invalid_signature_header("signature_header.timestamp_shape"));
-    }
-    let hash = segment.elements()[9].components();
-    if hash[0].as_text().as_deref() != Some("1")
-        || !valid_code_text(&hash[1])
-        || !valid_code_text(&hash[2])
-        || hash
-            .get(3)
-            .is_some_and(|value| value.as_text().is_none_or(|value| !value.is_empty()))
-    {
-        return Err(invalid_signature_header("signature_header.hash_shape"));
-    }
     let signature = segment.elements()[10].components();
     if signature[0].as_text().as_deref() != Some("6")
         || !valid_code_text(&signature[1])
@@ -769,16 +682,6 @@ fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
         return Err(invalid_signature_header(
             "signature_header.signature_algorithm_shape",
         ));
-    }
-    let key = segment.elements()[11].components();
-    if !valid_numeric_text(&key[0], 3)
-        || key[1].as_text().is_none_or(|value| value.is_empty())
-        || key[2].as_text().is_none_or(|value| value.is_empty())
-        || !matches!(key[3].as_text().as_deref(), Some("D" | "S" | "V"))
-        || !valid_numeric_text(&key[4], 3)
-        || !valid_numeric_text(&key[5], 3)
-    {
-        return Err(invalid_signature_header("signature_header.key_name_shape"));
     }
     if segment
         .element(12)
@@ -928,19 +831,6 @@ pub(super) fn optional_component(
         .and_then(|value| value.as_text())
         .filter(|value| !value.is_empty())
         .map(|value| value.into_owned())
-}
-
-fn ensure_latin1_wire_length(
-    value: Option<&str>,
-    maximum: usize,
-    field: &'static str,
-) -> Result<(), Error> {
-    // Value::as_text decoded one Latin-1 byte to one Unicode scalar, so this
-    // counts the original data value without re-encoding it.
-    if value.is_some_and(|value| value.chars().count() > maximum) {
-        return Err(Error::InvalidValue { field });
-    }
-    Ok(())
 }
 
 fn recovery_for(code: u16) -> Option<Recovery> {

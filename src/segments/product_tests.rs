@@ -93,7 +93,6 @@ fn credit_card_requests_match_conditional_account_binding_fixtures() {
     let capability = CreditCardCapability {
         account_required: true,
         date_range_allowed: true,
-        entry_count_allowed: true,
     };
 
     let transactions = credit_card_transactions_request(
@@ -129,7 +128,6 @@ fn credit_card_requests_match_conditional_account_binding_fixtures() {
     let capability = CreditCardCapability {
         account_required: false,
         date_range_allowed: true,
-        entry_count_allowed: true,
     };
     let transactions =
         credit_card_transactions_request(&context, &account, &capability, None, None, None, None)

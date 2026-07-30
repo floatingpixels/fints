@@ -32,6 +32,7 @@ pub struct OperationCapabilitySnapshot {
     supported_versions: Vec<u16>,
     tan_required: Option<bool>,
     descriptors: Vec<String>,
+    storage_period_days: Option<u16>,
 }
 
 impl OperationCapabilitySnapshot {
@@ -41,6 +42,7 @@ impl OperationCapabilitySnapshot {
         supported_versions: Vec<u16>,
         tan_required: Option<bool>,
         descriptors: Vec<String>,
+        storage_period_days: Option<u16>,
     ) -> Self {
         Self {
             advertised,
@@ -48,6 +50,7 @@ impl OperationCapabilitySnapshot {
             supported_versions,
             tan_required,
             descriptors,
+            storage_period_days,
         }
     }
 
@@ -80,6 +83,14 @@ impl OperationCapabilitySnapshot {
     /// Raw BPD descriptor strings, currently populated only for HKCAZ/camt.
     pub fn descriptors(&self) -> &[String] {
         &self.descriptors
+    }
+
+    /// Institution-advertised retention window for this operation, in days.
+    ///
+    /// `None` means the operation has no registered storage-period field or the
+    /// received field was absent or unusable.
+    pub fn storage_period_days(&self) -> Option<u16> {
+        self.storage_period_days
     }
 }
 
@@ -194,6 +205,7 @@ impl ReusableState {
                 balance_supported_versions,
                 self.balance_requires_tan,
                 Vec::new(),
+                None,
             ),
             camt_cash_transactions: OperationCapabilitySnapshot::new(
                 !camt_versions.is_empty(),
@@ -204,6 +216,7 @@ impl ReusableState {
                     .unwrap_or_default(),
                 self.camt_requires_tan,
                 self.advertised_camt_descriptors.clone(),
+                self.camt_storage_period_days,
             ),
             mt940_cash_transactions: OperationCapabilitySnapshot::new(
                 !mt940_versions.is_empty(),
@@ -211,6 +224,7 @@ impl ReusableState {
                 self.legacy_transaction_versions.clone(),
                 self.legacy_transactions_require_tan,
                 Vec::new(),
+                None,
             ),
             depot_positions: OperationCapabilitySnapshot::new(
                 self.depot_positions_advertised || !depot_position_versions.is_empty(),
@@ -221,6 +235,7 @@ impl ReusableState {
                     .collect(),
                 self.depot_positions_requires_tan,
                 Vec::new(),
+                None,
             ),
             depot_transactions: OperationCapabilitySnapshot::new(
                 self.securities_transactions_advertised || !depot_transaction_versions.is_empty(),
@@ -231,6 +246,7 @@ impl ReusableState {
                     .collect(),
                 self.securities_transactions_requires_tan,
                 Vec::new(),
+                self.securities_transactions_storage_period_days,
             ),
             credit_card_transactions: OperationCapabilitySnapshot::new(
                 self.credit_card_transactions_advertised || !card_transaction_versions.is_empty(),
@@ -241,6 +257,7 @@ impl ReusableState {
                     .unwrap_or_default(),
                 self.credit_card_transactions_requires_tan,
                 Vec::new(),
+                self.credit_card_transactions_storage_period_days,
             ),
             credit_card_balance: OperationCapabilitySnapshot::new(
                 self.credit_card_balance_advertised || !card_balance_versions.is_empty(),
@@ -250,6 +267,7 @@ impl ReusableState {
                     .unwrap_or_default(),
                 self.credit_card_balance_requires_tan,
                 Vec::new(),
+                None,
             ),
             parameter_segments: self.advertised_parameter_segments.clone(),
         }

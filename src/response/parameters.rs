@@ -31,6 +31,7 @@ pub(super) fn apply(
     let mut advertised_tan_media_versions = Vec::new();
     let mut balance_capability_advertised = false;
     let mut received_camt_descriptors = Vec::new();
+    let mut camt_storage_period_days = None;
     let mut received_legacy_transaction_versions = Vec::new();
     let mut transaction_capability_advertised = false;
     let mut received_upd_version = None;
@@ -42,10 +43,14 @@ pub(super) fn apply(
     let mut depot_positions_supported = false;
     let mut depot_positions_requires_tan = None;
     let mut securities_transactions_advertised = false;
+    let mut securities_transactions_seen = false;
     let mut securities_transactions_supported = false;
+    let mut securities_transactions_storage_period_days = None;
     let mut securities_transactions_requires_tan = None;
     let mut credit_card_transactions_advertised = false;
+    let mut credit_card_transactions_seen = false;
     let mut credit_card_transactions = None;
+    let mut credit_card_transactions_storage_period_days = None;
     let mut credit_card_transactions_requires_tan = None;
     let mut credit_card_balance_advertised = false;
     let mut credit_card_balance_account_required = None;
@@ -107,13 +112,14 @@ pub(super) fn apply(
             b"HICAZS" if replace_bpd => {
                 transaction_capability_advertised = true;
                 if header.version == 1 {
-                    received_camt_descriptors.extend(parse_camt_descriptors(segment)?);
+                    let (storage_period, descriptors) = parse_camt_parameters(segment);
+                    camt_storage_period_days = camt_storage_period_days.or(storage_period);
+                    received_camt_descriptors.extend(descriptors);
                 }
             }
             b"HIKAZS" if replace_bpd => {
                 transaction_capability_advertised = true;
                 if (6..=7).contains(&header.version) {
-                    require_transaction_parameters(segment)?;
                     received_legacy_transaction_versions.push(header.version);
                 }
             }
@@ -125,31 +131,39 @@ pub(super) fn apply(
                             structure: "duplicate HIWPDS version 6",
                         });
                     }
-                    require_depot_position_parameters(segment)?;
                     depot_positions_supported = true;
                 }
             }
             b"HIWDUS" if replace_bpd => {
                 securities_transactions_advertised = true;
                 if header.version == 5 {
-                    if securities_transactions_supported {
+                    if securities_transactions_seen {
                         return Err(Error::InvalidResponse {
                             structure: "duplicate HIWDUS version 5",
                         });
                     }
-                    require_depot_transaction_parameters(segment)?;
-                    securities_transactions_supported = true;
+                    securities_transactions_seen = true;
+                    if let Some(storage_period) = parse_storage_period(segment) {
+                        securities_transactions_storage_period_days = Some(storage_period);
+                        securities_transactions_supported = true;
+                    }
                 }
             }
             b"HIKKUS" if replace_bpd => {
                 credit_card_transactions_advertised = true;
                 if header.version == 1 {
-                    if credit_card_transactions.is_some() {
+                    if credit_card_transactions_seen {
                         return Err(Error::InvalidResponse {
                             structure: "duplicate HIKKUS version 1",
                         });
                     }
-                    credit_card_transactions = Some(parse_credit_card_parameters(segment)?);
+                    credit_card_transactions_seen = true;
+                    if let Some((capability, storage_period)) =
+                        parse_credit_card_parameters(segment)
+                    {
+                        credit_card_transactions = Some(capability);
+                        credit_card_transactions_storage_period_days = Some(storage_period);
+                    }
                 }
             }
             b"HIKKSS" if replace_bpd => {
@@ -212,6 +226,7 @@ pub(super) fn apply(
         state.balance_requires_tan = balance_requires_tan;
         state.transaction_capability_advertised = transaction_capability_advertised;
         state.advertised_camt_descriptors = received_camt_descriptors.clone();
+        state.camt_storage_period_days = camt_storage_period_days;
         state.camt_capability = received_camt_descriptors
             .into_iter()
             .find(|descriptor| camt_descriptor_matches(descriptor, SUPPORTED_CAMT_DESCRIPTOR))
@@ -224,9 +239,13 @@ pub(super) fn apply(
         state.depot_positions_requires_tan = depot_positions_requires_tan;
         state.securities_transactions_advertised = securities_transactions_advertised;
         state.securities_transactions_supported = securities_transactions_supported;
+        state.securities_transactions_storage_period_days =
+            securities_transactions_storage_period_days;
         state.securities_transactions_requires_tan = securities_transactions_requires_tan;
         state.credit_card_transactions_advertised = credit_card_transactions_advertised;
         state.credit_card_transactions = credit_card_transactions;
+        state.credit_card_transactions_storage_period_days =
+            credit_card_transactions_storage_period_days;
         state.credit_card_transactions_requires_tan = credit_card_transactions_requires_tan;
         state.credit_card_balance_advertised = credit_card_balance_advertised;
         state.credit_card_balance_account_required = credit_card_balance_account_required;
@@ -361,43 +380,20 @@ pub(super) fn tan_media(
             structure: "tan_media.HITAB.reference",
         });
     }
-    match single_text(segment, 1, "TAN deployment option")?.as_str() {
-        "0" | "1" | "2" => {}
-        _ => {
-            return Err(Error::InvalidValue {
-                field: "TAN deployment option",
-            });
-        }
-    }
     let layout = match header.version {
         2 => TanMediumLayout {
-            allowed_classes: &["G", "L", "M"],
-            card_number: 2,
-            card_sequence: 3,
-            list_number: 8,
             name: 9,
             masked_phone: None,
-            phone: None,
             security_function: None,
         },
         4 => TanMediumLayout {
-            allowed_classes: &["A", "G", "L", "M", "S"],
-            card_number: 2,
-            card_sequence: 3,
-            list_number: 8,
             name: 9,
             masked_phone: Some(10),
-            phone: Some(11),
             security_function: None,
         },
         5 => TanMediumLayout {
-            allowed_classes: &["A", "G", "L", "M", "S", "B"],
-            card_number: 3,
-            card_sequence: 4,
-            list_number: 9,
             name: 10,
             masked_phone: Some(11),
-            phone: Some(12),
             security_function: Some(2),
         },
         _ => unreachable!("supported HITAB versions were matched"),
@@ -405,112 +401,44 @@ pub(super) fn tan_media(
     let mut media = Vec::new();
     for element in segment.elements().iter().skip(2) {
         let components = element.components();
-        let class_code = component(components, 0, "TAN medium class")?;
-        if !layout.allowed_classes.contains(&class_code.as_str()) {
-            return Err(Error::InvalidValue {
-                field: "TAN medium class",
-            });
-        }
-        let class = match class_code.as_str() {
-            "A" => TanMediumClass::All,
-            "G" => TanMediumClass::Generator,
-            "L" => TanMediumClass::List,
-            "M" => TanMediumClass::Mobile,
-            "S" => TanMediumClass::Secoder,
-            "B" => TanMediumClass::Bilateral,
-            _ => unreachable!("allowed TAN medium classes were matched"),
+        let Some(class) = optional_component(components, 0).and_then(|code| match code.as_str() {
+            "A" => Some(TanMediumClass::All),
+            "G" => Some(TanMediumClass::Generator),
+            "L" => Some(TanMediumClass::List),
+            "M" => Some(TanMediumClass::Mobile),
+            "S" => Some(TanMediumClass::Secoder),
+            "B" => Some(TanMediumClass::Bilateral),
+            _ => None,
+        }) else {
+            continue;
         };
-        let status = match component(components, 1, "TAN medium status")?.as_str() {
-            "1" => TanMediumStatus::Active,
-            "2" => TanMediumStatus::Available,
-            "3" => TanMediumStatus::FollowUpActive,
-            "4" => TanMediumStatus::FollowUpAvailable,
-            _ => {
-                return Err(Error::InvalidValue {
-                    field: "TAN medium status",
-                });
-            }
+        let Some(status) = optional_component(components, 1).and_then(|code| match code.as_str() {
+            "1" => Some(TanMediumStatus::Active),
+            "2" => Some(TanMediumStatus::Available),
+            "3" => Some(TanMediumStatus::FollowUpActive),
+            "4" => Some(TanMediumStatus::FollowUpAvailable),
+            _ => None,
+        }) else {
+            continue;
         };
-        let card_number_present = optional_component(components, layout.card_number).is_some();
-        let card_sequence_present = optional_component(components, layout.card_sequence).is_some();
-        match (class, card_number_present, card_sequence_present) {
-            (TanMediumClass::Generator, false, false)
-            | (TanMediumClass::Generator, true, true)
-            | (_, false, false) => {}
-            (TanMediumClass::Generator, _, _) => {
-                return Err(Error::InvalidResponse {
-                    structure: "tan_media.HITAB.generator_card_group",
-                });
-            }
-            _ => {
-                return Err(Error::InvalidResponse {
-                    structure: "tan_media.HITAB.prohibited_card_group",
-                });
-            }
+        let name = optional_component(components, layout.name);
+        if class == TanMediumClass::Mobile && name.is_none() {
+            continue;
         }
-        // PIN/TAN 2020 DD TAN-Medium-Liste 2/4/5 marks both discarded card
-        // fields M for class G and N otherwise. Observed protocol condition:
-        // an app-based decoupled medium can be encoded as G with the complete
-        // card group absent. The crate neither exposes nor uses this group, so
-        // the acceptance-space policy reads both-present or both-absent past;
-        // a partial group remains ambiguous and is rejected above.
-        match class {
-            TanMediumClass::List
-                if optional_component(components, layout.list_number).is_none() =>
-            {
-                return Err(Error::MissingValue {
-                    field: "TAN list number",
-                });
-            }
-            TanMediumClass::Mobile => {
-                if optional_component(components, layout.name).is_none() {
-                    return Err(Error::MissingValue {
-                        field: "mobile TAN medium identity",
-                    });
-                }
-                // Archived E.2.1.4 additionally requires one of the two phone
-                // representations for a v4 mobile entry. Versions 2 and 5 do not.
-                if header.version == 4
-                    && layout
-                        .masked_phone
-                        .and_then(|index| optional_component(components, index))
-                        .is_none()
-                    && layout
-                        .phone
-                        .and_then(|index| optional_component(components, index))
-                        .is_none()
-                {
-                    return Err(Error::MissingValue {
-                        field: "mobile TAN phone",
-                    });
-                }
-            }
-            TanMediumClass::Bilateral => {
-                let security_function_index =
-                    layout.security_function.ok_or(Error::InvalidResponse {
-                        structure: "tan_media.HITAB.layout",
-                    })?;
-                let security_function = optional_component(components, security_function_index)
-                    .ok_or(Error::MissingValue {
-                        field: "bilateral TAN security function",
-                    })?;
-                if security_function.len() != 3
-                    || !security_function.bytes().all(|byte| byte.is_ascii_digit())
-                {
-                    return Err(Error::InvalidValue {
-                        field: "bilateral TAN security function",
-                    });
-                }
-            }
-            _ => {}
+        let security_function = layout
+            .security_function
+            .and_then(|index| optional_component(components, index));
+        if class == TanMediumClass::Bilateral && security_function.is_none() {
+            continue;
         }
+        // Card number, card sequence, list number, and unmasked phone are
+        // deliberately not parsed: no supported operation consumes or exposes
+        // them, and one unusable medium entry must not discard its siblings.
         media.push(TanMedium {
             class,
             status,
-            security_function: layout
-                .security_function
-                .and_then(|index| optional_component(components, index)),
-            name: optional_component(components, layout.name),
+            security_function,
+            name,
             masked_phone: layout
                 .masked_phone
                 .and_then(|index| optional_component(components, index)),
@@ -520,13 +448,8 @@ pub(super) fn tan_media(
 }
 
 struct TanMediumLayout {
-    allowed_classes: &'static [&'static str],
-    card_number: usize,
-    card_sequence: usize,
-    list_number: usize,
     name: usize,
     masked_phone: Option<usize>,
-    phone: Option<usize>,
     security_function: Option<usize>,
 }
 
@@ -618,9 +541,7 @@ fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
 
 fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bool>, Error> {
     let Some(parameters) = segment.elements().get(4) else {
-        return Err(Error::MissingValue {
-            field: "HIPINS parameters",
-        });
+        return Ok(None);
     };
     let components = parameters.components();
     for pair in components.get(5..).unwrap_or_default().chunks_exact(2) {
@@ -628,9 +549,7 @@ fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bo
             return match optional_component(pair, 1).as_deref() {
                 Some("J") => Ok(Some(true)),
                 Some("N") => Ok(Some(false)),
-                _ => Err(Error::InvalidValue {
-                    field: "operation TAN requirement",
-                }),
+                _ => Ok(None),
             };
         }
     }
@@ -661,68 +580,20 @@ fn require_legacy_balance_parameters(segment: &Segment) -> Result<(), Error> {
     Ok(())
 }
 
-fn parse_credit_card_parameters(segment: &Segment) -> Result<CreditCardCapability, Error> {
+fn parse_credit_card_parameters(segment: &Segment) -> Option<(CreditCardCapability, u16)> {
     // G112 / CR 538 C.12.1 HIKKUS 1: storage period, maximum-entry input,
     // date-range input, and conditional account binding.
-    let components = segment
-        .elements()
-        .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HIKKUS parameters",
-        })?
-        .components();
-    let storage_days = component(components, 0, "HIKKUS storage period")?
-        .parse::<u16>()
-        .map_err(|_| Error::InvalidValue {
-            field: "HIKKUS storage period",
-        })?;
-    if storage_days == 0 {
-        return Err(Error::InvalidValue {
-            field: "HIKKUS storage period",
-        });
-    }
-    Ok(CreditCardCapability {
-        entry_count_allowed: yn(components, 1, "HIKKUS maximum-entry input")?,
-        date_range_allowed: yn(components, 2, "HIKKUS date-range input")?,
-        account_required: yn(components, 3, "HIKKUS account binding")?,
-    })
-}
-
-fn require_depot_position_parameters(segment: &Segment) -> Result<(), Error> {
-    // Messages 2022 Data Dictionary, Parameter Depotaufstellung version 2.
-    let components = segment
-        .elements()
-        .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HIWPDS parameters",
-        })?
-        .components();
-    yn(components, 0, "HIWPDS maximum-entry input")?;
-    yn(components, 1, "HIWPDS currency selection")?;
-    yn(components, 2, "HIWPDS price-quality selection")?;
-    Ok(())
-}
-
-fn require_depot_transaction_parameters(segment: &Segment) -> Result<(), Error> {
-    // Messages 2022 Data Dictionary, Parameter Depotumsätze version 1.
-    let components = segment
-        .elements()
-        .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HIWDUS parameters",
-        })?
-        .components();
-    let storage_days = component(components, 0, "HIWDUS storage period")?
-        .parse::<u16>()
-        .map_err(|_| Error::InvalidValue {
-            field: "HIWDUS storage period",
-        })?;
-    if storage_days == 0 {
-        return Err(Error::InvalidValue {
-            field: "HIWDUS storage period",
-        });
-    }
-    Ok(())
+    let components = segment.elements().get(4)?.components();
+    let storage_period = optional_component(components, 0)?.parse::<u16>().ok()?;
+    let date_range_allowed = yn(components, 2, "HIKKUS date-range input").ok()?;
+    let account_required = yn(components, 3, "HIKKUS account binding").ok()?;
+    Some((
+        CreditCardCapability {
+            date_range_allowed,
+            account_required,
+        },
+        storage_period,
+    ))
 }
 
 fn parse_credit_card_balance_parameters(segment: &Segment) -> Result<bool, Error> {
@@ -745,98 +616,66 @@ fn yn(components: &[Value], index: usize, field: &'static str) -> Result<bool, E
     }
 }
 
-fn parse_camt_descriptors(segment: &Segment) -> Result<Vec<String>, Error> {
-    let components = segment
+fn parse_camt_parameters(segment: &Segment) -> (Option<u16>, Vec<String>) {
+    let Some(components) = segment
         .elements()
         .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HICAZS parameters",
-        })?
-        .components();
-    if components.len() < 4 {
-        return Err(Error::InvalidResponse {
-            structure: "HICAZS parameters",
-        });
-    }
-    component(components, 0, "HICAZS storage period")?
-        .parse::<u16>()
-        .map_err(|_| Error::InvalidValue {
-            field: "HICAZS storage period",
-        })?;
-    for index in 1..=2 {
-        if !matches!(
-            component(components, index, "HICAZS yes/no parameter")?.as_str(),
-            "J" | "N"
-        ) {
-            return Err(Error::InvalidValue {
-                field: "HICAZS yes/no parameter",
-            });
-        }
-    }
-    components
+        .map(|element| element.components())
+    else {
+        return (None, Vec::new());
+    };
+    let storage_period =
+        optional_component(components, 0).and_then(|value| value.parse::<u16>().ok());
+    let descriptors = components
         .iter()
         .skip(3)
-        .map(|value| {
+        .filter_map(|value| {
             value
                 .as_text()
-                .filter(|value| !value.is_empty() && value.len() <= 256)
+                .filter(|value| !value.is_empty() && value.chars().count() <= 256)
                 .map(|value| value.into_owned())
-                .ok_or(Error::InvalidValue {
-                    field: "camt descriptor",
-                })
         })
-        .collect()
+        .collect();
+    (storage_period, descriptors)
 }
 
-fn require_transaction_parameters(segment: &Segment) -> Result<(), Error> {
-    let components = segment
+fn parse_storage_period(segment: &Segment) -> Option<u16> {
+    segment
         .elements()
         .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HIKAZS parameters",
-        })?
-        .components();
-    if components.len() < 3 {
-        return Err(Error::InvalidResponse {
-            structure: "HIKAZS parameters",
-        });
-    }
-    Ok(())
+        .and_then(|element| optional_component(element.components(), 0))
+        .and_then(|value| value.parse::<u16>().ok())
 }
 
 fn parse_tan_methods(segment: &Segment, version: u16) -> Result<Vec<TanMethod>, Error> {
-    let parameters = segment
+    let Some(parameters) = segment
         .elements()
         .get(4)
-        .ok_or(Error::MissingValue {
-            field: "HITANS parameters",
-        })?
-        .components();
+        .map(|element| element.components())
+    else {
+        return Ok(Vec::new());
+    };
     if parameters.len() < 3 {
-        return Err(Error::InvalidResponse {
-            structure: "HITANS parameters",
-        });
+        return Ok(Vec::new());
     }
     let width = if version == 6 { 21 } else { 26 };
     let method_values = &parameters[3..];
     if method_values.is_empty() {
+        return Ok(Vec::new());
+    }
+    if method_values.len().div_ceil(width) > 98 {
         return Err(Error::InvalidResponse {
-            structure: "HITANS method parameters",
+            structure: "too many HITANS methods",
         });
     }
     let mut blocks = method_values.chunks_exact(width);
     let mut methods = blocks
         .by_ref()
-        .map(|components| parse_tan_method(components, version))
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|components| parse_tan_method(components, version).ok())
+        .collect::<Vec<_>>();
     let trailing = blocks.remainder();
-    if !trailing.is_empty() {
-        methods.push(parse_tan_method(trailing, version)?);
-    }
-    if methods.len() > 98 {
-        return Err(Error::InvalidResponse {
-            structure: "too many HITANS methods",
-        });
+    if let Ok(method) = parse_tan_method(trailing, version) {
+        methods.push(method);
     }
     Ok(methods)
 }
@@ -888,21 +727,12 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
     // field 19 is the name-requirement code and optional field 21 is the
     // number of active media. HKTAN 6/7 DE 12 is mandatory only when the
     // former is 2 and the latter is greater than one.
-    let active_media_count = optional_component(components, 20)
-        .map(|value| {
-            if value.len() != 1 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err(Error::InvalidValue {
-                    field: "active TAN media count",
-                });
-            }
-            value.parse::<u8>().map_err(|_| Error::InvalidValue {
-                field: "active TAN media count",
-            })
-        })
-        .transpose()?;
     let medium_name_required = match component(components, 18, "TAN medium requirement")?.as_str() {
         "0" | "1" => false,
-        "2" => active_media_count.is_some_and(|count| count > 1),
+        "2" => optional_component(components, 20)
+            .filter(|value| value.len() == 1 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|value| value.parse::<u8>().ok())
+            .is_some_and(|count| count > 1),
         _ => {
             return Err(Error::InvalidValue {
                 field: "TAN medium requirement",

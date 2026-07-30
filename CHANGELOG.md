@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Applied consume-vs-enforce parsing to extended feedback,
+  BPD, HITAB/HITANS, and processing-irrelevant security fields. Capability
+  snapshots now expose three advertised operation-retention windows.
+
 - **2026-07-30** — Accepted an entirely absent, unconsumed HITAB generator-card
   pair across versions 2, 4, and 5 while rejecting partial pairs and prohibited
   card fields on other medium classes.

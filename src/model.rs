@@ -396,7 +396,6 @@ pub(crate) struct CamtCapability {
 pub(crate) struct CreditCardCapability {
     pub(crate) account_required: bool,
     pub(crate) date_range_allowed: bool,
-    pub(crate) entry_count_allowed: bool,
 }
 
 #[derive(Clone)]
@@ -434,6 +433,8 @@ pub struct ReusableState {
     #[serde(default)]
     pub(crate) advertised_camt_descriptors: Vec<String>,
     #[serde(default)]
+    pub(crate) camt_storage_period_days: Option<u16>,
+    #[serde(default)]
     pub(crate) legacy_transaction_versions: Vec<u16>,
     #[serde(default)]
     pub(crate) camt_requires_tan: Option<bool>,
@@ -450,11 +451,15 @@ pub struct ReusableState {
     #[serde(default)]
     pub(crate) securities_transactions_supported: bool,
     #[serde(default)]
+    pub(crate) securities_transactions_storage_period_days: Option<u16>,
+    #[serde(default)]
     pub(crate) securities_transactions_requires_tan: Option<bool>,
     #[serde(default)]
     pub(crate) credit_card_transactions_advertised: bool,
     #[serde(default)]
     pub(crate) credit_card_transactions: Option<CreditCardCapability>,
+    #[serde(default)]
+    pub(crate) credit_card_transactions_storage_period_days: Option<u16>,
     #[serde(default)]
     pub(crate) credit_card_transactions_requires_tan: Option<bool>,
     #[serde(default)]
@@ -1484,6 +1489,27 @@ mod tests {
                 .descriptors()
                 .is_empty()
         );
+        assert_eq!(
+            state
+                .advertised_capabilities()
+                .camt_cash_transactions()
+                .storage_period_days(),
+            None
+        );
+        assert_eq!(
+            state
+                .advertised_capabilities()
+                .depot_transactions()
+                .storage_period_days(),
+            None
+        );
+        assert_eq!(
+            state
+                .advertised_capabilities()
+                .credit_card_transactions()
+                .storage_period_days(),
+            None
+        );
     }
 
     #[derive(Debug)]
@@ -1695,6 +1721,9 @@ mod tests {
                     | "balance_versions"
                     | "advertised_balance_versions"
                     | "advertised_tan_media_versions"
+                    | "camt_storage_period_days"
+                    | "securities_transactions_storage_period_days"
+                    | "credit_card_transactions_storage_period_days"
             ) {
                 self.fields
                     .push((key.to_owned(), value.serialize(PreviousValueSerializer)?));
@@ -1783,14 +1812,14 @@ mod tests {
         }
 
         fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-            Err(ProjectionError)
+            Ok(PreviousValue::None)
         }
 
-        fn serialize_some<T>(self, _value: &T) -> Result<Self::Ok, Self::Error>
+        fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
         where
             T: ?Sized + Serialize,
         {
-            Err(ProjectionError)
+            value.serialize(self)
         }
 
         fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
@@ -1910,6 +1939,9 @@ mod tests {
         original.upd_version = 1;
         original.advertised_balance_versions = vec![5];
         original.advertised_tan_media_versions = vec![4, 2];
+        original.camt_storage_period_days = Some(90);
+        original.securities_transactions_storage_period_days = Some(60);
+        original.credit_card_transactions_storage_period_days = Some(30);
         original
             .advertised_parameter_segments
             .push(ParameterSegmentAdvertisement::new("HISALS".to_owned(), 5));
@@ -1950,11 +1982,21 @@ mod tests {
                 .supports_version(5)
         );
         assert_eq!(restored.advertised_tan_media_versions(), [4, 2]);
-        assert!(
-            restored
-                .advertised_capabilities()
-                .parameter_segments()
-                .is_empty()
+        let capabilities = restored.advertised_capabilities();
+        assert_eq!(
+            capabilities.camt_cash_transactions().storage_period_days(),
+            Some(90)
         );
+        assert_eq!(
+            capabilities.depot_transactions().storage_period_days(),
+            Some(60)
+        );
+        assert_eq!(
+            capabilities
+                .credit_card_transactions()
+                .storage_period_days(),
+            Some(30)
+        );
+        assert!(capabilities.parameter_segments().is_empty());
     }
 }

@@ -170,8 +170,9 @@ log them.
   parameter segments are omitted; a changed BPD version replaces the complete set.
 - `advertised_capabilities()` derives one redacted snapshot for balance, camt and MT940
   cash transactions, depot positions and transactions, and credit-card reads. It
-  includes advertised and supported versions, HIPINS TAN facts, camt descriptors, and
-  every safe parameter-segment code/version observed in the current BPD.
+  includes advertised and supported versions, HIPINS TAN facts, camt descriptors,
+  advertised retention windows, and every safe parameter-segment code/version observed
+  in the current BPD.
 - Non-account-bound HIUPD records are accepted without fabricating accounts, and the
   official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
 - HIBPA parameters whose institute identity differs from the configured institute

@@ -359,20 +359,19 @@ fn authenticated_signature_header_accepts_normative_timestamp_shapes() {
     }
 }
 
-// HBCI Security DD makes time conditional on a present date and retains the
-// Formals dat/tim validity rules. No malformed timestamp reaches HIRMG.
+// PIN/TAN B.9 makes the response-side role, timestamp, hash parameters, and
+// key name processing-irrelevant fillers. Their registered component geometry
+// remains validated, but their discarded contents do not block HIRMG.
 #[test]
-fn authenticated_signature_header_rejects_invalid_timestamp_shapes() {
-    for timestamp in ["1::120000", "1:20260230", "1:20260729:250000"] {
-        let header = fictional_signature_header(SignatureHeaderFixture {
-            timestamp,
-            ..SignatureHeaderFixture::default()
-        });
-        assert_redacted_signature_error(
-            signature_error(&header, "fictional-ref"),
-            "signature_header.timestamp_shape",
-        );
-    }
+fn authenticated_signature_header_reads_past_processing_irrelevant_fields() {
+    let header = fictional_signature_header(SignatureHeaderFixture {
+        security_role: "unexpected",
+        timestamp: "ignored:timestamp:shape",
+        hash: "ignored:hash:values:tail",
+        key_name: "ignored:key:name:values:and:shape",
+        ..SignatureHeaderFixture::default()
+    });
+    assert!(Response::parse(&signed_response(&header, "fictional-ref")).is_ok());
 }
 
 // HBCI Security 2024 B.5.1/DD and PIN/TAN B.9.1-B.9.6 define the fixed
@@ -426,13 +425,6 @@ fn authenticated_signature_header_diagnostics_are_redacted_and_field_specific() 
         ),
         (
             fictional_signature_header(SignatureHeaderFixture {
-                security_role: "2",
-                ..SignatureHeaderFixture::default()
-            }),
-            "signature_header.security_role_shape",
-        ),
-        (
-            fictional_signature_header(SignatureHeaderFixture {
                 security_identity: "1:@1@x:fictional-system",
                 ..SignatureHeaderFixture::default()
             }),
@@ -447,31 +439,10 @@ fn authenticated_signature_header_diagnostics_are_redacted_and_field_specific() 
         ),
         (
             fictional_signature_header(SignatureHeaderFixture {
-                timestamp: "1:invalid",
-                ..SignatureHeaderFixture::default()
-            }),
-            "signature_header.timestamp_shape",
-        ),
-        (
-            fictional_signature_header(SignatureHeaderFixture {
-                hash: "2:999:1",
-                ..SignatureHeaderFixture::default()
-            }),
-            "signature_header.hash_shape",
-        ),
-        (
-            fictional_signature_header(SignatureHeaderFixture {
                 signature_algorithm: "5:10:16",
                 ..SignatureHeaderFixture::default()
             }),
             "signature_header.signature_algorithm_shape",
-        ),
-        (
-            fictional_signature_header(SignatureHeaderFixture {
-                key_name: "280:12345678:fictional-bank:S:0:not-numeric",
-                ..SignatureHeaderFixture::default()
-            }),
-            "signature_header.key_name_shape",
         ),
         (
             fictional_signature_header(SignatureHeaderFixture {
@@ -677,25 +648,24 @@ fn authenticated_response_rejects_incomplete_or_misordered_outer_controls() {
     }
 }
 
-// PIN/TAN B.9.9 and its FinTS-Füllwert definition make the concrete key bytes
-// and key-parameter identifier irrelevant. HBCI DD defines roles 1, 3, and 4
-// without authorizing clients to interpret their business meaning.
+// PIN/TAN B.9.9 and its FinTS-Füllwert definition make the concrete key bytes,
+// key-parameter identifier, role, and timestamp irrelevant to processing.
 #[test]
-fn authenticated_response_accepts_filler_variants_and_all_defined_security_roles() {
+fn authenticated_response_reads_past_processing_irrelevant_encryption_fields() {
     let inner = b"HIRMG:2:2+0010::accepted'";
     let cases = [
-        ("1", "1::fictional-system", "1:20260729:120000"),
-        ("3", "2::fictional-system", "1"),
-        ("4", "2::fictional-system", "1:20260729"),
+        ("1", "1::fictional-system", "1:20260729:120000", "6"),
+        ("3", "2::fictional-system", "1", "5"),
+        ("unexpected", "2::fictional-system", "ignored:shape", "1234"),
     ];
 
-    for (role, identity, timestamp) in cases {
+    for (role, identity, timestamp, key_identifier) in cases {
         let header = fictional_encryption_header(EncryptionHeaderFixture {
             security_role: role,
             security_identity: identity,
             security_timestamp: timestamp,
             key_filler: &[0xA5; 16],
-            key_identifier: "6",
+            key_identifier,
             ..EncryptionHeaderFixture::default()
         });
         assert!(
@@ -721,8 +691,8 @@ fn authenticated_response_accepts_filler_variants_and_all_defined_security_roles
     );
 }
 
-// HBCI Security B.5.3/DD and PIN/TAN B.9.1/B.9.8-B.9.9: fixed values,
-// field formats, filler bounds, and forbidden IV occupancy remain strict.
+// HBCI Security B.5.3/DD and PIN/TAN B.9.1/B.9.8-B.9.9: profile-defining
+// values, structural bounds, and forbidden IV occupancy remain strict.
 // Every error exposes only a stable constant structural category.
 #[test]
 fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific() {
@@ -760,24 +730,10 @@ fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific
         ),
         (
             fictional_encryption_header(EncryptionHeaderFixture {
-                security_role: "2",
-                ..EncryptionHeaderFixture::default()
-            }),
-            "encryption_header.security_role",
-        ),
-        (
-            fictional_encryption_header(EncryptionHeaderFixture {
                 security_identity: "3::fictional-system",
                 ..EncryptionHeaderFixture::default()
             }),
             "encryption_header.security_identity_shape",
-        ),
-        (
-            fictional_encryption_header(EncryptionHeaderFixture {
-                security_timestamp: "1:2026072X:120000",
-                ..EncryptionHeaderFixture::default()
-            }),
-            "encryption_header.security_timestamp_shape",
         ),
         (
             fictional_encryption_header(EncryptionHeaderFixture {
@@ -792,13 +748,6 @@ fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific
                 ..EncryptionHeaderFixture::default()
             }),
             "encryption_header.key_filler_shape",
-        ),
-        (
-            fictional_encryption_header(EncryptionHeaderFixture {
-                key_identifier: "1234",
-                ..EncryptionHeaderFixture::default()
-            }),
-            "encryption_header.key_identifier_shape",
         ),
         (
             fictional_encryption_header(EncryptionHeaderFixture {
@@ -835,14 +784,6 @@ fn authenticated_response_encryption_diagnostics_are_redacted_and_field_specific
     occupied_certificate.pop();
     occupied_certificate.extend_from_slice(b"+certificate'");
     assert_encryption_header_error(occupied_certificate, "encryption_header.element_shape");
-
-    assert_encryption_header_error(
-        fictional_encryption_header(EncryptionHeaderFixture {
-            security_role: "1234",
-            ..EncryptionHeaderFixture::default()
-        }),
-        "encryption_header.security_role",
-    );
 }
 
 // HBCI Security 2024 DD "Verschlüsselungsalgorithmus": algorithm fillers
@@ -1332,6 +1273,10 @@ fn advertised_capability_snapshot_is_complete_redacted_and_operation_typed() {
         ["urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"]
     );
     assert_eq!(
+        snapshot.camt_cash_transactions().storage_period_days(),
+        Some(90)
+    );
+    assert_eq!(
         snapshot.mt940_cash_transactions().advertised_versions(),
         [9, 7]
     );
@@ -1347,12 +1292,20 @@ fn advertised_capability_snapshot_is_complete_redacted_and_operation_typed() {
     assert_eq!(snapshot.depot_transactions().advertised_versions(), [5]);
     assert_eq!(snapshot.depot_transactions().tan_required(), Some(true));
     assert_eq!(
+        snapshot.depot_transactions().storage_period_days(),
+        Some(90)
+    );
+    assert_eq!(
         snapshot.credit_card_transactions().advertised_versions(),
         [1]
     );
     assert_eq!(
         snapshot.credit_card_transactions().tan_required(),
         Some(false)
+    );
+    assert_eq!(
+        snapshot.credit_card_transactions().storage_period_days(),
+        Some(90)
     );
     assert_eq!(snapshot.credit_card_balance().advertised_versions(), [1]);
     assert_eq!(snapshot.credit_card_balance().tan_required(), Some(true));
@@ -1378,9 +1331,163 @@ fn advertised_capability_snapshot_is_complete_redacted_and_operation_typed() {
     assert!(!format!("{snapshot:?}").contains("12345678"));
 }
 
+// FinTS parameter-segment DD entries distinguish operation-defining fields
+// from values this crate never sends or consumes. Unusable sub-records degrade
+// only their operation while well-formed sibling capabilities survive.
+#[test]
+fn discarded_bpd_parameters_do_not_abort_the_capability_set() {
+    let descriptor = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+70+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+unreadable:X:X:{descriptor}:"),
+            "HIKAZS:5:7:3".into(),
+            "HIWPDS:6:6:3".into(),
+            "HIWDUS:7:5:3+1+1+0+unreadable".into(),
+            "HIKKUS:8:1:3+1+1+0+90:X:J:J".into(),
+            concat!(
+                "HIPINS:9:1:3+1+1+0+4:6:6:::HKSAL:X:HKCAZ:N:",
+                "HKKAZ:J:HKWPD:N:HKWDU:X:HKKKU:N"
+            )
+            .into(),
+        ],
+        "discarded-bpd-values",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    let snapshot = state.advertised_capabilities();
+    assert!(snapshot.camt_cash_transactions().supported_by_crate());
+    assert_eq!(
+        snapshot.camt_cash_transactions().storage_period_days(),
+        None
+    );
+    assert!(snapshot.mt940_cash_transactions().supports_version(7));
+    assert!(snapshot.depot_positions().supported_by_crate());
+    assert!(snapshot.depot_transactions().advertised());
+    assert!(!snapshot.depot_transactions().supported_by_crate());
+    assert_eq!(snapshot.depot_transactions().storage_period_days(), None);
+    assert!(snapshot.credit_card_transactions().supported_by_crate());
+    assert_eq!(
+        snapshot.credit_card_transactions().storage_period_days(),
+        Some(90)
+    );
+    assert_eq!(snapshot.balance().tan_required(), None);
+    assert_eq!(
+        snapshot.camt_cash_transactions().tan_required(),
+        Some(false)
+    );
+    assert_eq!(snapshot.depot_transactions().tan_required(), None);
+
+    for (version, parameters) in [(71, "unreadable:X:J:J"), (72, "90:X:X:J"), (73, "90:X:J:X")] {
+        let unusable_card = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HIBPA:3:3:3+{version}+280:12345678+Fictional Bank+9+1+300"),
+                format!("HIKKUS:4:1:3+1+1+0+{parameters}"),
+            ],
+            "unusable-card-parameters",
+            1,
+        );
+        Response::parse(&unusable_card)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .unwrap();
+        let snapshot = state.advertised_capabilities();
+        let card = snapshot.credit_card_transactions();
+        assert!(card.advertised());
+        assert!(!card.supported_by_crate());
+        assert_eq!(card.storage_period_days(), None);
+    }
+}
+
+// Messages 2022 and G112 storage periods are caller-useful advertised facts.
+// Zero is retained exactly and never treated as a malformed capability.
+#[test]
+fn zero_storage_periods_remain_supported_capability_facts() {
+    let descriptor = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+72+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+0:X:X:{descriptor}"),
+            "HIWDUS:5:5:3+1+1+0+0".into(),
+            "HIKKUS:6:1:3+1+1+0+0:X:N:J".into(),
+        ],
+        "zero-storage-periods",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    let snapshot = state.advertised_capabilities();
+    assert_eq!(
+        snapshot.camt_cash_transactions().storage_period_days(),
+        Some(0)
+    );
+    assert_eq!(snapshot.depot_transactions().storage_period_days(), Some(0));
+    assert!(snapshot.depot_transactions().supported_by_crate());
+    assert_eq!(
+        snapshot.credit_card_transactions().storage_period_days(),
+        Some(0)
+    );
+    assert!(snapshot.credit_card_transactions().supported_by_crate());
+}
+
+// Duplicate registered parameter segments remain an ambiguous BPD structure,
+// including when the first occurrence's operation-local fields are unusable.
+#[test]
+fn duplicate_product_parameter_segments_remain_rejected() {
+    for (first, second, structure) in [
+        (
+            "HIWPDS:4:6:3",
+            "HIWPDS:5:6:3+1+1+0+J:J:J",
+            "duplicate HIWPDS version 6",
+        ),
+        (
+            "HIWDUS:4:5:3+1+1+0+unreadable",
+            "HIWDUS:5:5:3+1+1+0+90",
+            "duplicate HIWDUS version 5",
+        ),
+        (
+            "HIKKUS:4:1:3+1+1+0+unreadable:X:J:J",
+            "HIKKUS:5:1:3+1+1+0+90:J:J:J",
+            "duplicate HIKKUS version 1",
+        ),
+    ] {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                "HIBPA:3:3:3+73+280:12345678+Fictional Bank+9+1+300".into(),
+                first.into(),
+                second.into(),
+            ],
+            "duplicate-parameters",
+            1,
+        );
+        assert!(matches!(
+            Response::parse(&fixture)
+                .unwrap()
+                .apply_parameters(&mut ReusableState::new()),
+            Err(Error::InvalidResponse {
+                structure: received
+            }) if received == structure
+        ));
+    }
+}
+
 // Messages 2022 HICAZS and the camt format registration treat the optional
 // ".xsd" suffix and ASCII case as identifier normalization. Every advertised
-// descriptor remains a safe generic fact; malformed empty descriptors still fail.
+// descriptor remains a safe generic fact. Empty or overlong sibling
+// descriptors and discarded parameter flags are skipped without losing BPD.
 #[test]
 fn camt_descriptors_are_retained_and_supported_by_normalized_identity() {
     let supported = "URN?:ISO?:STD?:ISO?:20022?:TECH?:XSD?:CAMT.052.001.08.XSD";
@@ -1413,21 +1520,28 @@ fn camt_descriptors_are_retained_and_supported_by_normalized_identity() {
         "URN:ISO:STD:ISO:20022:TECH:XSD:CAMT.052.001.08.XSD"
     );
 
-    let malformed = message(
+    let overlong = "x".repeat(257);
+    let sparse = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+9+280:12345678+Fictional Bank+9+1+300".into(),
-            "HICAZS:4:1:3+1+1+0+90:J:N:".into(),
+            format!("HICAZS:4:1:3+1+1+0+unreadable:X:X:{supported}::{overlong}"),
         ],
         "dialog2",
         1,
     );
-    assert!(
-        Response::parse(&malformed)
-            .unwrap()
-            .apply_parameters(&mut state)
-            .is_err()
+    Response::parse(&sparse)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    let snapshot = state.advertised_capabilities();
+    let capability = snapshot.camt_cash_transactions();
+    assert_eq!(
+        capability.descriptors(),
+        ["URN:ISO:STD:ISO:20022:TECH:XSD:CAMT.052.001.08.XSD"]
     );
+    assert!(capability.supported_by_crate());
+    assert_eq!(capability.storage_period_days(), None);
 }
 
 // Gate 3 fictional Atruvia profile. The interoperability lead is non-authoritative;
@@ -1690,7 +1804,6 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
     state.credit_card_transactions = Some(CreditCardCapability {
         account_required: true,
         date_range_allowed: true,
-        entry_count_allowed: true,
     });
     state.credit_card_transactions_requires_tan = Some(false);
     state.credit_card_balance_advertised = true;
@@ -1772,19 +1885,18 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         "dialog3",
         1,
     );
-    assert!(
-        Response::parse(&malformed_new)
-            .unwrap()
-            .apply_parameters(&mut state)
-            .is_err()
-    );
-    assert_eq!(state.bpd_version(), 56);
-    assert_eq!(state.balance_versions, [6]);
+    Response::parse(&malformed_new)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.bpd_version(), 58);
+    assert!(state.balance_versions.is_empty());
+    assert_eq!(state.balance_requires_tan, None);
 
     let complete_new = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
-            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
+            "HIBPA:3:3:3+59+280:12345678+Fictional Bank+9+1+300".into(),
             "HISALS:4:5:3+1+1".into(),
             "HIPINS:5:1:3+1+1+0+4:6:6:::HKSAL:N".into(),
         ],
@@ -1795,7 +1907,7 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.bpd_version(), 58);
+    assert_eq!(state.bpd_version(), 59);
     assert_eq!(state.balance_versions, [5]);
     assert_eq!(state.balance_requires_tan, Some(false));
     assert!(!state.transaction_capability_advertised);
@@ -1902,10 +2014,24 @@ fn gate3_upd_skips_non_account_records_and_applies_iban_length_correction() {
 #[test]
 fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
+    let bilateral = [
+        "B",
+        "1",
+        "free-form",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "Fictional bilateral",
+    ]
+    .join(":");
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
-            format!("HITAB:3:5:4+1+{medium}"),
+            format!("HITAB:3:5:4+1+{medium}+{bilateral}"),
         ],
         "dialog1",
         1,
@@ -1917,28 +2043,30 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
         .unwrap()
         .expect("fictional HITAB is present");
 
-    assert_eq!(media.len(), 1);
+    assert_eq!(media.len(), 2);
     assert_eq!(media[0].class(), crate::TanMediumClass::Mobile);
     assert_eq!(media[0].status(), crate::TanMediumStatus::Active);
     assert_eq!(media[0].name(), Some("Fictional phone"));
     assert_eq!(media[0].masked_phone(), None);
+    assert_eq!(media[1].class(), crate::TanMediumClass::Bilateral);
+    assert_eq!(media[1].security_function(), Some("free-form"));
 
     let missing_name = ["M", "1", "", "", "", "", "", "", "", "", "", "?+49***123"].join(":");
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
-            format!("HITAB:3:5:4+1+{missing_name}"),
+            format!("HITAB:3:5:4+1+{missing_name}+G:1:::::::::Fictional generator"),
         ],
         "dialog2",
         1,
     );
-    assert!(matches!(
-        Response::parse(&fixture)
-            .unwrap()
-            .tan_media(5, None)
-            .map(Option::unwrap),
-        Err(Error::MissingValue { .. })
-    ));
+    let media = Response::parse(&fixture)
+        .unwrap()
+        .tan_media(5, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(media.len(), 1);
+    assert_eq!(media[0].class(), crate::TanMediumClass::Generator);
 }
 
 // PIN/TAN 2020 archived E.2.1.2/E.2.1.4 and DD
@@ -2038,63 +2166,42 @@ fn hitab_generator_accepts_a_completely_absent_discarded_card_group() {
     }
 }
 
-// The same DD makes a one-sided class-G group ambiguous and prohibits both
-// fields for all other classes. These adjacent malformed occupancies remain
-// hard errors without placing the fictional identifiers in error formatting.
+// The card pair is neither exposed nor consumed. Partial generator occupancy
+// and card fields on other classes are read past without retaining identifiers.
 #[test]
-fn hitab_card_group_rejects_partial_and_prohibited_occupancy() {
-    let partial = [
-        (2, "G:1:fictional-card-2:::::::Fictional Generator 2"),
-        (4, "G:1::4::::::Fictional Generator 4"),
-        (5, "G:1::fictional-card-5:::::::Fictional Generator 5"),
-    ];
-    for (version, medium) in partial {
+fn hitab_discarded_card_fields_never_reject_the_medium_list() {
+    for (version, medium, expected_class) in [
+        (
+            2,
+            "G:1:fictional-card-2:::::::Fictional Generator 2",
+            crate::TanMediumClass::Generator,
+        ),
+        (
+            4,
+            "G:1::4::::::Fictional Generator 4",
+            crate::TanMediumClass::Generator,
+        ),
+        (
+            5,
+            "M:1::discarded-card-5:5::::::Fictional SMS 5",
+            crate::TanMediumClass::Mobile,
+        ),
+    ] {
         let fixture = message(
             &[
                 "HIRMG:2:2+0010::accepted".into(),
                 format!("HITAB:3:{version}:4+1+{medium}"),
             ],
-            "partial-generator-card-group",
+            "discarded-card-fields",
             1,
         );
-        let error = match Response::parse(&fixture).unwrap().tan_media(version, None) {
-            Err(error) => error,
-            Ok(_) => panic!("partial generator card group was accepted"),
-        };
-        assert!(matches!(
-            error,
-            Error::InvalidResponse {
-                structure: "tan_media.HITAB.generator_card_group"
-            }
-        ));
-        assert!(!format!("{error:?}").contains("fictional-card"));
-    }
-
-    let prohibited = [
-        (2, "M:1:prohibited-card-2:2::::::Fictional SMS 2"),
-        (4, "M:1:prohibited-card-4:4::::::Fictional SMS 4:?+49***444"),
-        (5, "M:1::prohibited-card-5:5::::::Fictional SMS 5"),
-    ];
-    for (version, medium) in prohibited {
-        let fixture = message(
-            &[
-                "HIRMG:2:2+0010::accepted".into(),
-                format!("HITAB:3:{version}:4+1+{medium}"),
-            ],
-            "prohibited-card-group",
-            1,
-        );
-        let error = match Response::parse(&fixture).unwrap().tan_media(version, None) {
-            Err(error) => error,
-            Ok(_) => panic!("prohibited card group was accepted"),
-        };
-        assert!(matches!(
-            error,
-            Error::InvalidResponse {
-                structure: "tan_media.HITAB.prohibited_card_group"
-            }
-        ));
-        assert!(!format!("{error:?}").contains("prohibited-card"));
+        let media = Response::parse(&fixture)
+            .unwrap()
+            .tan_media(version, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].class(), expected_class);
     }
 }
 
@@ -2122,27 +2229,33 @@ fn hitabs_versions_are_retained_as_ordered_media_discovery_capabilities() {
     assert_eq!(state.advertised_tan_media_versions(), [5, 4, 2]);
 }
 
-// The same archived layouts make generator sequence, mobile identity, and the
-// v4 phone alternative conditional mandatory data. Adjacent unsupported codes
-// and a mismatched request reference remain rejected.
+// Entry-local discarded fields and unknown records never hide usable siblings.
+// The operation envelope's negotiated version and request reference remain strict.
 #[test]
-fn legacy_hitab_malformed_conditional_fields_and_references_are_rejected() {
+fn legacy_hitab_skips_unusable_entries_but_rejects_envelope_mismatch() {
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
-            "HITAB:3:4:4+1+M:1::::::::Fictional Push".into(),
+            concat!(
+                "HITAB:3:4:4+unexpected+X:1",
+                "+L:1+M:1::::::::Fictional Push"
+            )
+            .into(),
         ],
         "malformed-media",
         1,
     );
-    assert!(matches!(
-        Response::parse(&fixture).unwrap().tan_media(4, None),
-        Err(Error::MissingValue {
-            field: "mobile TAN phone"
-        })
-    ));
+    let media = Response::parse(&fixture)
+        .unwrap()
+        .tan_media(4, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(media.len(), 2);
+    assert_eq!(media[0].class(), crate::TanMediumClass::List);
+    assert_eq!(media[1].name(), Some("Fictional Push"));
+    assert_eq!(media[1].masked_phone(), None);
 
-    let invalid_class = message(
+    let cross_version_class = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HITAB:3:2:4+1+S:1".into(),
@@ -2150,12 +2263,12 @@ fn legacy_hitab_malformed_conditional_fields_and_references_are_rejected() {
         "invalid-class",
         1,
     );
-    assert!(matches!(
-        Response::parse(&invalid_class).unwrap().tan_media(2, None),
-        Err(Error::InvalidValue {
-            field: "TAN medium class"
-        })
-    ));
+    let media = Response::parse(&cross_version_class)
+        .unwrap()
+        .tan_media(2, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(media[0].class(), crate::TanMediumClass::Secoder);
 
     let wrong_reference = message(
         &["HIRMG:2:2+0010::accepted".into(), "HITAB:3:4:7+1".into()],
@@ -2257,63 +2370,42 @@ fn bank_response_retains_diagnostics_but_implicit_formatting_stays_redacted() {
     assert!(!rendered.contains("Wert"));
 }
 
-// Formals 2017-10-06, F "Rückmeldung": Rückmeldungstext is an..80 and
-// Rückmeldungsparameter is an..35; values are never truncated.
+// Formals 2017-10-06, F "Rückmeldung" gives diagnostic field sizes, but these
+// values do not control parsing or recovery. The bounded wire message remains
+// the memory-safety limit, and caller-visible diagnostics stay verbatim.
 #[test]
-fn bank_response_diagnostic_wire_bounds_are_enforced() {
+fn bank_response_retains_extended_diagnostics_without_hiding_the_response() {
     let overlong_text = "x".repeat(81);
-    let fixture = message(&[format!("HIRMG:2:2+9942::{overlong_text}")], "dialog1", 1);
-    assert!(matches!(
-        Response::parse(&fixture),
-        Err(Error::InvalidValue {
-            field: "response text"
-        })
-    ));
-
     let overlong_parameter = "x".repeat(36);
+    let parameters = std::iter::repeat_n("extra", 11).collect::<Vec<_>>();
     let fixture = message(
         &[
             "HIRMG:2:2+9050::Fehler".into(),
-            format!("HIRMS:3:2:4+9942:1:Fehler:{overlong_parameter}"),
+            format!(
+                "HIRMS:3:2:4+9942:12345678:{overlong_text}:{overlong_parameter}:{}",
+                parameters.join(":")
+            ),
         ],
         "dialog1",
         1,
     );
-    assert!(matches!(
-        Response::parse(&fixture),
-        Err(Error::InvalidValue {
-            field: "response parameter"
-        })
-    ));
+    let response = Response::parse(&fixture).unwrap();
+    let diagnostic = &response.responses()[1];
+    assert_eq!(diagnostic.text(), overlong_text);
+    assert_eq!(diagnostic.data_element_reference(), Some("12345678"));
+    assert_eq!(diagnostic.parameters().len(), 12);
+    assert_eq!(diagnostic.parameters()[0], overlong_parameter);
+    assert_eq!(diagnostic.parameters()[11], "extra");
+    let rendered = format!("{diagnostic:?} {}", Error::Bank(diagnostic.clone()));
+    assert!(!rendered.contains(&overlong_text));
+    assert!(!rendered.contains("12345678"));
+    assert!(!rendered.contains(&overlong_parameter));
 
-    let fixture = message(
-        &[
-            "HIRMG:2:2+9050::Fehler".into(),
-            "HIRMS:3:2:4+9942:12345678:Fehler".into(),
-        ],
-        "dialog1",
-        1,
-    );
+    let missing_text = message(&["HIRMG:2:2+9942:1".into()], "dialog2", 1);
     assert!(matches!(
-        Response::parse(&fixture),
-        Err(Error::InvalidValue {
-            field: "response data-element reference"
-        })
-    ));
-
-    let parameters = std::iter::repeat_n("x", 11).collect::<Vec<_>>().join(":");
-    let fixture = message(
-        &[
-            "HIRMG:2:2+9050::Fehler".into(),
-            format!("HIRMS:3:2:4+9942:1:Fehler:{parameters}"),
-        ],
-        "dialog1",
-        1,
-    );
-    assert!(matches!(
-        Response::parse(&fixture),
-        Err(Error::InvalidResponse {
-            structure: "response.feedback.parameters"
+        Response::parse(&missing_text),
+        Err(Error::MissingValue {
+            field: "response text"
         })
     ));
 }
@@ -2530,6 +2622,7 @@ fn hitans_six_and_seven_apply_the_complete_medium_name_requirement() {
     for version in [6, 7] {
         for (requirement, active_count, expected) in [
             ("0", Some("2"), false),
+            ("0", Some("not-a-count"), false),
             ("1", Some("2"), false),
             ("2", Some("2"), true),
             ("2", Some("1"), false),
@@ -2575,14 +2668,12 @@ fn hitans_six_and_seven_apply_the_complete_medium_name_requirement() {
         "dialog1",
         1,
     );
-    assert!(matches!(
-        Response::parse(&malformed)
-            .unwrap()
-            .apply_parameters(&mut ReusableState::new()),
-        Err(Error::InvalidValue {
-            field: "active TAN media count"
-        })
-    ));
+    let mut state = ReusableState::new();
+    Response::parse(&malformed)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert!(!state.tan_methods()[0].medium_name_required());
 }
 
 // FinTS 3.0 PIN/TAN 2020-07-10, B.8.2 permits up to 98 repeated
@@ -2616,10 +2707,39 @@ fn hitans_seven_accepts_more_than_two_advertised_methods() {
     assert_eq!(state.tan_methods()[2].security_function(), "942");
 }
 
-// FinTS 3.0 Formals 2017-10-06, H.1.5 cut rule; PIN/TAN 2020-07-10,
-// B.8.2: only trailing optional fields of the last repeated method may be cut.
+// One malformed fixed-width method block is operation-local. HITANS remains
+// advertised and well-formed sibling descriptions stay selectable.
 #[test]
-fn hitans_last_method_accepts_trailing_cut_but_rejects_mid_block_cut() {
+fn hitans_skips_an_unparseable_method_block_without_losing_siblings() {
+    let methods = [
+        typed_method("899", "fictional-invalid"),
+        typed_method("942", "fictional-valid"),
+    ]
+    .concat()
+    .join(":");
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+74+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{methods}"),
+        ],
+        "mixed-method-blocks",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.tan_methods().len(), 1);
+    assert_eq!(state.tan_methods()[0].security_function(), "942");
+}
+
+// FinTS 3.0 Formals 2017-10-06, H.1.5 cut rule; PIN/TAN 2020-07-10,
+// B.8.2: trailing optional fields may be cut. A shorter unusable final
+// sub-record is skipped without discarding its well-formed sibling.
+#[test]
+fn hitans_last_method_accepts_trailing_cut_and_skips_a_short_block() {
     let first = typed_method("940", "fictional-a");
     let trailing_cut = first[..20].join(":");
     let accepted = message(
@@ -2638,24 +2758,24 @@ fn hitans_last_method_accepts_trailing_cut_but_rejects_mid_block_cut() {
         .unwrap();
     assert_eq!(state.tan_methods().len(), 1);
 
-    let mut cut_middle = first[..20].to_vec();
-    cut_middle.extend(typed_method("941", "fictional-b"));
-    let rejected = message(
+    let mut with_short_tail = first;
+    with_short_tail.extend_from_slice(&typed_method("941", "fictional-b")[..5]);
+    let skipped = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
             "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
-            format!("HITANS:4:7:3+1+1+0+N:N:0:{}", cut_middle.join(":")),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{}", with_short_tail.join(":")),
         ],
         "dialog1",
         1,
     );
     let mut state = ReusableState::new();
-    assert!(
-        Response::parse(&rejected)
-            .unwrap()
-            .apply_parameters(&mut state)
-            .is_err()
-    );
+    Response::parse(&skipped)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.tan_methods().len(), 1);
+    assert_eq!(state.tan_methods()[0].security_function(), "940");
 }
 
 // Observed protocol condition: some institutions emit fixed two-decimal amounts

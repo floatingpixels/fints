@@ -701,7 +701,6 @@ fn gate4_capabilities_are_negotiated_only_from_exact_parameter_versions() {
     let card = state.credit_card_transactions.unwrap();
     assert!(card.account_required);
     assert!(card.date_range_allowed);
-    assert!(card.entry_count_allowed);
     assert_eq!(state.credit_card_transactions_requires_tan, Some(false));
     assert_eq!(state.credit_card_balance_account_required, Some(true));
     assert_eq!(state.credit_card_balance_requires_tan, Some(true));

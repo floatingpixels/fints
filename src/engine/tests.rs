@@ -907,6 +907,22 @@ fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialo
         Err(Error::Unsupported(Limitation::TanMediumUnavailable))
     ));
     assert!(empty.has_active_dialog());
+
+    let mut unusable = engine_with_method(TanProcess::Decoupled);
+    unusable.state.tan_methods[0].medium_name_required = true;
+    unusable
+        .tan_media_initialization_request(now().date(), now().time())
+        .unwrap();
+    let unusable_response = response(
+        &["HIRMG:2:2+0010::accepted", "HITAB:3:5:5+1+M:1"],
+        "unusable-media",
+        1,
+    );
+    assert!(matches!(
+        unusable.accept_tan_media_initialization(&unusable_response),
+        Err(Error::Unsupported(Limitation::TanMediumUnavailable))
+    ));
+    assert!(unusable.has_active_dialog());
 }
 
 // PIN/TAN B.5.1/B.5.2: an institute HITAN answering a process-4 HKTAN must
@@ -2076,7 +2092,6 @@ fn empty_credit_card_transactions_do_not_fabricate_reported_values() {
     engine.state.credit_card_transactions = Some(crate::model::CreditCardCapability {
         account_required: false,
         date_range_allowed: true,
-        entry_count_allowed: true,
     });
     engine.state.credit_card_transactions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
