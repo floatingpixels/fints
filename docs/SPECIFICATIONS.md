@@ -332,7 +332,10 @@ access date for each source below is 2026-07-28.
   2022 volume. The current return-code volume still applies.
 - **Authorizes:** negotiated Gate 1 balance requests and responses for segment
   versions 6-8 and their typed account, amount, currency, sign, date/time, and
-  optional-value semantics. The HISALS segment-header version is the generic
+  optional-value semantics. Formals cut rules permit trailing optional DEG
+  components to be omitted; result parsers consume the mandatory prefix and
+  read past unused trailing components without weakening mandatory identity or
+  amount validation. The HISALS segment-header version is the generic
   advertised-version fact used for negotiation, including when the version is
   outside the 6-8 range defined by this document; the archived HBCI source
   above separately authorizes version 5. It also authorizes Gate 2 HKCAZ 1 or
@@ -462,7 +465,10 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   `camt.052.001.08`, preserves supplied entry and account-servicer references,
   and keeps optional data absent when the XML omits it. The ISO `xs:decimal`
   and `xs:date` lexical spaces apply, and `SplmtryData/Envlp` may contain
-  foreign-namespace extension data with no Gate 2 result semantics.
+  foreign-namespace extension data with no Gate 2 result semantics. Optional
+  transaction-detail `Amt` and `BkTxCd` values remain absent when omitted or
+  incomplete; the entry/detail sum rule applies only when detail amounts were
+  supplied, while supplied directions and sums remain consistent with the entry.
 - **Apply alongside:** G97 and G108 from the FinTS correction register and the
   FinTS Messages HKCAZ/HICAZ version 1 transport segments.
 - **Authorizes:** namespace-aware, UTF-8 camt.052.001.08 parsing of the booked
@@ -476,6 +482,15 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   SUBBAL, TRAN/TRANSDET, instrument identifiers, quantities, prices, position
   values, structured cost-basis data, transaction amounts, dates, directions,
   reversal status, references, and continuation indicators.
+- **Gate 4 acceptance note:** the document's `:22H::PAYM//FREE`,
+  `:22F::TRAN//` value set, GENL constants, SUBBAL occupancy, and structured
+  `70E::HOLD` line-number rules remain the recorded normative findings. The
+  crate does not branch on the PAYM/GENL/SUBBAL values or expose SUBBAL, and it
+  exposes `TRAN` only as an opaque institution value. Under the acceptance-space
+  policy those values are therefore read past; malformed optional HOLD content
+  yields an absent cost basis rather than discarding otherwise typed positions.
+  Block pairing, safe identity, instrument, quantity, amount, direction, date,
+  reference, pagination-indicator, and response-size checks remain enforced.
 - **Gate 4 authorizes:** bounded SWIFT MT535 parsing for explicitly supplied
   depot positions and MT536 parsing for explicitly supplied booked securities
   transactions. Free text is never reinterpreted as a missing typed amount,
@@ -501,6 +516,10 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   international account binding, balances, dates, repeated booked entries,
   exact signed amounts, descriptions, merchant data, fee codes, and
   bank-supplied booking references.
+- **Gate 4 acceptance note:** a partially occupied optional `Originalbetrag`
+  group cannot produce a typed amount and is treated as absent. Complete groups
+  remain fully validated, mandatory booked amounts remain mandatory, and unused
+  trailing DEG components are read past.
 - **Apply alongside:** Formals B.6 pagination, HIUPD account types 50-59 and
   allowed-operation entries, HIPINS TAN requirements, and the current
   return-code definitions for 3010, 3040, and 9210.
@@ -531,7 +550,13 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   B.6 pagination. MT942 pending entries are outside Gate 2.
 - **Authorizes:** the bounded advertised HKKAZ fallback parser for booked MT940
   entries, preserving the bank reference from field 61 or the exact statement
-  sequence and entry position when no bank reference is supplied.
+  sequence and entry position when no bank reference is supplied. Fields 20,
+  25, 28C, and 62F/62M retain their specified syntax but do not discard booked
+  entries when absent or unusable because their values are not otherwise
+  consumed; an exact statement position is exposed only from a valid 28C. The
+  60F/60M currency, field-61 amount/direction/code, framing, and bounds remain
+  enforced, while over-length field-61 references remain bounded by the binary
+  response and are preserved verbatim.
 - **Access/redistribution:** the archive and PDF are rights-reserved research
   copies under ignored `local/`; neither is committed or redistributed.
 

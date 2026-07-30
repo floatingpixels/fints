@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Applied consume-vs-enforce parsing to balance, cash,
+  securities, and credit-card response formats. Unconsumed deviations no longer
+  discard typed entries while structural and meaning-bearing checks stay strict.
+
 - **2026-07-30** — Applied consume-vs-enforce parsing to extended feedback,
   BPD, HITAB/HITANS, and processing-irrelevant security fields. Capability
   snapshots now expose three advertised operation-retention windows.

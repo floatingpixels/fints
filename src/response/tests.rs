@@ -952,7 +952,6 @@ fn hisal_five_complete_and_sparse_fixtures_preserve_only_supplied_values() {
 fn malformed_hisal_five_fields_fail_with_redacted_typed_errors() {
     let malformed = [
         "HISAL:3:5:4+PRIVATE654321::280+Fictional+EUR+C:1,:EUR:20260729",
-        "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729:101112:EXTRA",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260230",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729++1,",
         "HISAL:3:5:4+PRIVATE654321::280:12345678+Fictional+EUR+C:1,:EUR:20260729+++++20260728+246000",
@@ -973,6 +972,43 @@ fn malformed_hisal_five_fields_fail_with_redacted_typed_errors() {
         assert!(!redacted.contains("20260230"));
         assert!(!redacted.contains("246000"));
     }
+}
+
+// Formals cut rules and the HBCI/FinTS balance DEGs permit omitted trailing
+// optional components. Gate 4 also reads past later unused extension
+// components while retaining all mandatory identity and amount fields.
+#[test]
+fn balance_groups_accept_cut_optional_tails_and_unused_extension_components() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            concat!(
+                "HISAL:3:6:4+654321::280:12345678:IGNORED",
+                "+Fictional extended balance+EUR",
+                "+C:1,:EUR:20260729::IGNORED",
+                "++2,:EUR:IGNORED",
+                "++++20260729::IGNORED",
+                "+20260801:IGNORED"
+            )
+            .into(),
+        ],
+        "dialog1",
+        2,
+    );
+    let balance = Response::parse(&fixture)
+        .unwrap()
+        .balance()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(balance.account().account_number(), Some("654321"));
+    assert_eq!(balance.booked().amount().coefficient(), 1);
+    assert_eq!(balance.credit_line().unwrap().coefficient(), 2);
+    assert_eq!(
+        balance.booking_time().unwrap().date(),
+        NaiveDate::from_ymd_opt(2026, 7, 29).unwrap()
+    );
+    assert_eq!(balance.due_date(), NaiveDate::from_ymd_opt(2026, 8, 1));
 }
 
 // HBCI 2.2 VII.2.2: the optional HISAL 5 booking time has no meaning

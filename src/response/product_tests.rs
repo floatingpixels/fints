@@ -302,6 +302,39 @@ fn credit_card_balance_fixture_keeps_balance_components_independent() {
     assert_eq!(balance.credit_limit.unwrap().coefficient(), 200_000);
 }
 
+// G112 / CR0538 B.8 and C.12.2: optional trailing DEG components may be cut;
+// unused extension components do not alter the first typed values.
+#[test]
+fn credit_card_groups_accept_cut_optional_tails_and_unused_extensions() {
+    let fixture = message(&[
+        "HIRMG:2:2+0010::accepted",
+        concat!(
+            "HIKKS:3:1:4+444433******1111:IGNORED+CARD-CUST:IGNORED",
+            "+D:250,00:EUR:20260728::IGNORED",
+            "+1000,00:EUR:C:IGNORED",
+            "+50,00:EUR:IGNORED",
+            "+2000,00:EUR:IGNORED",
+            "+20260801:IGNORED"
+        ),
+    ]);
+    let balance = Response::parse(&fixture)
+        .unwrap()
+        .credit_card_balance()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(balance.reported_card_number, "444433******1111");
+    assert_eq!(balance.reported_account_id.as_deref(), Some("CARD-CUST"));
+    assert_eq!(balance.current.amount().amount().coefficient(), 25_000);
+    assert_eq!(balance.available.unwrap().amount().coefficient(), 100_000);
+    assert_eq!(balance.open_authorizations.unwrap().coefficient(), 5_000);
+    assert_eq!(balance.credit_limit.unwrap().coefficient(), 200_000);
+    assert_eq!(
+        balance.next_statement_date,
+        NaiveDate::from_ymd_opt(2026, 8, 1)
+    );
+}
+
 // DK Anlage 3 v3.9, 4.3-4.4: block ends must match their starts and mandatory
 // GENL/FIN/TRANSDET fields cannot yield partial results.
 #[test]
@@ -346,6 +379,51 @@ fn malformed_securities_documents_fail_without_partial_results() {
     };
     assert!(missing_quantity_site.starts_with("fints::response::securities:"));
     assert_ne!(mismatched_site, missing_quantity_site);
+
+    let inactive_with_position = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS07\r\n",
+        "Fictional Inactive Security\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    );
+    let response = Response::parse(&message_with_binary(
+        "HIWPD",
+        6,
+        inactive_with_position.as_bytes(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        response.depot_positions(),
+        Err(Error::MalformedSecuritiesData { .. })
+    ));
+
+    let invalid_indicator = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:anything/UNKNOWN\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        "-"
+    );
+    let response = Response::parse(&message_with_binary(
+        "HIWPD",
+        6,
+        invalid_indicator.as_bytes(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        response.depot_positions(),
+        Err(Error::MalformedSecuritiesData { .. })
+    ));
 }
 
 // DK Anlage 3 v3.9, chapter 4 general syntax rule 6: an MT535/MT536
@@ -475,27 +553,83 @@ fn securities_date_with_latin1_high_byte_is_typed_error() {
     ));
 }
 
-// DK Anlage 3 v3.9, 4.4: one FIN contains exactly one TRAN, PAYM is FREE,
-// and a present TRANSDET block must be structurally complete.
+// DK Anlage 3 v3.9, 4.3 specifies GENL constants, STAT data, SUBBAL, and
+// structured 70E::HOLD line digits. These values are not consumed by the
+// Gate 4 position result, so the acceptance-space policy reads past them.
 #[test]
-fn malformed_mt536_blocks_fail_without_partial_results() {
-    let two_transactions = concat!(
+fn mt535_unconsumed_general_subbalance_and_cost_basis_fields_are_nonfatal() {
+    let payload = concat!(
         "\r\n",
         ":16R:GENL\r\n",
-        ":28E:1/ONLY\r\n",
-        ":20C::SEME//NONREF\r\n",
-        ":23G:NEWM\r\n",
-        ":69A::STAT//20260701/20260728\r\n",
+        ":28E:opaque/ONLY\r\n",
         ":97A::SAFE//12345678/300001\r\n",
         ":17B::ACTI//Y\r\n",
         ":16S:GENL\r\n",
+        ":16R:FICTIONAL\r\n",
+        ":20C::IGNO//unused\r\n",
+        ":16S:FICTIONAL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS06\r\n",
+        "Fictional Acceptance Security\r\n",
+        ":93B::AGGR//UNIT/3,\r\n",
+        ":70E::HOLD//unstructured fictional cost data\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions().unwrap().unwrap();
+
+    assert_eq!(page.positions.len(), 1);
+    assert!(page.positions[0].cost_basis().is_none());
+
+    let active_empty = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:anything/LAST\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        "-"
+    );
+    let response =
+        Response::parse(&message_with_binary("HIWPD", 6, active_empty.as_bytes())).unwrap();
+    assert!(
+        response
+            .depot_positions()
+            .unwrap()
+            .unwrap()
+            .positions
+            .is_empty()
+    );
+}
+
+// DK Anlage 3 v3.9, 4.4 specifies the GENL constants, PAYM value, TRAN code
+// set, and block vocabulary. Gate 4 consumes the TRAN reference/details but
+// not those constants, and a FIN may contain multiple TRAN blocks.
+#[test]
+fn mt536_unconsumed_constants_and_sibling_blocks_do_not_discard_transactions() {
+    let two_transactions = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:opaque/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FICTIONAL\r\n",
+        ":20C::IGNO//unused\r\n",
+        ":16S:FICTIONAL\r\n",
         ":16R:FIN\r\n",
         ":35B:ISIN DE000FINTS05\r\n",
         "Fictional Security\r\n",
+        ":16R:FICTIONAL\r\n",
+        ":16S:FICTIONAL\r\n",
         ":16R:TRAN\r\n",
         ":16R:LINK\r\n",
         ":20C::RELA//NONREF\r\n",
         ":16S:LINK\r\n",
+        ":16R:FICTIONAL\r\n",
+        ":16S:FICTIONAL\r\n",
         ":16S:TRAN\r\n",
         ":16R:TRAN\r\n",
         ":16R:LINK\r\n",
@@ -507,12 +641,17 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWDU", 5, two_transactions)).unwrap();
-    assert!(matches!(
-        response.securities_transactions(),
-        Err(Error::MalformedSecuritiesData { .. })
-    ));
+    assert_eq!(
+        response
+            .securities_transactions()
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        2
+    );
 
-    let wrong_payment = concat!(
+    let opaque_values = concat!(
         "\r\n",
         ":16R:GENL\r\n",
         ":28E:1/ONLY\r\n",
@@ -531,9 +670,10 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
         ":16S:LINK\r\n",
         ":16R:TRANSDET\r\n",
         ":36B::PSTA//UNIT/1,\r\n",
-        ":22F::TRAN//SETT\r\n",
+        ":22F::TRAN//FICT\r\n",
         ":22H::REDE//RECE\r\n",
         ":22H::PAYM//APMT\r\n",
+        ":25D::MOVE//PEND\r\n",
         ":98A::ESET//20260728\r\n",
         ":16S:TRANSDET\r\n",
         ":16S:TRAN\r\n",
@@ -541,12 +681,16 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
         "-"
     )
     .as_bytes();
-    let response = Response::parse(&message_with_binary("HIWDU", 5, wrong_payment)).unwrap();
-    assert!(matches!(
-        response.securities_transactions(),
-        Err(Error::MalformedSecuritiesData { .. })
-    ));
+    let response = Response::parse(&message_with_binary("HIWDU", 5, opaque_values)).unwrap();
+    let page = response.securities_transactions().unwrap().unwrap();
+    assert_eq!(page.entries[0].transaction_kind(), Some("FICT"));
+    assert_eq!(page.entries[0].is_reversal(), Some(false));
+}
 
+// Consumed MT536 structure remains strict: an unterminated TRANSDET block and
+// a missing PAYM qualifier both fail as typed securities-data errors.
+#[test]
+fn malformed_mt536_consumed_structure_still_fails_without_partial_results() {
     let truncated_details = concat!(
         "\r\n",
         ":16R:GENL\r\n",
@@ -580,10 +724,42 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
         response.securities_transactions(),
         Err(Error::MalformedSecuritiesData { .. })
     ));
+
+    let missing_payment = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS05\r\n",
+        "Fictional Security\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//NONREF\r\n",
+        ":16S:LINK\r\n",
+        ":16R:TRANSDET\r\n",
+        ":36B::PSTA//UNIT/1,\r\n",
+        ":22F::TRAN//SETT\r\n",
+        ":22H::REDE//RECE\r\n",
+        ":98A::ESET//20260728\r\n",
+        ":16S:TRANSDET\r\n",
+        ":16S:TRAN\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    );
+    let response =
+        Response::parse(&message_with_binary("HIWDU", 5, missing_payment.as_bytes())).unwrap();
+    assert!(matches!(
+        response.securities_transactions(),
+        Err(Error::MalformedSecuritiesData { .. })
+    ));
 }
 
-// G112 / CR0538 C.12.1 and B.8 btgv: dates and amounts are typed, and the
-// Originalbetrag amount/currency/direction triplet is all-or-nothing.
+// G112 / CR0538 C.12.1 and B.8 btgv: dates and supplied complete amounts stay
+// typed. A partial optional Originalbetrag group is treated as absent because
+// none of its incomplete values can be represented without fabrication.
 #[test]
 fn malformed_credit_card_entries_are_typed_errors() {
     let bad_date = message(&[
@@ -624,10 +800,21 @@ fn malformed_credit_card_entries_are_typed_errors() {
         ),
     ]);
     let response = Response::parse(&partial_original_amount).unwrap();
+    let page = response.credit_card_transactions().unwrap().unwrap();
+    assert!(page.entries[0].original_amount().is_none());
+
+    let malformed_complete_original = message(&[
+        "HIRMG:2:2+0010::accepted",
+        concat!(
+            "HIKKU:3:1:4+444433******1111+++++",
+            "444433******1111:20260727:20260728:::invalid:EUR:D::9,00:EUR:D"
+        ),
+    ]);
+    let response = Response::parse(&malformed_complete_original).unwrap();
     assert!(matches!(
         response.credit_card_transactions(),
-        Err(Error::InvalidResponse {
-            structure: "partial credit-card original amount"
+        Err(Error::InvalidValue {
+            field: "credit-card original amount"
         })
     ));
 }

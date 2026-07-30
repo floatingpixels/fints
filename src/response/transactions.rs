@@ -207,7 +207,7 @@ fn single_text(segment: &Segment, index: usize, field: &'static str) -> Result<S
         .get(index)
         .ok_or(Error::MissingValue { field })?
         .components();
-    if components.len() != 1 {
+    if components.is_empty() {
         return Err(Error::InvalidResponse { structure: field });
     }
     optional_component(components, 0).ok_or(Error::MissingValue { field })
@@ -242,7 +242,7 @@ fn single_binary<'a>(
         .get(index)
         .ok_or(Error::MissingValue { field })?
         .components();
-    if components.len() != 1 {
+    if components.is_empty() {
         return Err(Error::InvalidResponse { structure: field });
     }
     components[0]

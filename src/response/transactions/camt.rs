@@ -398,7 +398,6 @@ impl EntryBuilder {
             detail
                 .direction
                 .is_some_and(|detail_direction| detail_direction != direction)
-                || detail.bank_transaction_code.is_none()
         }) || !detail_amounts_equal_entry(&self.details, &amount)?
         {
             return Err(malformed_transaction_data!());
@@ -422,7 +421,7 @@ impl EntryBuilder {
                 self.bank_transaction_domain,
                 self.bank_transaction_family,
                 self.bank_transaction_subfamily,
-            )?,
+            ),
             proprietary_transaction_code: self.proprietary_transaction_code,
             statement_position: None,
             details: self.details,
@@ -519,7 +518,7 @@ impl DetailBuilder {
             self.bank_transaction_domain,
             self.bank_transaction_family,
             self.bank_transaction_subfamily,
-        )?;
+        );
         Ok(BookedTransactionDetail {
             amount: self.amount,
             direction,
@@ -587,13 +586,12 @@ fn transaction_code(
     domain: Option<String>,
     family: Option<String>,
     subfamily: Option<String>,
-) -> Result<Option<String>, Error> {
+) -> Option<String> {
     match (domain, family, subfamily) {
-        (None, None, None) => Ok(None),
         (Some(domain), Some(family), Some(subfamily)) => {
-            Ok(Some(format!("{domain}.{family}.{subfamily}")))
+            Some(format!("{domain}.{family}.{subfamily}"))
         }
-        _ => Err(malformed_transaction_data!()),
+        _ => None,
     }
 }
 
@@ -606,18 +604,23 @@ fn detail_amounts_equal_entry(
         .filter_map(|detail| detail.amount.as_ref().map(Amount::scale))
         .fold(entry.scale(), u8::max);
     let entry_coefficient = scaled_coefficient(entry, scale)?;
-    let detail_sum = details.iter().try_fold(0_u128, |sum, detail| {
-        let amount = detail
-            .amount
-            .as_ref()
-            .ok_or(malformed_transaction_data!())?;
-        if amount.currency() != entry.currency() {
-            return Err(malformed_transaction_data!());
-        }
-        sum.checked_add(scaled_coefficient(amount, scale)?)
-            .ok_or(malformed_transaction_data!())
-    })?;
-    Ok(detail_sum == entry_coefficient)
+    let (amount_seen, detail_sum) =
+        details
+            .iter()
+            .try_fold((false, 0_u128), |(seen, sum), detail| {
+                let Some(amount) = detail.amount.as_ref() else {
+                    return Ok((seen, sum));
+                };
+                if amount.currency() != entry.currency() {
+                    return Err(malformed_transaction_data!());
+                }
+                Ok((
+                    true,
+                    sum.checked_add(scaled_coefficient(amount, scale)?)
+                        .ok_or(malformed_transaction_data!())?,
+                ))
+            })?;
+    Ok(!amount_seen || detail_sum == entry_coefficient)
 }
 
 fn scaled_coefficient(amount: &Amount, scale: u8) -> Result<u128, Error> {

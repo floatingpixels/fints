@@ -98,7 +98,7 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
 
 fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
     if version <= 6 {
-        if components.len() != 4 {
+        if components.len() < 4 {
             return Err(Error::InvalidResponse {
                 structure: "balance.national_account",
             });
@@ -163,7 +163,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
 }
 
 fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
-    if !(4..=5).contains(&components.len()) {
+    if components.len() < 4 {
         return Err(Error::InvalidResponse {
             structure: "balance.amount_group",
         });
@@ -186,7 +186,7 @@ fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
 }
 
 fn parse_amount(components: &[Value]) -> Result<Amount, Error> {
-    if components.len() != 2 {
+    if components.len() < 2 {
         return Err(Error::InvalidResponse {
             structure: "balance.amount",
         });
@@ -229,7 +229,7 @@ fn parse_currency(value: &str) -> Result<String, Error> {
 }
 
 fn parse_timestamp(components: &[Value]) -> Result<Timestamp, Error> {
-    if !(1..=2).contains(&components.len()) {
+    if components.is_empty() {
         return Err(Error::InvalidResponse {
             structure: "balance.timestamp",
         });
@@ -281,7 +281,7 @@ fn optional_single_element(
     let Some(components) = optional_element(elements, index) else {
         return Ok(None);
     };
-    if components.len() != 1 {
+    if components.is_empty() {
         return Err(Error::InvalidResponse { structure: field });
     }
     Ok(Some(component(components, 0, field)?))

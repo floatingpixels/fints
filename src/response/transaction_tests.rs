@@ -183,6 +183,38 @@ fn camt_fixture_returns_only_booked_entries_and_preserves_references() {
     );
 }
 
+// Anlage 3 v3.9 7.1.7 and the camt.052.001.08 schema make transaction-detail
+// Amt and BkTxCd optional. Partial domain/family/subfamily groups cannot form a
+// typed code, so they remain absent; the sum rule covers supplied detail amounts.
+#[test]
+fn camt_optional_detail_amounts_and_partial_transaction_codes_remain_absent() {
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
+<BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct>
+<Ntry><Amt Ccy="EUR">5.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts>
+<AcctSvcrRef>fictional-optional-details</AcctSvcrRef>
+<BkTxCd><Domn><Cd>PMNT</Cd></Domn></BkTxCd>
+<NtryDtls>
+<TxDtls><Amt Ccy="EUR">5.00</Amt><BkTxCd><Domn><Cd>PMNT</Cd></Domn></BkTxCd></TxDtls>
+<TxDtls><BkTxCd><Domn><Cd>PMNT</Cd><Fmly><Cd>RCDT</Cd></Fmly></Domn></BkTxCd>
+<RmtInf><Ustrd>Fictional amount-free detail</Ustrd></RmtInf></TxDtls>
+</NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let response = Response::parse(&camt_message(xml)).unwrap();
+    let page = response
+        .transactions(&TransactionFormat::Camt {
+            descriptor: CAMT_DESCRIPTOR.to_owned(),
+        })
+        .unwrap()
+        .unwrap();
+    let entry = &page.entries[0];
+
+    assert!(entry.bank_transaction_code().is_none());
+    assert_eq!(entry.details().len(), 2);
+    assert_eq!(entry.details()[0].amount().unwrap().coefficient(), 500);
+    assert!(entry.details()[0].bank_transaction_code().is_none());
+    assert!(entry.details()[1].amount().is_none());
+    assert!(entry.details()[1].bank_transaction_code().is_none());
+}
+
 // FinTS Messages 2022-04-15 Data Dictionary, HICAZ "Gebuchte camt-Umsätze":
 // its binary DE repeats M n, with normally one camt.052 message per booking
 // day. This independently written fixture proves both documents remain ordered.
@@ -390,8 +422,15 @@ fn malformed_camt_documents_fail_without_partial_results() {
     let sum_mismatch = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-sum</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">2.00</Amt><BkTxCd><Domn><Cd>PMNT</Cd><Fmly><Cd>RCDT</Cd><SubFmlyCd>ESCT</SubFmlyCd></Fmly></Domn></BkTxCd></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
     let misplaced_entry = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Ntry/></BkToCstmrAcctRpt></Document>"#;
     let missing_details = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-no-details</AcctSvcrRef><BkTxCd/></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let direction_mismatch = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-direction</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>DBIT</CdtDbtInd></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
 
-    let documents: &[&[u8]] = &[truncated, sum_mismatch, misplaced_entry, missing_details];
+    let documents: &[&[u8]] = &[
+        truncated,
+        sum_mismatch,
+        misplaced_entry,
+        missing_details,
+        direction_mismatch,
+    ];
     let mut sites = Vec::new();
     for document in documents {
         let result = Response::parse(&camt_message(document))
@@ -419,6 +458,51 @@ fn malformed_camt_documents_fail_without_partial_results() {
             }),
         Err(Error::MalformedTransactionData { .. })
     ));
+}
+
+// Formals cut rules allow trailing optional DEG components to be omitted, and
+// unknown trailing components are read past. The first descriptor/payload
+// component remains the only value consumed by these operation layouts.
+#[test]
+fn transaction_segment_groups_accept_unused_trailing_components() {
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-extension</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">1.00</Amt></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let camt = binary_message(
+        &format!(
+            "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+\
+             {CAMT_DESCRIPTOR_WIRE}:IGNORED+@"
+        ),
+        xml,
+        "'HNHBS:4:1+2'",
+    );
+    assert_eq!(
+        Response::parse(&camt)
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            })
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+
+    let mt940 = concat!(
+        "\r\n:60F:C260727EUR100,00",
+        "\r\n:61:260728C1,00NTRFFICTREF",
+        "\r\n-"
+    );
+    let legacy = binary_message("HIKAZ:3:7:3+@", mt940.as_bytes(), ":IGNORED'HNHBS:4:1+2'");
+    assert_eq!(
+        Response::parse(&legacy)
+            .unwrap()
+            .transactions(&TransactionFormat::Mt940 { version: 7 })
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
 }
 
 // DK Anlage 3 v3.8, 8.1 and 8.2.1-8.2.5; FinTS Messages 2022-04-15
@@ -464,6 +548,43 @@ fn mt940_fixture_preserves_bank_reference_or_exact_statement_position() {
     assert_eq!(position.page_number(), Some("2"));
     assert_eq!(position.entry_index(), 2);
     assert!(page.entries[1].account_servicer_reference().is_none());
+}
+
+// DK Anlage 3 v3.8, 8.2.1-8.2.3 specifies :20:, :25:, :28C:, closing
+// balances, and 16-character field-61 references. Gate 2 consumes only the
+// opening-balance currency and the references themselves; unavailable or
+// malformed statement numbering merely makes StatementPosition absent.
+#[test]
+fn mt940_unconsumed_statement_fields_and_long_references_are_nonfatal() {
+    let mt940 = concat!(
+        "\r\n:28C:not/a/number",
+        "\r\n:60F:C260727EUR100,00",
+        "\r\n:61:260728C1,00NTRFFICTIONAL-CUSTOMER-REFERENCE//FICTIONAL-BANK-REFERENCE-LONG",
+        "\r\n:61:260728D2,00NDDTFICTIONAL-CUSTOMER-ONLY-LONG",
+        "\r\n-"
+    );
+    let response = Response::parse(&binary_message(
+        "HIKAZ:3:7:3+@",
+        mt940.as_bytes(),
+        "'HNHBS:4:1+2'",
+    ))
+    .unwrap();
+    let page = response
+        .transactions(&TransactionFormat::Mt940 { version: 7 })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(page.entries.len(), 2);
+    assert_eq!(
+        page.entries[0].account_servicer_reference(),
+        Some("FICTIONAL-BANK-REFERENCE-LONG")
+    );
+    assert_eq!(
+        page.entries[1].details()[0].customer_reference(),
+        Some("FICTIONAL-CUSTOMER-ONLY-LONG")
+    );
+    assert!(page.entries[0].statement_position().is_none());
+    assert!(page.entries[1].statement_position().is_none());
 }
 
 // DK Anlage 3 v3.8, 8.1 and 8.2.1: blank separator lines are ignorable,
@@ -539,7 +660,8 @@ fn mt940_numeric_prefix_without_control_fields_stays_unstructured() {
 }
 
 // DK Anlage 3 v3.8, 8.1 and 8.2.1-8.2.4 require a complete SWIFT
-// terminator, :28C:, opening balance, valid :61:, and a decimal amount.
+// terminator; Gate 2 still requires an opening balance for its consumed
+// currency, a valid :61:, and a decimal amount.
 // Every malformed fixture is independently framed as a valid HIKAZ response.
 #[test]
 fn malformed_mt940_statements_fail_without_partial_results() {
@@ -547,11 +669,6 @@ fn malformed_mt940_statements_fail_without_partial_results() {
         "\r\n:20:FICTIONAL1\r\n:25:12345678/123456\r\n:28C:1/1",
         "\r\n:60F:C260727EUR100,00\r\n:61:260728C1,00NTRFFICTREF",
         "\r\n:62F:C260728EUR101,00"
-    );
-    let missing_statement_number = concat!(
-        "\r\n:20:FICTIONAL1\r\n:25:12345678/123456",
-        "\r\n:60F:C260727EUR100,00\r\n:61:260728C1,00NTRFFICTREF",
-        "\r\n:62F:C260728EUR101,00\r\n-"
     );
     let missing_opening_balance = concat!(
         "\r\n:20:FICTIONAL1\r\n:25:12345678/123456\r\n:28C:1/1",
@@ -570,7 +687,6 @@ fn malformed_mt940_statements_fail_without_partial_results() {
 
     for statement in [
         truncated,
-        missing_statement_number,
         missing_opening_balance,
         malformed_entry,
         bad_amount,

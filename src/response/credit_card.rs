@@ -175,7 +175,7 @@ pub(super) fn fuzz_entry(input: &[u8]) -> bool {
 }
 
 fn parse_signed_balance(components: &[Value]) -> Result<CreditCardCurrentBalance, Error> {
-    if !(4..=5).contains(&components.len()) {
+    if components.len() < 4 {
         return Err(Error::InvalidResponse {
             structure: "credit-card current balance",
         });
@@ -197,7 +197,7 @@ fn parse_signed_balance(components: &[Value]) -> Result<CreditCardCurrentBalance
 }
 
 fn parse_amount_with_direction(components: &[Value]) -> Result<CreditCardAmount, Error> {
-    if components.len() != 3 {
+    if components.len() < 3 {
         return Err(Error::InvalidResponse {
             structure: "credit-card amount with direction",
         });
@@ -212,7 +212,7 @@ fn parse_amount_with_direction(components: &[Value]) -> Result<CreditCardAmount,
 }
 
 fn parse_amount(components: &[Value]) -> Result<Amount, Error> {
-    if components.len() != 2 {
+    if components.len() < 2 {
         return Err(Error::InvalidResponse {
             structure: "credit-card amount",
         });
@@ -239,9 +239,7 @@ fn optional_amount_with_direction(
             amount: amount(value, currency, "credit-card original amount")?,
             direction: parse_direction(&direction)?,
         })),
-        _ => Err(Error::InvalidResponse {
-            structure: "partial credit-card original amount",
-        }),
+        _ => Ok(None),
     }
 }
 
@@ -378,7 +376,7 @@ fn single_text(
     field: &'static str,
 ) -> Result<String, Error> {
     let components = required_element(elements, index, field)?;
-    if components.len() != 1 {
+    if components.is_empty() {
         return Err(Error::InvalidResponse {
             structure: "single credit-card text element",
         });
@@ -393,7 +391,7 @@ fn optional_single_text(
     let Some(components) = optional_element(elements, index) else {
         return Ok(None);
     };
-    if components.len() != 1 {
+    if components.is_empty() {
         return Err(Error::InvalidResponse {
             structure: "single optional credit-card text element",
         });

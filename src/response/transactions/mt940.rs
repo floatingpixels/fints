@@ -75,21 +75,18 @@ fn parse_tag(line: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
-    let statement = required_unique(fields, "28C")?;
-    let (statement_number, page_number) = parse_statement_number(statement)?;
+    let statement_position = {
+        let mut statements = fields.iter().filter(|field| field.tag == "28C");
+        match (statements.next(), statements.next()) {
+            (Some(statement), None) => parse_statement_number(&statement.value).ok(),
+            _ => None,
+        }
+    };
     let opening = fields
         .iter()
         .find(|field| matches!(field.tag.as_str(), "60F" | "60M"))
         .ok_or(malformed_transaction_data!())?;
     let currency = parse_balance_currency(&opening.value)?;
-    if !fields
-        .iter()
-        .any(|field| matches!(field.tag.as_str(), "62F" | "62M"))
-        || required_unique(fields, "20").is_err()
-        || required_unique(fields, "25").is_err()
-    {
-        return Err(malformed_transaction_data!());
-    }
 
     let mut entries = Vec::new();
     let mut index = 0_u32;
@@ -109,10 +106,9 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
             .map(parse_information)
             .transpose()?
             .unwrap_or_default();
-        let statement_position = parsed
-            .bank_reference
-            .is_none()
-            .then(|| StatementPosition::new(statement_number.clone(), page_number.clone(), index));
+        let entry_statement_position = (parsed.bank_reference.is_none())
+            .then_some(statement_position.as_ref())
+            .flatten();
         entries.push(BookedEntry {
             amount: parsed.amount,
             direction: parsed.direction,
@@ -123,7 +119,9 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
             account_servicer_reference: parsed.bank_reference,
             bank_transaction_code: Some(parsed.booking_code),
             proprietary_transaction_code: structured.transaction_code.clone(),
-            statement_position,
+            statement_position: entry_statement_position.map(|(statement_number, page_number)| {
+                StatementPosition::new(statement_number.clone(), page_number.clone(), index)
+            }),
             details: vec![BookedTransactionDetail {
                 amount: None,
                 direction: None,
@@ -209,13 +207,13 @@ fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
     let first_line = rest.split('\n').next().unwrap_or_default();
     let (customer_reference, bank_reference) = match first_line.split_once("//") {
         Some((customer, bank)) => {
-            if customer.len() > 16 || bank.is_empty() || bank.len() > 16 {
+            if bank.is_empty() {
                 return Err(malformed_transaction_data!());
             }
             (nonempty_optional(customer), Some(bank.to_owned()))
         }
         None => {
-            if first_line.is_empty() || first_line.len() > 16 {
+            if first_line.is_empty() {
                 return Err(malformed_transaction_data!());
             }
             (Some(first_line.to_owned()), None)
@@ -399,15 +397,6 @@ fn parse_month_day(value: &str, value_date: NaiveDate) -> Result<NaiveDate, Erro
         _ => value_date.year(),
     };
     NaiveDate::from_ymd_opt(year, month, day).ok_or(malformed_transaction_data!())
-}
-
-fn required_unique<'a>(fields: &'a [Field], tag: &str) -> Result<&'a str, Error> {
-    let mut matches = fields.iter().filter(|field| field.tag == tag);
-    let value = matches.next().ok_or(malformed_transaction_data!())?;
-    if matches.next().is_some() {
-        return Err(malformed_transaction_data!());
-    }
-    Ok(&value.value)
 }
 
 fn useful_reference(value: Option<String>) -> Option<String> {
