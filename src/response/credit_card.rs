@@ -30,6 +30,9 @@ pub(super) fn transactions(
     };
     require_version(segment, "HIKKU", 1)?;
     let elements = segment.elements();
+    // G112 C.12.1: HIKKU fields 2..6 are segment elements 1..5. Repeated
+    // field 7 begins at element 6; nested DEGs inside an entry flatten only
+    // within that entry and do not shift these segment elements.
     let reported_card_number = single_text(elements, 1, "HIKKU card number")?;
     let reported_account_id = optional_single_text(elements, 2)?;
     let current_balance = optional_element(elements, 3)
@@ -76,6 +79,9 @@ pub(super) fn balance(segments: &[Segment]) -> Result<Option<CreditCardBalanceFi
     };
     require_version(segment, "HIKKS", 1)?;
     let elements = segment.elements();
+    // G112 C.12.2: HIKKS fields 2..8 map to segment elements 1..7.
+    // Its sdo/btgv/btg fields are separate elements whose internal component
+    // derivations are handled by the amount helpers below.
     Ok(Some(CreditCardBalanceFields {
         reported_card_number: single_text(elements, 1, "HIKKS card number")?,
         reported_account_id: optional_single_text(elements, 2)?,
@@ -121,9 +127,11 @@ impl CreditCardBalanceFields {
 }
 
 fn parse_entry(components: &[Value]) -> Result<CreditCardEntry, Error> {
-    // G112 / CR 538, "Umsatz Kreditkartenkonto". Components are positional;
-    // the four repeated "Transaktionsbeschreibung" DEGs occupy eight flat
-    // component slots. Absent trailing optional values remain absent.
+    // G112 / CR 538 DD "Umsatz Kreditkartenkonto": fields 1..5 are
+    // components 0..4; field 6 `btgv` occupies 5..7; field 7 is 8; field 8
+    // `btgv` occupies 9..11; four field-9 description DEGs occupy 12..19;
+    // scalar fields 10..18 consequently occupy 20..28.
+    // Absent trailing optional values remain absent.
     // CR0538 C.12.1 defines the first 29 positional components. Unknown
     // trailing extension components are read past without changing the result.
     Ok(CreditCardEntry {
@@ -175,6 +183,8 @@ pub(super) fn fuzz_entry(input: &[u8]) -> bool {
 }
 
 fn parse_signed_balance(components: &[Value]) -> Result<CreditCardCurrentBalance, Error> {
+    // G112 uses Formals `sdo`: sign 0, nested `btg` amount/currency 1/2,
+    // date 3, and optional time 4.
     if components.len() < 4 {
         return Err(Error::InvalidResponse {
             structure: "credit-card current balance",
@@ -197,6 +207,7 @@ fn parse_signed_balance(components: &[Value]) -> Result<CreditCardCurrentBalance
 }
 
 fn parse_amount_with_direction(components: &[Value]) -> Result<CreditCardAmount, Error> {
+    // G112 B.8 `btgv` is exactly value/currency/direction at components 0..2.
     if components.len() < 3 {
         return Err(Error::InvalidResponse {
             structure: "credit-card amount with direction",

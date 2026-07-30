@@ -88,6 +88,10 @@ impl Response {
                         .then_some(header.reference)
                         .flatten();
                     for element in &segment.elements()[1..] {
+                        // Formals B.7.2/B.7.3 and DD `Rückmeldung`: repeated
+                        // response DEGs are segment elements. Their scalar
+                        // fields map directly to code/reference/text at
+                        // components 0/1/2 and parameters from component 3.
                         let components = element.components();
                         let code = component(components, 0, "response code")?;
                         if code.len() != 4 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -544,6 +548,10 @@ fn validate_encryption_header(segment: &Segment) -> Result<(), Error> {
         ));
     }
 
+    // HBCI Security B.5.3/DD HNVSK 3: elements 1..9 follow DD fields 2..10.
+    // Internal widths are profile=2, identity=3, timestamp=1..3,
+    // encryption=6..7, and key-name=6 because its field-1 `kik` contributes
+    // two components before four scalar key fields.
     if !(9..=10).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 2)
         || !(2..=3).all(|index| element_has_components(segment, index, 1))
@@ -640,6 +648,10 @@ fn validate_signature_header(segment: &Segment) -> Result<String, Error> {
     if header.code != b"HNSHK" || header.version != 4 || header.reference.is_some() {
         return Err(invalid_signature_header("signature_header.segment_header"));
     }
+    // HBCI Security B.5.1/DD HNSHK 4: elements 1..12 follow DD fields 2..13.
+    // Internal widths are profile=2, identity=3, timestamp=1..3,
+    // hash=3..4, signature-algorithm=3, and key-name=6 because its nested
+    // field-1 `kik` expands to two components before four scalar fields.
     if !(12..=13).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 2)
         || !(2..=5).all(|index| element_has_components(segment, index, 1))
@@ -729,6 +741,9 @@ fn validate_signature_trailer(segment: &Segment, expected_reference: &str) -> Re
     if header.code != b"HNSHA" || header.version != 2 || header.reference.is_some() {
         return Err(invalid_signature_header("signature_trailer.segment_header"));
     }
+    // HBCI Security B.5.2/DD HNSHA 2: control reference, validation result,
+    // and user signature are separate elements 1..3. PIN/TAN leaves the
+    // latter two empty, so no nested user-signature components are consumed.
     if !(2..=4).contains(&segment.elements().len())
         || !element_has_components(segment, 1, 1)
         || segment

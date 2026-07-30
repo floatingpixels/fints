@@ -44,6 +44,9 @@ fn parse_camt(
                 version: header.version,
             });
         }
+        // Messages C.2.3.1.1.1: HICAZ field 2 is one `kti` element;
+        // its six flat components are audited in parse_international_account.
+        // Descriptor and booked-data DD fields remain elements 2 and 3.
         let parsed_account = parse_international_account(
             segment
                 .elements()
@@ -109,6 +112,8 @@ fn parse_mt940(
                 version: header.version,
             });
         }
+        // Messages C.2.3.1.1: HIKAZ fields 2/3 are independent binary
+        // segment elements. No nested DEG changes the booked-data index 1.
         let booked = single_binary(segment, 1, "HIKAZ booked MT940 payload")?;
         let parsed = mt940::parse(booked)?;
         if entries
@@ -136,6 +141,8 @@ fn matching_segments<'a>(
 }
 
 fn parse_international_account(components: &[Value]) -> Result<Account, Error> {
+    // Messages DD `kti` is six flat components: IBAN, BIC, account,
+    // subaccount, country, and institute code.
     let iban = optional_component(components, 0);
     let bic = optional_component(components, 1);
     let account_number = optional_component(components, 2);

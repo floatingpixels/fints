@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Completed the DD-to-wire mapping audit for Gate 1-4
+  component-indexed response parsers and recorded every nested-group
+  derivation at its parser; no additional incorrect offsets were found.
+
 - **2026-07-30** — Accepted the T32 terminal decoupled-poll shape when a matching
   HITAN `S` accompanies a Gate 4 product result, while retaining continuing,
   unsolicited, and variant-two challenge rejection.

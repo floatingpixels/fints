@@ -149,6 +149,8 @@ impl Message {
 
     pub(crate) fn payload_segments(&self) -> Result<Vec<Segment>, WireError> {
         if self.has_security_envelope() {
+            // HBCI Security B.5.4, HNVSD 1: DD field 2 is the sole binary
+            // data element, hence segment element 1 with one component.
             let payload = self
                 .segments
                 .get(2)
@@ -168,6 +170,8 @@ impl Message {
     fn validate(&self, input_len: usize) -> Result<(), WireError> {
         self.validate_envelope_and_numbers()?;
 
+        // Formals B.5.2/B.5.3: HNHBK 3 fields 2/4/5 are segment elements
+        // 1/3/4. HNHBS 1 field 2 is element 1.
         let declared = self.segments[0]
             .element(1)
             .and_then(Element::single_text)

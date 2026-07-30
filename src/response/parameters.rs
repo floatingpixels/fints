@@ -73,6 +73,8 @@ pub(super) fn apply(
         match header.code {
             b"HIBPA" => {}
             b"HIUPA" => {
+                // Formals E.2, HIUPA 4: segment fields remain separate
+                // elements, so DD fields 3/4 are element indices 2/3.
                 require_version(header.version, 4, "HIUPA")?;
                 let version = parse_element_u16(segment, 2, "UPD version")?;
                 if version > 999 {
@@ -90,12 +92,16 @@ pub(super) fn apply(
                 });
             }
             b"HIUPD" => {
+                // Formals E.3, HIUPD 6: field 2 is one ktv element whose four
+                // components do not shift later segment elements.
                 require_version(header.version, 6, "HIUPD")?;
                 if let Some(account) = parse_account(segment)? {
                     received_accounts.push(account);
                 }
             }
             b"HISALS" if replace_bpd => {
+                // Messages C.2.1.2: HISALS fields 2-4 are segment elements
+                // 1-3; only v8 adds its parameter DEG as element 4.
                 balance_capability_advertised = true;
                 advertised_balance_versions.push(header.version);
                 if header.version == 5 {
@@ -110,6 +116,8 @@ pub(super) fn apply(
                 }
             }
             b"HICAZS" if replace_bpd => {
+                // Messages C.2.3.1.1.1: HICAZS field 5 is the parameter DEG
+                // at element 4; its own fields are flattened by that helper.
                 transaction_capability_advertised = true;
                 if header.version == 1 {
                     let (storage_period, descriptors) = parse_camt_parameters(segment);
@@ -118,12 +126,17 @@ pub(super) fn apply(
                 }
             }
             b"HIKAZS" if replace_bpd => {
+                // Messages C.2.3.1.1 and DD: HIKAZS 6/7 advertise the
+                // segment version in the header. No parameter component is
+                // consumed for version negotiation.
                 transaction_capability_advertised = true;
                 if (6..=7).contains(&header.version) {
                     received_legacy_transaction_versions.push(header.version);
                 }
             }
             b"HIWPDS" if replace_bpd => {
+                // Messages C.4.3.1: HIWPDS field 5 is a linear three-value
+                // parameter DEG. Gate 4 consumes only the advertised version.
                 depot_positions_advertised = true;
                 if header.version == 6 {
                     if depot_positions_supported {
@@ -135,6 +148,8 @@ pub(super) fn apply(
                 }
             }
             b"HIWDUS" if replace_bpd => {
+                // Messages C.4.3.2: HIWDUS field 5 is the parameter DEG at
+                // element 4; its field 1 is component 0.
                 securities_transactions_advertised = true;
                 if header.version == 5 {
                     if securities_transactions_seen {
@@ -150,6 +165,8 @@ pub(super) fn apply(
                 }
             }
             b"HIKKUS" if replace_bpd => {
+                // G112 C.12.1: HIKKUS field 5 is the parameter DEG at
+                // element 4; all four parameter fields are scalar.
                 credit_card_transactions_advertised = true;
                 if header.version == 1 {
                     if credit_card_transactions_seen {
@@ -167,6 +184,8 @@ pub(super) fn apply(
                 }
             }
             b"HIKKSS" if replace_bpd => {
+                // G112 C.12.2: HIKKSS field 5 is the parameter DEG at
+                // element 4 and contains one scalar component.
                 credit_card_balance_advertised = true;
                 if header.version == 1 {
                     if credit_card_balance_account_required.is_some() {
@@ -179,6 +198,9 @@ pub(super) fn apply(
                 }
             }
             b"HIPINS" if replace_bpd => {
+                // PIN/TAN B.8.1: HIPINS field 5 is the parameter DEG at
+                // element 4; five scalar fields precede repeated two-component
+                // operation records.
                 require_version(header.version, 1, "HIPINS")?;
                 balance_requires_tan = parse_tan_requirement(segment, "HKSAL")?;
                 camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
@@ -189,6 +211,9 @@ pub(super) fn apply(
                 credit_card_balance_requires_tan = parse_tan_requirement(segment, "HKKKS")?;
             }
             b"HITANS" if replace_bpd && (6..=7).contains(&header.version) => {
+                // PIN/TAN B.5.1/B.5.2: HITANS field 5 is the parameter DEG
+                // at element 4; three scalar fields precede the repeated
+                // method DEGs, which flatten to 21/26 components.
                 received_methods.extend(parse_tan_methods(segment, header.version)?);
             }
             _ => {}
@@ -292,6 +317,7 @@ pub(super) fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
             });
         }
         require_version(header.version, 3, "HIBPA")?;
+        // Formals D.2: HIBPA DD field 2 is segment element 1.
         let version = parse_element_u16(segment, 1, "BPD version")?;
         if version > 999 {
             return Err(Error::InvalidValue {
@@ -316,6 +342,8 @@ pub(super) fn bpd_institute(segments: &[Segment]) -> Result<Option<InstituteStat
         3,
         "HIBPA",
     )?;
+    // Formals D.2: HIBPA field 3 is one `kik` DEG at element 2.
+    // `kik` has two flat components: country at 0 and institute code at 1.
     let components = segment
         .elements()
         .get(2)
@@ -515,10 +543,13 @@ impl TanMediumLayout {
     const KTV_COMPONENTS: usize = 4;
 
     fn legacy(has_masked_phone: bool) -> Self {
-        // PIN/TAN 2020 DD, TAN-Medium-Liste 2/3/4:
-        // fields 1-5 occupy components 1-5; field 6 is nested ktv and
-        // therefore occupies components 6-9; fields 7-9 then occupy
-        // components 10-12, making field 10 (the designation) component 13.
+        // PIN/TAN 2020 DD, TAN-Medium-Liste 2/3/4: fields 1-5 occupy
+        // components 1-5; nested field 6 `ktv` occupies 6-9; validity
+        // fields 7/8 are 10/11, list number field 9 is 12, and designation
+        // field 10 is 13. Version 2 then has nested field 11 `kti` at 14-19;
+        // v3 has masked phone field 11 at 14 and `kti` field 12 at 15-20;
+        // v4 adds plain phone field 12 at 15 and moves `kti` field 13 to
+        // 16-21. Only designation and the v3/v4 masked phone are consumed.
         let name = 5 + Self::KTV_COMPONENTS + 3;
         Self {
             name,
@@ -534,8 +565,10 @@ impl TanMediumLayout {
     fn current() -> Self {
         // TAN-Medium-Liste 5 inserts the security function before the card
         // group: fields 1-6 occupy components 1-6; field 7 is the four-slot
-        // ktv at components 7-10; fields 8-10 occupy components 11-13.
-        // Field 11 (the designation) is consequently component 14.
+        // `ktv` at components 7-10; validity fields 8/9 are 11/12, list
+        // number field 10 is 13, designation field 11 is 14, masked/plain
+        // phone fields 12/13 are 15/16, and nested field 14 `kti` is 17-22.
+        // Only security function, designation, and masked phone are consumed.
         let name = 6 + Self::KTV_COMPONENTS + 3;
         Self {
             name,
@@ -550,6 +583,10 @@ impl TanMediumLayout {
 }
 
 fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
+    // Formals E.3, HIUPD 6: DD field 2 is the `ktv` element at index 1;
+    // inside it, fields account/subaccount/country/institute map to flat
+    // components 0..=3. DD fields 3..10 remain segment elements 2..=9,
+    // and repeated field 11 begins at element 10.
     let elements = segment.elements();
     let national = elements
         .get(1)
@@ -636,6 +673,8 @@ fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
 }
 
 fn parse_tan_requirement(segment: &Segment, operation: &str) -> Result<Option<bool>, Error> {
+    // PIN/TAN B.8.1: HIPINS parameter fields 1..5 are flat components
+    // 0..=4; repeated field 6 consists of two-component operation records.
     let Some(parameters) = segment.elements().get(4) else {
         return Ok(None);
     };
@@ -678,7 +717,8 @@ fn require_legacy_balance_parameters(segment: &Segment) -> Result<(), Error> {
 
 fn parse_credit_card_parameters(segment: &Segment) -> Option<(CreditCardCapability, u16)> {
     // G112 / CR 538 C.12.1 HIKKUS 1: storage period, maximum-entry input,
-    // date-range input, and conditional account binding.
+    // date-range input, and conditional account binding are scalar DD fields
+    // 1..4, hence flat components 0..3 of segment element 4.
     let components = segment.elements().get(4)?.components();
     let storage_period = optional_component(components, 0)?.parse::<u16>().ok()?;
     let date_range_allowed = yn(components, 2, "HIKKUS date-range input").ok()?;
@@ -693,7 +733,8 @@ fn parse_credit_card_parameters(segment: &Segment) -> Option<(CreditCardCapabili
 }
 
 fn parse_credit_card_balance_parameters(segment: &Segment) -> Result<bool, Error> {
-    // G112 / CR 538 C.12.2 HIKKSS 1.
+    // G112 / CR 538 C.12.2 HIKKSS 1: its sole parameter DD field is flat
+    // component 0 of segment element 4.
     let components = segment
         .elements()
         .get(4)
@@ -713,6 +754,8 @@ fn yn(components: &[Value], index: usize, field: &'static str) -> Result<bool, E
 }
 
 fn parse_camt_parameters(segment: &Segment) -> (Option<u16>, Vec<String>) {
+    // Messages DD "Parameter Kontoumsätze/Zeitraum camt" 1: scalar fields
+    // 1..3 are components 0..2 and repeated descriptor field 4 starts at 3.
     let Some(components) = segment
         .elements()
         .get(4)
@@ -736,6 +779,8 @@ fn parse_camt_parameters(segment: &Segment) -> (Option<u16>, Vec<String>) {
 }
 
 fn parse_storage_period(segment: &Segment) -> Option<u16> {
+    // Messages DD "Parameter Depotumsätze" 1: the only parameter field is
+    // component 0 of the parameter DEG at segment element 4.
     segment
         .elements()
         .get(4)
@@ -744,6 +789,9 @@ fn parse_storage_period(segment: &Segment) -> Option<u16> {
 }
 
 fn parse_tan_methods(segment: &Segment, version: u16) -> Result<Vec<TanMethod>, Error> {
+    // PIN/TAN DD "Parameter Zwei-Schritt-TAN-Einreichung" 6/7: scalar
+    // fields 1..3 occupy components 0..2. Repeated method field 4 follows
+    // at component 3; each method DEG is 21 components in v6 and 26 in v7.
     let Some(parameters) = segment
         .elements()
         .get(4)
@@ -777,8 +825,10 @@ fn parse_tan_methods(segment: &Segment, version: u16) -> Result<Vec<TanMethod>, 
 }
 
 fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Error> {
-    // Fields through "Antwort HHD_UC erforderlich" are positional and mandatory.
-    // Only trailing optional fields of the last repeated method may be cut.
+    // PIN/TAN DD "Verfahrensparameter Zwei-Schritt-Verfahren" 6/7 contains
+    // no nested DEG: DD fields 1..21/26 map directly to flat components
+    // 0..20/25. Only trailing optional fields of the last repeated method
+    // may be cut.
     if components.len() < 20 {
         return Err(Error::InvalidResponse {
             structure: "cut HITANS method parameters",

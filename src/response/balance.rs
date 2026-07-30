@@ -30,6 +30,9 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
         });
     }
 
+    // HBCI 2.2 VII.2.2 and Messages C.2.1.2: HISAL DD fields remain
+    // segment elements. Field 2 is a nested account DEG at element 1;
+    // fields 3 onward therefore remain elements 2 onward.
     let account = parse_account(elements[1].components(), version)?;
     let product_name = single_text(elements, 2, "account product name")?;
     let account_currency = parse_currency(&single_text(elements, 3, "account currency")?)?;
@@ -98,6 +101,8 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
 
 fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
     if version <= 6 {
+        // `ktv` is four flat components: account, subaccount, country, and
+        // institute code (HBCI II.5.3.3 / Messages DD).
         if components.len() < 4 {
             return Err(Error::InvalidResponse {
                 structure: "balance.national_account",
@@ -126,6 +131,8 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
         });
     }
 
+    // Messages DD `kti` is six flat components: IBAN, BIC, account,
+    // subaccount, country, and institute code.
     let country_code = optional_component(components, 4);
     let institute_code = optional_component(components, 5);
     let institute = match (country_code, institute_code) {
@@ -163,6 +170,8 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
 }
 
 fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
+    // Formals/Messages DD `sdo` field 2 is nested `btg` (two components):
+    // sign is component 0, amount/currency are 1/2, then date/time are 3/4.
     if components.len() < 4 {
         return Err(Error::InvalidResponse {
             structure: "balance.amount_group",
