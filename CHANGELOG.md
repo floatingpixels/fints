@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Corrected first contact to acquire the PIN/TAN system ID
+  through function-999 HKSYN/HISYN before selected-method initialization, with
+  bounded fictional lifecycle fixtures.
+
 - **2026-07-30** — Restored `Client: Send` by making opt-in trace sinks transferable
   and covered every public operation result and continuation at compile time.
 

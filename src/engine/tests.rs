@@ -472,11 +472,13 @@ fn bank_terminated_method_discovery_applies_bpd_without_sending_hkend() {
 // unpublished 99xx values have no uniform standalone meaning.
 #[test]
 fn unpublished_99xx_discovery_refreshes_bpd_before_method_selection() {
+    let mut state = ReusableState::new();
+    state.system_id = Some("fictional-existing-system".to_owned());
     let mut engine = Engine::new(
         InstituteId::new("280", "12345678").unwrap(),
         ProductIdentity::new("PROD123", "1.0").unwrap(),
         Credentials::new("fictional-user", None, "private-pin").unwrap(),
-        ReusableState::new(),
+        state,
     )
     .unwrap();
     let request = engine

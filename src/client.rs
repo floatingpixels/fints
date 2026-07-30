@@ -276,6 +276,8 @@ impl Client {
 
     /// Opens the personalized dialog used for subsequent supported operations.
     ///
+    /// On first contact without a system ID or selected method, this opens the required
+    /// function-999 synchronization dialog and retains the system ID returned by HISYN.
     /// If no selected method is usable, the method-discovery dialog is closed before
     /// `ChooseTanMethod` is returned. If a BPD-less function-999 discovery is globally
     /// terminated without mandatory response 3920, the client performs one anonymous
@@ -1110,18 +1112,31 @@ mod tests {
         .unwrap()
     }
 
-    fn fresh_client(responses: impl IntoIterator<Item = Vec<u8>>) -> Client {
+    fn client_with_state(
+        state: ReusableState,
+        responses: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Client {
         Client {
             engine: Engine::new(
                 InstituteId::new("280", "12345678").unwrap(),
                 ProductIdentity::new("PROD123", "1.0").unwrap(),
                 Credentials::new("fictional-user", None, "private-pin").unwrap(),
-                ReusableState::new(),
+                state,
             )
             .unwrap(),
             transport: Transport::fixture(responses),
             last_initialization_stage: None,
         }
+    }
+
+    fn discovery_client(responses: impl IntoIterator<Item = Vec<u8>>) -> Client {
+        let mut state = ReusableState::new();
+        state.system_id = Some("fictional-existing-system".to_owned());
+        client_with_state(state, responses)
+    }
+
+    fn first_contact_client(responses: impl IntoIterator<Item = Vec<u8>>) -> Client {
+        client_with_state(ReusableState::new(), responses)
     }
 
     fn secured_response(inner: &[u8], message_number: u16, trailer_number: u16) -> Vec<u8> {
@@ -1229,6 +1244,227 @@ mod tests {
         }
     }
 
+    // FinTS 3.0 Formals C.8/C.8.1-C.8.2: a first PIN/TAN contact without a
+    // system ID is a synchronization initialization containing HKSYN 3 and
+    // returning HISYN 4. PIN/TAN B.4.3.1 and correction T2 allow function 999
+    // to discover the user-valid method while the same response supplies BPD.
+    #[test]
+    fn first_contact_synchronizes_before_selected_method_initialization() {
+        let synchronization = function_999_response(
+            "first-contact",
+            concat!(
+                "HIRMG:2:2+0010::fictional synchronization accepted'",
+                "HIRMS:3:2:5+3920::fictional methods:942'",
+                "HIBPA:4:3:3+58+280:12345678+Fictional Bank+9+1+300'",
+                "HITANS:5:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1'",
+                "HISYN:6:4:5+fictional-first-system'"
+            )
+            .as_bytes(),
+            1,
+            7,
+        );
+        let synchronization_termination = function_999_response(
+            "first-contact",
+            b"HIRMG:2:2+0100::fictional synchronization terminated'",
+            2,
+            3,
+        );
+        let selected_initialization =
+            secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
+        let mut client = first_contact_client([
+            synchronization,
+            synchronization_termination,
+            selected_initialization,
+        ]);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::ChooseTanMethod
+        ));
+        assert_eq!(client.state().system_id(), Some("fictional-first-system"));
+        assert_eq!(client.state().bpd_version(), 58);
+        assert_eq!(client.allowed_tan_methods(), ["942"]);
+        assert_eq!(client.tan_methods().len(), 1);
+
+        let requests = client.transport.fixture_requests();
+        let first = Message::parse(&requests[0]).unwrap();
+        let payload = first.payload_segments().unwrap();
+        assert_eq!(
+            payload
+                .iter()
+                .map(|segment| segment.header().unwrap().code.to_vec())
+                .collect::<Vec<_>>(),
+            [b"HNSHK", b"HKIDN", b"HKVVB", b"HKSYN", b"HNSHA"]
+        );
+        let hnshk = &payload[0];
+        assert_eq!(hnshk.elements()[1].components()[1].as_text().unwrap(), "1");
+        assert_eq!(
+            hnshk.elements()[2].components()[0].as_text().unwrap(),
+            "999"
+        );
+        assert_eq!(hnshk.elements()[6].components()[2].as_text().unwrap(), "0");
+        let hkidn = &payload[1];
+        assert_eq!(hkidn.elements()[3].components()[0].as_text().unwrap(), "0");
+        assert_eq!(hkidn.elements()[4].components()[0].as_text().unwrap(), "1");
+        let hksyn = &payload[3];
+        assert_eq!(hksyn.header().unwrap().version, 3);
+        assert_eq!(hksyn.elements()[1].components()[0].as_text().unwrap(), "0");
+
+        let termination = Message::parse(&requests[1]).unwrap();
+        let termination_payload = termination.payload_segments().unwrap();
+        assert_eq!(
+            termination_payload[0].elements()[6].components()[2]
+                .as_text()
+                .unwrap(),
+            "fictional-first-system"
+        );
+
+        client.select_tan_method("942").unwrap();
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::Connected
+        ));
+        let requests = client.transport.fixture_requests();
+        let selected = Message::parse(&requests[2]).unwrap();
+        let selected_payload = selected.payload_segments().unwrap();
+        assert!(
+            selected_payload
+                .iter()
+                .all(|segment| segment.header().unwrap().code != b"HKSYN")
+        );
+        let selected_hkidn = selected_payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKIDN")
+            .unwrap();
+        assert_eq!(
+            selected_hkidn.elements()[3].components()[0]
+                .as_text()
+                .unwrap(),
+            "fictional-first-system"
+        );
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+    }
+
+    // PIN/TAN B.6.1/B.8.2 permits the function-999 discovery response to end
+    // the dialog with 9800/9955 while still returning 3920. If that response
+    // also completes mandatory HKSYN with HISYN, the assigned ID remains
+    // reusable and the client must not send HKEND to the terminated dialog.
+    #[test]
+    fn bank_terminated_first_contact_retains_hisyn_without_hkend() {
+        let response = function_999_response(
+            "terminated-first-contact",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary+9800::fictional termination'",
+                "HIRMS:3:2:5+9955::fictional method requirement",
+                "+3920::fictional methods:942'",
+                "HIBPA:4:3:3+58+280:12345678+Fictional Bank+9+1+300'",
+                "HITANS:5:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1'",
+                "HISYN:6:4:5+fictional-terminated-system'"
+            )
+            .as_bytes(),
+            1,
+            7,
+        );
+        let mut client = first_contact_client([response]);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::ChooseTanMethod
+        ));
+        assert_eq!(
+            client.state().system_id(),
+            Some("fictional-terminated-system")
+        );
+        assert_eq!(client.transport.fixture_requests().len(), 1);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+    }
+
+    // Formals C.8.2 makes HISYN mandatory in a synchronization response. A
+    // successful-looking 3920/BPD response cannot silently complete first
+    // contact without the assigned system ID.
+    #[test]
+    fn first_contact_rejects_missing_hisyn_without_persisting_state() {
+        let response = function_999_response(
+            "missing-hisyn",
+            concat!(
+                "HIRMG:2:2+0010::fictional accepted'",
+                "HIRMS:3:2:5+3920::fictional methods:942'",
+                "HIBPA:4:3:3+58+280:12345678+Fictional Bank+9+1+300'",
+                "HITANS:5:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1'"
+            )
+            .as_bytes(),
+            1,
+            6,
+        );
+        let mut client = first_contact_client([response]);
+
+        assert!(matches!(
+            client.initialize(now()),
+            Err(Error::MissingValue {
+                field: "assigned system ID"
+            })
+        ));
+        assert!(client.state().system_id().is_none());
+        assert_eq!(client.transport.fixture_requests().len(), 1);
+    }
+
+    // A caller may have a reusable system ID but no retained selected method.
+    // In that established-system case, PIN/TAN B.4.3.1 discovery remains the
+    // ordinary function-999 initialization and must not request a replacement.
+    #[test]
+    fn established_system_method_discovery_does_not_resynchronize() {
+        let discovery = function_999_response(
+            "existing-system",
+            concat!(
+                "HIRMG:2:2+0010::fictional accepted'",
+                "HIRMS:3:2:4+3920::fictional methods:942'",
+                "HIBPA:4:3:3+58+280:12345678+Fictional Bank+9+1+300'",
+                "HITANS:5:6:3+1+1+0+N:N:0:942:2:fictional-method::1.0:",
+                "Fictional approval:6:1:Approval:2048:N:1:N:0:0:N:N:00:0:N:1'"
+            )
+            .as_bytes(),
+            1,
+            6,
+        );
+        let termination = function_999_response(
+            "existing-system",
+            b"HIRMG:2:2+0100::fictional terminated'",
+            2,
+            3,
+        );
+        let mut client = discovery_client([discovery, termination]);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::ChooseTanMethod
+        ));
+        let requests = client.transport.fixture_requests();
+        let payload = Message::parse(&requests[0])
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        assert!(
+            payload
+                .iter()
+                .all(|segment| segment.header().unwrap().code != b"HKSYN")
+        );
+        let hkidn = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKIDN")
+            .unwrap();
+        assert_eq!(
+            hkidn.elements()[3].components()[0].as_text().unwrap(),
+            "fictional-existing-system"
+        );
+        assert_eq!(
+            client.state().system_id(),
+            Some("fictional-existing-system")
+        );
+    }
+
     // PIN/TAN 2020 B.4.3.1 makes current anonymous BPD a prerequisite for
     // function-999 discovery and requires 3920 to carry the user methods.
     // T8 repairs missing usable parameters through an active BPD-zero refresh.
@@ -1251,7 +1487,7 @@ mod tests {
             rediscovery,
             secured_response(b"HIRMG:2:2+0100::discovery terminated'", 2, 3),
         ];
-        let mut client = fresh_client(responses);
+        let mut client = discovery_client(responses);
 
         assert!(matches!(
             client.initialize(now()).unwrap(),
@@ -1321,7 +1557,7 @@ mod tests {
             ),
             global_missing_3920_response(),
         ];
-        let mut client = fresh_client(responses);
+        let mut client = discovery_client(responses);
 
         let error = initialization_error(client.initialize(now()));
         assert_eq!(
@@ -1364,7 +1600,7 @@ mod tests {
 
     #[test]
     fn initialization_stage_identifies_anonymous_refresh_failure() {
-        let mut client = fresh_client([
+        let mut client = discovery_client([
             global_missing_3920_response(),
             global_missing_3920_response(),
         ]);
@@ -1425,7 +1661,7 @@ mod tests {
             "anonymous-refused",
             1,
         );
-        let mut client = fresh_client([personalized, anonymous]);
+        let mut client = discovery_client([personalized, anonymous]);
 
         assert!(matches!(
             client.initialize(now()).unwrap(),
@@ -1509,7 +1745,7 @@ mod tests {
             "anonymous-refused",
             1,
         );
-        let mut client = fresh_client([personalized, anonymous]);
+        let mut client = discovery_client([personalized, anonymous]);
         assert!(matches!(
             client.initialize(now()).unwrap(),
             Initialization::RefreshParameters
@@ -1535,7 +1771,7 @@ mod tests {
             "anonymous-refused",
             1,
         );
-        let mut standalone_client = fresh_client([standalone]);
+        let mut standalone_client = discovery_client([standalone]);
 
         let error = standalone_client.refresh_parameters(now()).unwrap_err();
 
@@ -1556,7 +1792,7 @@ mod tests {
                 2,
             ),
         ];
-        let mut client = fresh_client(responses);
+        let mut client = discovery_client(responses);
 
         client.refresh_parameters(now()).unwrap();
 
@@ -1583,7 +1819,7 @@ mod tests {
             1,
             4,
         );
-        let mut client = fresh_client([response]);
+        let mut client = discovery_client([response]);
 
         let error = initialization_error(client.initialize(now()));
         assert!(matches!(
@@ -1612,7 +1848,7 @@ mod tests {
             1,
             3,
         );
-        let mut client = fresh_client([fatal]);
+        let mut client = discovery_client([fatal]);
         let error = initialization_error(client.initialize(now()));
         assert_eq!(
             client.last_initialization_stage(),
@@ -1658,11 +1894,13 @@ mod tests {
     #[test]
     fn refresh_outcome_closes_only_an_open_discovery_dialog() {
         let new_engine = || {
+            let mut state = ReusableState::new();
+            state.system_id = Some("fictional-existing-system".to_owned());
             Engine::new(
                 InstituteId::new("280", "12345678").unwrap(),
                 ProductIdentity::new("PROD123", "1.0").unwrap(),
                 Credentials::new("fictional-user", None, "private-pin").unwrap(),
-                ReusableState::new(),
+                state,
             )
             .unwrap()
         };
@@ -1744,7 +1982,7 @@ mod tests {
             2,
             3,
         );
-        let mut client = fresh_client([initial, termination]);
+        let mut client = discovery_client([initial, termination]);
 
         assert!(matches!(
             client.initialize(now()).unwrap(),
@@ -1806,7 +2044,10 @@ mod tests {
             "999"
         );
         assert_eq!(hnshk.elements()[3].components()[0].as_text().unwrap(), "2");
-        assert_eq!(hnshk.elements()[6].components()[2].as_text().unwrap(), "0");
+        assert_eq!(
+            hnshk.elements()[6].components()[2].as_text().unwrap(),
+            "fictional-existing-system"
+        );
         assert_eq!(
             payload[1].elements()[1].components()[0].as_text().unwrap(),
             "open-discovery"
@@ -1849,7 +2090,7 @@ mod tests {
             2,
             3,
         );
-        let mut client = fresh_client([initial, termination]);
+        let mut client = discovery_client([initial, termination]);
 
         let error = initialization_error(client.initialize(now()));
 
@@ -1888,7 +2129,7 @@ mod tests {
             2,
             3,
         );
-        let mut client = fresh_client([initial, termination]);
+        let mut client = discovery_client([initial, termination]);
 
         let error = initialization_error(client.initialize(now()));
 

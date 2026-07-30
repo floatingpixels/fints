@@ -49,7 +49,10 @@ access date for each source below is 2026-07-28.
   zero when none are retained. C.1.2 defines response 9800 as institute-side
   dialog termination and forbids a later HKEND; C.4.2-C.4.3 require a signed,
   encrypted `HNHBK/HNSHK/HKEND/HNSHA/HNHBS` customer termination and normally
-  confirm it with response 0100.
+  confirm it with response 0100. C.8/C.8.1-C.8.2 require first-contact
+  system-ID acquisition to use a synchronization initialization containing
+  HKSYN 3 with HKIDN system ID `0` and status `1`, followed by mandatory HISYN
+  4 and dialog termination before any business dialog.
 - **Apply alongside:** the Gate 1 Formals/protocol correction-register entries
   enumerated below, plus the current return-code volume.
 - **Authorizes:** the Gate 1 wire codec, dialog and synchronization lifecycle,
@@ -68,7 +71,10 @@ access date for each source below is 2026-07-28.
   dialog ended; it does not assign a meaning to the unpublished companion or
   relax any other termination error. C.3.2.2 requires a BPD-version-zero request
   to receive the complete current BPD; the Formals define no alternate BPD
-  acquisition if that anonymous initialization is rejected.
+  acquisition if that anonymous initialization is rejected. C.8 additionally
+  authorizes combining first system-ID acquisition with the function-999
+  initialization instead of sending a regular initialization with system ID
+  `0`; the response may carry BPD and must carry HISYN.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -204,6 +210,9 @@ access date for each source below is 2026-07-28.
   an anonymous refresh that is itself terminated without BPD leaves no compliant
   bootstrap path; the crate returns a typed limitation instead of retrying or
   constructing a method.
+  Correction T2 additionally requires the institute to return a user-valid
+  one- or two-step method when HKSYN requests a new system ID, completing the
+  function-999 first-contact bootstrap without interpreting response text.
   If a BPD-zero client instead receives the exact global
   9050/9800/unpublished-9952 termination without mandatory 3920, B.4.3.1 and T8
   support one bounded repair of the missing anonymous-BPD prerequisite followed

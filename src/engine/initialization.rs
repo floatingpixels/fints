@@ -38,6 +38,14 @@ impl Engine {
             date,
             time,
         };
+        if method.is_none() && self.state.system_id.is_none() {
+            // FinTS 3.0 Formals C.8/C.8.1 requires a new PIN/TAN customer
+            // system to obtain its system ID in a synchronization dialog.
+            // PIN/TAN correction T2 requires that HKSYN response to return a
+            // user-valid TAN method, so function 999 can discover the method
+            // and system ID in the same first-contact exchange.
+            return segments::synchronization(&context, &self.product, &self.state, None, None);
+        }
         segments::initialization(
             &context,
             &self.product,
@@ -126,6 +134,8 @@ impl Engine {
             self.development_initialization_recovery = None;
         }
         let requested_method = self.selected_method().ok().cloned();
+        let initial_system_synchronization =
+            requested_method.is_none() && self.state.system_id.is_none();
         let response = Response::parse(input)?;
         self.record_responses(&response);
         self.apply_parameters(&response)?;
@@ -176,6 +186,11 @@ impl Engine {
                 });
             }
             validate_discovered_methods(&response)?;
+            if initial_system_synchronization {
+                self.state.system_id = Some(response.system_id()?.ok_or(Error::MissingValue {
+                    field: "assigned system ID",
+                })?);
+            }
             // PIN/TAN 2020 B.6.1 and B.8.2: 9800/9955 terminates the
             // function-999 discovery dialog at the institute. T8 requires an
             // anonymous BPD refresh when 3920 cannot be matched to a described
@@ -191,6 +206,11 @@ impl Engine {
         }
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
+        }
+        if initial_system_synchronization {
+            self.state.system_id = Some(response.system_id()?.ok_or(Error::MissingValue {
+                field: "assigned system ID",
+            })?);
         }
         let next_message_number = response
             .message_number()

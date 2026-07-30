@@ -31,8 +31,9 @@ persistence format. Credentials are never serializable.
 
 A new connection follows this bounded sequence:
 
-1. Call `initialize`. With no selected method, the client uses security function 999
-   to obtain response code 3920 and closes any open discovery dialog. It returns
+1. Call `initialize`. With neither a system ID nor a selected method, the client opens
+   the required function-999 synchronization dialog, sends HKSYN, retains the HISYN
+   system ID, obtains response code 3920, and closes any open dialog. It returns
    `Initialization::ChooseTanMethod` when matching BPD method descriptions are usable.
 2. If it instead returns `Initialization::RefreshParameters`, call
    `refresh_parameters` once. Then offer only `tan_methods()` whose identifiers also
@@ -43,11 +44,13 @@ A new connection follows this bounded sequence:
 3. Call `select_tan_method` for that intersection. If the method requires a named
    medium, call `discover_tan_media` and
    `select_tan_medium`.
-4. If `state().system_id()` is absent, call `synchronize`. Persist the state only
-   after synchronization completes.
-5. Call `initialize` again. Once it returns `Connected`, call only an advertised
+4. Call `initialize` again. Once it returns `Connected`, call only an advertised
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.
+
+`synchronize` remains available for an explicit bank-directed resynchronization after
+a method has been selected; ordinary first contact obtains the system ID through the
+initial `initialize` call.
 
 `refresh_parameters` actively requests current BPD with client BPD version zero,
 atomically applies the complete response, and closes its anonymous dialog. It is the
