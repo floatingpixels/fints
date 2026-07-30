@@ -1127,6 +1127,141 @@ mod tests {
             .and_time(NaiveTime::from_hms_opt(12, 0, 0).unwrap())
     }
 
+    // PIN/TAN 2020 B.4.2.2/T32 prints the complete decoupled sequence:
+    // initial order plus HKTAN 4, status HKTAN S, and a final response carrying
+    // HITAN S with the original order's feedback/result. G112 C.12.1 supplies
+    // the independently derived HKKKU/HIKKU 1 field order used below.
+    #[test]
+    fn decoupled_credit_card_poll_accepts_terminal_hitan_and_exhausts_pages() {
+        let mut state = tan_media_state(TanProcess::Decoupled);
+        state.selected_tan_medium = Some("Fictional push medium".to_owned());
+        state.accounts.push(Account {
+            iban: None,
+            bic: None,
+            account_number: Some("444433******1111".to_owned()),
+            subaccount: None,
+            institute: Some(crate::model::InstituteState {
+                country_code: "280".to_owned(),
+                institute_code: "12345678".to_owned(),
+            }),
+            currency: Some("EUR".to_owned()),
+            account_type: Some(50),
+            owner_name_1: Some("Fictional Person".to_owned()),
+            owner_name_2: None,
+            product_name: Some("Fictional Card".to_owned()),
+            allowed_operations: vec![crate::model::OperationPermission {
+                code: "HKKKU".to_owned(),
+                required_signatures: 1,
+            }],
+            unlisted_operations_unknown: false,
+        });
+        state.credit_card_transactions_advertised = true;
+        state.credit_card_transactions = Some(crate::model::CreditCardCapability {
+            account_required: false,
+            date_range_allowed: true,
+        });
+        state.credit_card_transactions_requires_tan = Some(true);
+
+        let initialization =
+            secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
+        let challenge = secured_response(
+            concat!(
+                "HIRMG:2:2+3060::fictional warning'",
+                "HIRMS:3:2:4+3955::approve elsewhere'",
+                "HITAN:4:7:4+4++fictional-card-reference+Approve fictional entries'"
+            )
+            .as_bytes(),
+            2,
+            5,
+        );
+        let terminal_first_page = secured_response(
+            concat!(
+                "HIRMG:2:2+0010::fictional poll accepted'",
+                "HIRMS:3:2:3+3040::fictional next page:card-next'",
+                "HIKKU:4:1:3+444433******1111+++++",
+                "444433******1111:20260728:20260729:::::::9,00:EUR:D'",
+                "HITAN:5:7:3+S++fictional-card-reference+nochallenge'"
+            )
+            .as_bytes(),
+            3,
+            6,
+        );
+        let final_page = secured_response(
+            concat!(
+                "HIRMG:2:2+0010::fictional page accepted'",
+                "HIRMS:3:2:3+0020::fictional order executed'",
+                "HIKKU:4:1:3+444433******1111+++++",
+                "444433******1111:20260729:20260730:::::::10,00:EUR:D'",
+                "HITAN:5:7:4+4++noref+nochallenge'"
+            )
+            .as_bytes(),
+            4,
+            6,
+        );
+        let mut client = client_with_state(
+            state,
+            [initialization, challenge, terminal_first_page, final_page],
+        );
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::Connected
+        ));
+        let continuation = match client
+            .credit_card_transactions(0, None, None, now())
+            .unwrap()
+        {
+            CreditCardTransactionRequest::Challenge(continuation) => *continuation,
+            _ => panic!("expected decoupled credit-card approval"),
+        };
+        let poll_at = now()
+            .checked_add_signed(chrono::TimeDelta::seconds(2))
+            .unwrap();
+        assert_eq!(continuation.earliest_poll_at(), Some(poll_at));
+
+        let result = client
+            .poll_credit_card_transactions(continuation, PollingMode::Manual, poll_at)
+            .unwrap();
+        let complete = match result {
+            CreditCardTransactionRequest::Complete(result) => result,
+            CreditCardTransactionRequest::Challenge(_) => {
+                panic!("terminal decoupled result must not create another challenge")
+            }
+        };
+        assert_eq!(complete.entries().len(), 2);
+
+        let requests = client.transport.fixture_requests();
+        assert_eq!(requests.len(), 4);
+        let poll = Message::parse(&requests[2])
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        let poll_hktan = poll
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKTAN")
+            .unwrap();
+        assert_eq!(
+            poll_hktan.elements()[1].components()[0].as_text().unwrap(),
+            "S"
+        );
+        let next_page = Message::parse(&requests[3])
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        let next_hkkku = next_page
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKKKU")
+            .unwrap();
+        assert_eq!(
+            next_hkkku.elements().last().unwrap().components()[0]
+                .as_text()
+                .unwrap(),
+            "card-next"
+        );
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("444433"));
+    }
+
     #[test]
     fn public_client_and_continuation_surface_is_send() {
         fn assert_send<T: Send>() {}

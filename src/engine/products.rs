@@ -1023,6 +1023,24 @@ impl Engine {
             _ => return Err(Error::InconsistentState),
         };
         if response.has_segment(result_code) {
+            // PIN/TAN 2020 B.4.2.2 (correction T32), steps 2a-2c:
+            // a final decoupled status response contains the original order's
+            // feedback and may contain its explicit result together with the
+            // HITAN process-S response. Code 3956 instead identifies a still
+            // pending approval; 3955/3957/3958 likewise describe a continuing
+            // or unusable approval state rather than terminal order delivery.
+            let terminal_decoupled_result = pending.as_ref().is_some_and(|pending| {
+                pending.method.process == TanProcess::Decoupled
+                    && tan_response.process == "S"
+                    && tan_response.challenge.reference == pending.challenge.reference
+                    && !response
+                        .responses()
+                        .iter()
+                        .any(|response| (3955..=3958).contains(&response.code()))
+            });
+            if terminal_decoupled_result {
+                return Ok(None);
+            }
             return Err(Error::InvalidResponse {
                 structure: "product result and TAN challenge together",
             });

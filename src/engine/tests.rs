@@ -165,6 +165,29 @@ fn connected_transaction_engine(
     engine
 }
 
+fn connected_credit_card_engine(process: TanProcess, requires_tan: bool) -> Engine {
+    let mut account = transaction_account(
+        "DE40123456780000123456",
+        "444433******1111",
+        &[("HKKKU", 1)],
+    );
+    account.account_type = Some(50);
+    let mut engine = engine_with_method(process);
+    engine.state.accounts = vec![account];
+    engine.state.credit_card_transactions_advertised = true;
+    engine.state.credit_card_transactions = Some(crate::model::CreditCardCapability {
+        account_required: false,
+        date_range_allowed: true,
+    });
+    engine.state.credit_card_transactions_requires_tan = Some(requires_tan);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    engine
+}
+
 #[test]
 fn malformed_reusable_state_is_rejected_before_transport_use() {
     let mut state = ReusableState::new();
@@ -2152,6 +2175,132 @@ fn empty_credit_card_transactions_do_not_fabricate_reported_values() {
         _ => panic!("expected a completed masked-card result"),
     };
     assert_eq!(result.reported_card_number(), Some("444433********11"));
+}
+
+// PIN/TAN 2020 B.4.2.2 (correction T32), steps 2a-2c: code 3956 means
+// approval is still pending. The last status response may instead carry the
+// original order's explicit result together with HITAN process S. G112 C.12.1
+// supplies HIKKU as that independently derived fictional result shape.
+#[test]
+fn decoupled_product_result_rejects_continuing_or_new_challenges() {
+    for (responses, process) in [
+        (
+            [
+                "HIRMG:2:2+0010::accepted",
+                "HIRMS:3:2:3+3956::approval pending",
+                "HIKKU:4:1:3+444433******1111",
+                "HITAN:5:7:3+S++fictional-card-reference+nochallenge",
+            ],
+            TanProcess::Decoupled,
+        ),
+        (
+            [
+                "HIRMG:2:2+0010::accepted",
+                "HIRMS:3:2:3+3955::new approval",
+                "HIKKU:4:1:3+444433******1111",
+                "HITAN:5:7:3+4++fictional-new-reference+Approve again",
+            ],
+            TanProcess::Decoupled,
+        ),
+        (
+            [
+                "HIRMG:2:2+0010::accepted",
+                "HIRMS:3:2:3+0020::executed",
+                "HIKKU:4:1:3+444433******1111",
+                "HITAN:5:7:3+S++fictional-other-reference+nochallenge",
+            ],
+            TanProcess::Decoupled,
+        ),
+        (
+            [
+                "HIRMG:2:2+0010::accepted",
+                "HIRMS:3:2:3+0020::executed",
+                "HIKKU:4:1:3+444433******1111",
+                "HITAN:5:6:3+2++fictional-card-reference+nochallenge",
+            ],
+            TanProcess::ProcessVariantTwo,
+        ),
+    ] {
+        let mut engine = connected_credit_card_engine(process, true);
+        engine
+            .credit_card_transactions_request(0, None, None, now().date(), now().time())
+            .unwrap();
+        let challenge = response(
+            &[
+                "HIRMG:2:2+0010::accepted",
+                "HIRMS:3:2:4+3955::approval elsewhere",
+                if process == TanProcess::Decoupled {
+                    "HITAN:4:7:4+4++fictional-card-reference+Approve fictional entries"
+                } else {
+                    "HITAN:4:6:4+4++fictional-card-reference+Approve fictional entries"
+                },
+            ],
+            "dialog1",
+            2,
+        );
+        let mut pending = match engine
+            .accept_credit_card_transactions(&challenge, now())
+            .unwrap()
+        {
+            CreditCardTransactionsResult::Challenge(pending) => *pending,
+            _ => panic!("expected a credit-card approval challenge"),
+        };
+        if process == TanProcess::Decoupled {
+            engine
+                .decoupled_poll_request(
+                    &mut pending,
+                    crate::PollingMode::Manual,
+                    now().checked_add_signed(TimeDelta::seconds(2)).unwrap(),
+                )
+                .unwrap();
+        } else {
+            engine
+                .tan_submission_request(&pending, &Tan::new("123456").unwrap(), now())
+                .unwrap();
+        }
+
+        let error = engine
+            .accept_credit_card_transactions_continuation(
+                &response(&responses, "dialog1", 3),
+                pending,
+                now(),
+            )
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            Error::InvalidResponse {
+                structure: "product result and TAN challenge together"
+            }
+        ));
+        assert!(!format!("{error:?}").contains("fictional-card"));
+        assert!(!format!("{error}").contains("444433"));
+    }
+
+    let mut unsolicited = connected_credit_card_engine(TanProcess::Decoupled, false);
+    unsolicited
+        .credit_card_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let error = unsolicited
+        .accept_credit_card_transactions(
+            &response(
+                &[
+                    "HIRMG:2:2+0010::accepted",
+                    "HITAN:3:7:4+4++fictional-unsolicited-reference+Approve",
+                ],
+                "dialog1",
+                2,
+            ),
+            now(),
+        )
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        Error::InvalidResponse {
+            structure: "unsolicited product TAN challenge"
+        }
+    ));
 }
 
 // PIN/TAN correction T31 and FinTS PIN/TAN 2020-07-10, B.5.2:

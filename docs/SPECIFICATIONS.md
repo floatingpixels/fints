@@ -264,7 +264,12 @@ access date for each source below is 2026-07-28.
   treating DD field 10 as flat component 10 and was an implementation defect,
   not a contradictory institute parameter set. The selector omission/empty
   experiment based on that premise has been removed without adding either wire
-  shape to supported behavior.
+  shape to supported behavior. B.4.2.2 and B.4.2.2.1 (correction T32), especially
+  steps 1a-2c, define a decoupled order followed by zero or more process-`S`
+  status queries. Code 3956 plus HITAN `S` means approval remains pending; the
+  last query instead returns the original order's feedback and may return its
+  explicit institute result together with a matching HITAN `S`. The order
+  reference binds that terminal HITAN to the pending order.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
@@ -278,7 +283,11 @@ access date for each source below is 2026-07-28.
   discovery initialization supplies current BPD, its applied HITANS condition
   governs this decision rather than the pre-dialog parameter snapshot. They do
   not authorize using `noref` as a selected medium in an ordinary initialization
-  or acquiring UPD before first-access HKTAB discovery.
+  or acquiring UPD before first-access HKTAB discovery. T32 additionally
+  authorizes consuming a matching Gate 4 result from the terminal decoupled poll
+  instead of misclassifying its mandatory HITAN `S` response as a new challenge.
+  Initial and variant-two result/challenge combinations, mismatched references,
+  and codes 3955-3958 remain non-terminal.
   A process-4 HITAN is validated as the response to the embedded HKTAN. If the
   same response omits HITAB, the archived/current operation definitions
   authorize sending the highest common advertised HKTAB 2-5 order in that
@@ -560,12 +569,16 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   remain fully validated, mandatory booked amounts remain mandatory, and unused
   trailing DEG components are read past.
 - **Apply alongside:** Formals B.6 pagination, HIUPD account types 50-59 and
-  allowed-operation entries, HIPINS TAN requirements, and the current
-  return-code definitions for 3010, 3040, and 9210.
+  allowed-operation entries, HIPINS TAN requirements, PIN/TAN 2020
+  B.4.2.2/B.4.2.2.1 and correction T32 for decoupled completion, and the current
+  return-code definitions for 3010, 3040, 3955-3958, and 9210.
 - **Authorizes:** advertised and UPD-authorized credit-card balance and booked
   transaction retrieval with conditional account binding, exact optional-value
-  semantics, and exhaustive opaque continuation. A response balance is not
-  derived from or reconciled to the returned entries.
+  semantics, and exhaustive opaque continuation. HIKKU is the explicit product
+  result that may be delivered in T32's last process-`S` status response; its
+  entries and any 3040 pagination point proceed through the normal parser and
+  exhaustion rules. A response balance is not derived from or reconciled to the
+  returned entries.
 - **Access/redistribution:** accessed 2026-07-28. Redistribution rights were
   not reviewed; the research copy remains ignored under `local/` and is not
   committed.
