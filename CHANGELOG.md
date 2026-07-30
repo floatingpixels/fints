@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Applied current BPD after TAN-media initialization when
+  deciding HKTAN 6/7 name occupancy. Unnamed HITAB 4 generators remain valid
+  only when the method needs no designation; no selector is fabricated.
+
 - **2026-07-30** — Applied consume-vs-enforce parsing to balance, cash,
   securities, and credit-card response formats. Unconsumed deviations no longer
   discard typed entries while structural and meaning-bearing checks stay strict.

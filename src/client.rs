@@ -1271,6 +1271,13 @@ mod tests {
     }
 
     fn process_four_hitan_without_hitab(hitan_version: u16) -> Vec<u8> {
+        process_four_hitan_without_hitab_with_active_count(hitan_version, 1)
+    }
+
+    fn process_four_hitan_without_hitab_with_active_count(
+        hitan_version: u16,
+        active_media_count: u8,
+    ) -> Vec<u8> {
         // Independently assembled from PIN/TAN B.4.3.1.3, B.5.1/B.5.2,
         // C.3.1.1, and correction T33. The parameter segments intentionally
         // mirror a broad fictional BPD response; none is derived from live
@@ -1282,11 +1289,11 @@ mod tests {
         };
         let method_six = format!(
             "{function_six}:2:fictional-medium-method::1.0:Fictional medium approval:\
-             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:1"
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:{active_media_count}"
         );
         let method_seven = format!(
             "{function_seven}:2:fictional-push:Decoupled:1.0:Fictional push approval:\
-             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:1:5:2:3:J:J"
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:{active_media_count}:5:2:3:J:J"
         );
         let segments = vec![
             concat!(
@@ -1539,6 +1546,68 @@ mod tests {
                     assert!(!rendered.contains("fictional accepted"));
                     assert!(!rendered.contains("fictional-system"));
                 }
+            }
+        }
+    }
+
+    // PIN/TAN 2020 B.5.1/B.5.2 and DD "Verfahrensparameter
+    // Zwei-Schritt-Verfahren" 6/7 make HKTAN DE 12 mandatory for requirement
+    // code 2 with more than one advertised active medium. Archived E.2.1.4 and
+    // DD "TAN-Medium-Liste" 4 put the only matching selector in component 10,
+    // where it is optional for class G. One delivered unnamed class-G record
+    // neither overrides the BPD condition nor makes card fields HKTAN selectors.
+    #[test]
+    fn hitab_four_generator_name_controls_selection_for_both_hktan_versions() {
+        for (process, hitan_version) in [
+            (TanProcess::ProcessVariantTwo, 6),
+            (TanProcess::Decoupled, 7),
+        ] {
+            for (active_media_count, medium, expected_name, selectable) in [
+                (2, "G:1::::::::", None, false),
+                (
+                    2,
+                    "G:1::::::::Fictional Generator",
+                    Some("Fictional Generator"),
+                    true,
+                ),
+                (1, "G:1::::::::", None, true),
+            ] {
+                let initialization = process_four_hitan_without_hitab_with_active_count(
+                    hitan_version,
+                    active_media_count,
+                );
+                let operation = tan_media_operation_response(4, Some(medium));
+                let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
+                let mut client = client_with_state(
+                    tan_media_state_with_versions(process, &[4, 2]),
+                    [initialization, operation, termination],
+                );
+
+                let result = client
+                    .discover_tan_media(now())
+                    .map(|media| media.first().and_then(TanMedium::name));
+                if selectable {
+                    assert_eq!(result.unwrap(), expected_name);
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(matches!(
+                        error,
+                        Error::Unsupported(Limitation::TanMediumUnavailable)
+                    ));
+                    let rendered = format!("{error:?}");
+                    assert!(!rendered.contains("Fictional Generator"));
+                    assert!(!rendered.contains("fictional-system"));
+                }
+
+                assert_eq!(client.tan_media().len(), 1);
+                assert_eq!(
+                    client.tan_media()[0].class(),
+                    crate::TanMediumClass::Generator
+                );
+                assert_eq!(client.tan_media()[0].name(), expected_name);
+                assert_eq!(client.selected_tan_media_version(), Some(4));
+                assert_eq!(client.transport.fixture_requests().len(), 3);
+                assert_eq!(client.last_responses()[0].code(), 100);
             }
         }
     }

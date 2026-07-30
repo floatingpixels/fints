@@ -52,6 +52,9 @@ A new connection follows this bounded sequence:
    the separate HKTAB order in the same dialog using the highest mutually
    supported advertised version (2, 4, or 5). No common version returns
    `Limitation::TanMediumVersion` before network I/O.
+   A sole unnamed generator record is not an implicit selection: when HKTAN
+   requires DE 12, only the HITAB medium designation supplies that value, so an
+   unnamed list returns `Limitation::TanMediumUnavailable`.
    UPD is not a prerequisite for this first-access flow, and the HKTAB filler is
    not a substitute for a real medium in an ordinary initialization.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised

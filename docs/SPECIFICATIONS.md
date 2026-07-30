@@ -225,8 +225,16 @@ access date for each source below is 2026-07-28.
   entries place the optional medium name at DE 12. Their shared method-parameter
   DD places `Bezeichnung des TAN-Mediums erforderlich` at field 19 and `Anzahl
   unterstützter aktiver TAN-Medien` at optional field 21; DE 12 is mandatory
-  only when field 19 is `2` and field 21 is greater than one. Correction T33
-  permits `Segmentkennung` during process 4 for both versions. The
+  only when field 19 is `2` and field 21 is greater than one. The count describes
+  the method's supported active media; no rule replaces it with the number of
+  records returned for one user by HITAB. In TAN-Medium-Liste 4, component 10 is
+  the only `Bezeichnung des TAN-Mediums`; it is mandatory for class `M` and
+  optional for class `G`. Class-G card number and card sequence do not become
+  HKTAN DE 12 selectors, and neither E.2.1.4 nor the Data Dictionary defines an
+  implicit selection for a sole unnamed record. Correction T17 introduced
+  HKTAB/HITAB 4 and is incorporated in Release 2020's archived E.2.1.4;
+  correction T33 permits `Segmentkennung` during process 4 for both HKTAN
+  versions. The
   corresponding HITAN 6 and 7 entries
   permit a process-4 institute response and require its order reference for that
   process; their `noref`/challenge filler rule records that no TAN is required.
@@ -240,8 +248,13 @@ access date for each source below is 2026-07-28.
   HIPINS/HITANS interpretation, and HKTAB/HITAB 2, 4, and 5 media discovery. The
   medium-discovery sections authorize requiring HITAB after an accepted request
   and returning a typed limitation when an advertised required name is not
-  selectable. They do not authorize using `noref` as a selected medium in an
-  ordinary initialization or acquiring UPD before first-access HKTAB discovery.
+  selectable. One unnamed class-G record remains usable when the method does not
+  require a name, but it cannot satisfy mandatory HKTAN DE 12: the crate neither
+  fabricates a name nor substitutes discarded card identifiers. When the
+  discovery initialization supplies current BPD, its applied HITANS condition
+  governs this decision rather than the pre-dialog parameter snapshot. They do
+  not authorize using `noref` as a selected medium in an ordinary initialization
+  or acquiring UPD before first-access HKTAB discovery.
   A process-4 HITAN is validated as the response to the embedded HKTAN. If the
   same response omits HITAB, the archived/current operation definitions
   authorize sending the highest common advertised HKTAB 2/4/5 order in that
@@ -424,9 +437,10 @@ Gate 1 applies these entries:
   (2020-12-18, corrected HKTAN 6/7 `Segmentkennung` occupancy), T32
   (2020-07-10, decoupled flow; incorporated in Release 2020), T31
   (2019-09-12, balance/turnover SCA clarification), T21 (2010-07-07, user
-  choice when 3920 returns multiple methods), T8 (2008-02-29, anonymous BPD
-  refresh when 3920 has no usable method), and T2 (2006-12-04, valid method
-  required for synchronization).
+  choice when 3920 returns multiple methods), T17 (2009-12-15, HKTAB/HITAB 4;
+  incorporated in Release 2020's archive), T8 (2008-02-29, anonymous BPD refresh
+  when 3920 has no usable method), and T2 (2006-12-04, valid method required for
+  synchronization).
 - **Messages:** G102/CR 525 (2022-02-24, HKSAL version 8), incorporated into
   the Messages Release 2022 PDF.
 

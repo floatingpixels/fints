@@ -168,7 +168,11 @@ impl Engine {
         let Some(tan_media) = tan_media? else {
             return Ok(TanMediaInitializationResult::OrderRequired);
         };
-        self.store_tan_media(tan_media, &method)?;
+        // The initialization response may have replaced HITANS together with
+        // the BPD. Apply the resulting HKTAN DE 12 condition to the discovered
+        // list, not the stale method snapshot that secured the open dialog.
+        let current_method = self.selected_method()?.clone();
+        self.store_tan_media(tan_media, &current_method)?;
         Ok(TanMediaInitializationResult::Complete)
     }
 
@@ -191,7 +195,6 @@ impl Engine {
         let version = self
             .selected_tan_media_version
             .ok_or(Error::InconsistentState)?;
-        let method = self.active_method()?.clone();
         let response = match self.accept_dialog_response(input) {
             Ok(response) => response,
             Err(error @ Error::Bank(_)) => {
@@ -227,7 +230,8 @@ impl Engine {
             .as_mut()
             .expect("TAN-media diagnostics were initialized")
             .set_discovered_medium_count(tan_media.len());
-        self.store_tan_media(tan_media, &method)
+        let current_method = self.selected_method()?.clone();
+        self.store_tan_media(tan_media, &current_method)
     }
 
     fn store_tan_media(
