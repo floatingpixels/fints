@@ -255,6 +255,15 @@ impl ReusableState {
         }
     }
 
+    /// Advertised HKTAB/HITAB media-discovery versions, highest first.
+    ///
+    /// Segment versions are generic protocol facts and contain no account or
+    /// personal data. Older deserialized state may not retain this derived BPD fact
+    /// until parameters are refreshed.
+    pub fn advertised_tan_media_versions(&self) -> Vec<u16> {
+        self.parameter_versions("HITABS", &self.advertised_tan_media_versions)
+    }
+
     fn parameter_versions(&self, code: &str, fallback: &[u16]) -> Vec<u16> {
         let mut versions = self
             .advertised_parameter_segments

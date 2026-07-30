@@ -47,10 +47,11 @@ A new connection follows this bounded sequence:
    `select_tan_medium`. A missing HITAB response fails as a typed missing value;
    an empty or non-selectable required list returns
    `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
-   closed exactly once. A process-4 HITAN may acknowledge the embedded HKTAN but
-   does not replace HITAB or create another media-discovery continuation. A
-   gateway that advertises only legacy HITABS versions and omits HITAB cannot
-   complete required-medium selection under the current supported contract.
+   closed exactly once. A process-4 HITAN acknowledges the embedded HKTAN; when
+   that initialization response does not already contain HITAB, the client sends
+   the separate HKTAB order in the same dialog using the highest mutually
+   supported advertised version (2, 4, or 5). No common version returns
+   `Limitation::TanMediumVersion` before network I/O.
    UPD is not a prerequisite for this first-access flow, and the HKTAB filler is
    not a substitute for a real medium in an ordinary initialization.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised
@@ -104,8 +105,8 @@ has no trace path, and the crate never logs or stores traced payloads itself.
 - `HKTAN`/`HITAN` 6 for typed process-variant-2 TANs and version 7 for typed or
   decoupled approval; process variant 1 and required HHD responses are typed
   limitations.
-- BPD/UPD, system-ID synchronization, TAN-method selection, and the special
-  `HKTAB`/`HITAB` 5 medium-discovery initialization.
+- BPD/UPD, system-ID synchronization, TAN-method selection, and negotiated
+  `HKTAB`/`HITAB` 2, 4, or 5 medium discovery.
 - Advertised `HKSAL`/`HISAL` versions 5-8 for one UPD-authorized cash account.
   Version 5 uses its archived HBCI-defined national-account and legacy response
   layout. The client obeys `HIPINS` instead of assuming that balance retrieval is

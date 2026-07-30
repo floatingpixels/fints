@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added highest-common HKTAB/HITAB 2, 4, and 5 negotiation,
+  exact legacy medium layouts, and the same-dialog HKTAB order after an
+  initialization acknowledgement without HITAB.
+
 - **2026-07-30** — Applied the complete HITANS 6/7 TAN-medium requirement and
   documented that UPD-zero adds no pre-HKTAB bootstrap; mandatory missing HITAB
   remains a typed failure without a common delivered media version.

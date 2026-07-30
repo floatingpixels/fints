@@ -168,8 +168,20 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
     client.select_tan_method(&security_function)?;
 
     if medium_required {
+        println!(
+            "tan_media_versions advertised={:?} selected=none",
+            client.advertised_tan_media_versions()
+        );
         let discovery = client.discover_tan_media(now()).map(|_| ());
         print_bank_responses(client, "discover_tan_media");
+        println!(
+            "tan_media_versions advertised={:?} selected={}",
+            client.advertised_tan_media_versions(),
+            client
+                .selected_tan_media_version()
+                .map(|version| version.to_string())
+                .unwrap_or_else(|| "none".to_owned())
+        );
         discovery?;
         print_tan_media(client);
         let names = client

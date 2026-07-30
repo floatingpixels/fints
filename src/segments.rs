@@ -165,6 +165,21 @@ pub(crate) fn balance_request(
     authenticated(context, operations, None)
 }
 
+pub(crate) fn tan_media_request(
+    context: &SecurityContext<'_>,
+    version: u16,
+) -> Result<Vec<u8>, Error> {
+    // PIN/TAN 2020 C.3.1.1 and archived E.2.1.2/E.2.1.4: v2 has only
+    // TAN-Medium-Art, while v4/v5 additionally require TAN-Medium-Klasse.
+    // Request every available medium of every class.
+    let elements = match version {
+        2 => vec![text("0")?],
+        4 | 5 => vec![text("0")?, text("A")?],
+        _ => return Err(Limitation::TanMediumVersion.into()),
+    };
+    authenticated_operation(context, "HKTAB", version, elements, None)
+}
+
 pub(crate) struct TransactionRequest<'a> {
     pub(crate) account: &'a Account,
     pub(crate) format: &'a TransactionFormat,

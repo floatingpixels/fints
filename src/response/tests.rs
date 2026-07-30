@@ -1913,7 +1913,7 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
 
     let response = Response::parse(&fixture).unwrap();
     let media = response
-        .tan_media()
+        .tan_media(5, None)
         .unwrap()
         .expect("fictional HITAB is present");
 
@@ -1935,9 +1935,151 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     assert!(matches!(
         Response::parse(&fixture)
             .unwrap()
-            .tan_media()
+            .tan_media(5, None)
             .map(Option::unwrap),
         Err(Error::MissingValue { .. })
+    ));
+}
+
+// PIN/TAN 2020 archived E.2.1.2/E.2.1.4 and DD
+// TAN-Medium-Liste 2/4 define distinct legacy component positions.
+#[test]
+fn legacy_hitab_two_and_four_use_their_independent_media_layouts() {
+    let medium_two = ["M", "1", "", "", "", "", "", "", "", "Fictional SMS"].join(":");
+    let fixture_two = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            format!("HITAB:3:2:4+1+{medium_two}"),
+        ],
+        "dialog-two",
+        1,
+    );
+    let media_two = Response::parse(&fixture_two)
+        .unwrap()
+        .tan_media(2, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(media_two[0].name(), Some("Fictional SMS"));
+    assert_eq!(media_two[0].masked_phone(), None);
+    assert_eq!(media_two[0].security_function(), None);
+
+    let medium_four = [
+        "M",
+        "1",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "Fictional Push",
+        "?+49***456",
+    ]
+    .join(":");
+    let fixture_four = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            format!("HITAB:3:4:4+1+{medium_four}"),
+        ],
+        "dialog-four",
+        1,
+    );
+    let media_four = Response::parse(&fixture_four)
+        .unwrap()
+        .tan_media(4, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(media_four[0].name(), Some("Fictional Push"));
+    assert_eq!(media_four[0].masked_phone(), Some("+49***456"));
+    assert_eq!(media_four[0].security_function(), None);
+}
+
+// Formals C.10: every HITABS occurrence advertises the same HKTAB/HITAB
+// version, and the complete BPD set must remain available after persistence.
+#[test]
+fn hitabs_versions_are_retained_as_ordered_media_discovery_capabilities() {
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:4+81+280:12345678+Fictional Bank+9+1+300".into(),
+            "HITABS:4:2:4+1+1+0".into(),
+            "HITABS:5:5:4+1+1+0".into(),
+            "HITABS:6:4:4+1+1+0".into(),
+            "HITABS:7:2:4+1+1+0".into(),
+        ],
+        "media-bpd",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(state.advertised_tan_media_versions(), [5, 4, 2]);
+}
+
+// The same archived layouts make generator sequence, mobile identity, and the
+// v4 phone alternative conditional mandatory data. Adjacent unsupported codes
+// and a mismatched request reference remain rejected.
+#[test]
+fn legacy_hitab_malformed_conditional_fields_and_references_are_rejected() {
+    for (version, medium, expected_field) in [
+        (2, "G:1:fictional-card", "TAN generator card sequence"),
+        (4, "M:1::::::::Fictional Push", "mobile TAN phone"),
+    ] {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "malformed-media",
+            1,
+        );
+        assert!(matches!(
+            Response::parse(&fixture)
+                .unwrap()
+                .tan_media(version, None),
+            Err(Error::MissingValue { field }) if field == expected_field
+        ));
+    }
+
+    let invalid_class = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HITAB:3:2:4+1+S:1".into(),
+        ],
+        "invalid-class",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&invalid_class).unwrap().tan_media(2, None),
+        Err(Error::InvalidValue {
+            field: "TAN medium class"
+        })
+    ));
+
+    let wrong_reference = message(
+        &["HIRMG:2:2+0010::accepted".into(), "HITAB:3:4:7+1".into()],
+        "wrong-reference",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&wrong_reference)
+            .unwrap()
+            .tan_media(4, Some(3)),
+        Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.reference"
+        })
+    ));
+
+    assert!(matches!(
+        Response::parse(&wrong_reference)
+            .unwrap()
+            .tan_media(2, None),
+        Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.version"
+        })
     ));
 }
 
@@ -1950,7 +2092,7 @@ fn hitab_presence_and_uniqueness_remain_structurally_distinct() {
     assert!(
         Response::parse(&missing)
             .unwrap()
-            .tan_media()
+            .tan_media(5, None)
             .unwrap()
             .is_none()
     );
@@ -1963,7 +2105,7 @@ fn hitab_presence_and_uniqueness_remain_structurally_distinct() {
     assert_eq!(
         Response::parse(&empty)
             .unwrap()
-            .tan_media()
+            .tan_media(5, None)
             .unwrap()
             .expect("empty HITAB remains present")
             .len(),
@@ -1980,7 +2122,7 @@ fn hitab_presence_and_uniqueness_remain_structurally_distinct() {
         1,
     );
     assert!(matches!(
-        Response::parse(&duplicate).unwrap().tan_media(),
+        Response::parse(&duplicate).unwrap().tan_media(5, None),
         Err(Error::InvalidResponse {
             structure: "tan_media.HITAB.duplicate"
         })

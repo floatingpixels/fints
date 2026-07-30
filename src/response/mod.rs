@@ -364,8 +364,12 @@ impl Response {
         parameters::system_id(&self.segments)
     }
 
-    pub(crate) fn tan_media(&self) -> Result<Option<Vec<TanMedium>>, Error> {
-        parameters::tan_media(&self.segments)
+    pub(crate) fn tan_media(
+        &self,
+        expected_version: u16,
+        expected_reference: Option<u16>,
+    ) -> Result<Option<Vec<TanMedium>>, Error> {
+        parameters::tan_media(&self.segments, expected_version, expected_reference)
     }
 
     #[cfg(feature = "development-diagnostics")]

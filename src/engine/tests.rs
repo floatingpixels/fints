@@ -100,6 +100,9 @@ fn engine_with_method(process: TanProcess) -> Engine {
     let mut state = ReusableState::new();
     state.system_id = Some("fictional-system".to_owned());
     state.tan_methods.push(method);
+    state.advertised_parameter_segments.push(
+        crate::capabilities::ParameterSegmentAdvertisement::new("HITABS".to_owned(), 5),
+    );
     state.selected_tan_method = Some("942".to_owned());
     Engine::new(
         InstituteId::new("280", "12345678").unwrap(),
@@ -855,11 +858,10 @@ fn tan_medium_discovery_uses_the_special_hktan_six_and_seven_shapes() {
     }
 }
 
-// PIN/TAN B.4.3.1.3 requires HITAB after successful PIN validation; C.3.1.1
-// permits its repeated list to be empty only when no medium is available.
-// There is no UPD-first or ordinary-initialization bootstrap around this
-// first-access flow. A method whose effective advertised name is required
-// cannot continue in either state.
+// PIN/TAN B.4.3.1.3 requires HITAB during the first media-discovery dialog.
+// If the initialization response does not carry it, archived E.2.1.2/E.2.1.4
+// and current C.3.1.1 define the versioned HKTAB order. An order response that
+// still omits HITAB and an explicitly empty list remain distinct failures.
 #[test]
 fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialog() {
     let mut missing = engine_with_method(TanProcess::ProcessVariantTwo);
@@ -869,7 +871,21 @@ fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialo
         .unwrap();
     let missing_response = response(&["HIRMG:2:2+0010::accepted"], "missing-media", 1);
     assert!(matches!(
-        missing.accept_tan_media_initialization(&missing_response),
+        missing
+            .accept_tan_media_initialization(&missing_response)
+            .unwrap(),
+        super::initialization::TanMediaInitializationResult::OrderRequired
+    ));
+    missing
+        .tan_media_request(now().date(), now().time())
+        .unwrap();
+    let missing_order = response(
+        &["HIRMG:2:2+0010::accepted", "HIRMS:3:2:3+0020::processed"],
+        "missing-media",
+        2,
+    );
+    assert!(matches!(
+        missing.accept_tan_media_response(&missing_order),
         Err(Error::MissingValue {
             field: "HITAB TAN media response"
         })
@@ -946,8 +962,11 @@ fn populated_hitab_preserves_ordered_bank_responses_and_redaction() {
         1,
     );
 
-    let media = engine.accept_tan_media_initialization(&response).unwrap();
-    assert_eq!(media[0].name(), Some("Fictional phone"));
+    assert!(matches!(
+        engine.accept_tan_media_initialization(&response).unwrap(),
+        super::initialization::TanMediaInitializationResult::Complete
+    ));
+    assert_eq!(engine.tan_media()[0].name(), Some("Fictional phone"));
     assert_eq!(
         engine
             .last_responses()

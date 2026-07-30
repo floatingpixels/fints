@@ -28,6 +28,7 @@ pub(super) fn apply(
     let mut received_methods = Vec::new();
     let mut received_balance_versions = Vec::new();
     let mut advertised_balance_versions = Vec::new();
+    let mut advertised_tan_media_versions = Vec::new();
     let mut balance_capability_advertised = false;
     let mut received_camt_descriptors = Vec::new();
     let mut received_legacy_transaction_versions = Vec::new();
@@ -60,6 +61,9 @@ pub(super) fn apply(
                 header.code.iter().copied().map(char::from).collect(),
                 header.version,
             ));
+            if header.code == b"HITABS" {
+                advertised_tan_media_versions.push(header.version);
+            }
         }
         match header.code {
             b"HIBPA" => {}
@@ -183,6 +187,8 @@ pub(super) fn apply(
         received_balance_versions.dedup();
         advertised_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
         advertised_balance_versions.dedup();
+        advertised_tan_media_versions.sort_unstable_by(|left, right| right.cmp(left));
+        advertised_tan_media_versions.dedup();
         received_legacy_transaction_versions.sort_unstable_by(|left, right| right.cmp(left));
         received_legacy_transaction_versions.dedup();
         received_camt_descriptors.sort();
@@ -201,6 +207,7 @@ pub(super) fn apply(
         received_methods.dedup_by(|left, right| left.security_function == right.security_function);
         state.balance_versions = received_balance_versions;
         state.advertised_balance_versions = advertised_balance_versions;
+        state.advertised_tan_media_versions = advertised_tan_media_versions;
         state.balance_capability_advertised = balance_capability_advertised;
         state.balance_requires_tan = balance_requires_tan;
         state.transaction_capability_advertised = transaction_capability_advertised;
@@ -319,7 +326,11 @@ pub(super) fn system_id(segments: &[Segment]) -> Result<Option<String>, Error> {
     Ok(Some(single_text(segment, 1, "assigned system ID")?))
 }
 
-pub(super) fn tan_media(segments: &[Segment]) -> Result<Option<Vec<TanMedium>>, Error> {
+pub(super) fn tan_media(
+    segments: &[Segment],
+    expected_version: u16,
+    expected_reference: Option<u16>,
+) -> Result<Option<Vec<TanMedium>>, Error> {
     let mut matching = segments.iter().filter(|segment| {
         segment
             .header()
@@ -333,26 +344,81 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Option<Vec<TanMedium>>, 
             structure: "tan_media.HITAB.duplicate",
         });
     }
-    require_version(
-        segment.header().expect("header checked").version,
-        5,
-        "HITAB",
-    )?;
+    let header = segment.header().expect("header checked");
+    if !matches!(header.version, 2 | 4 | 5) {
+        return Err(Error::UnsupportedSegment {
+            code: "HITAB",
+            version: header.version,
+        });
+    }
+    if header.version != expected_version {
+        return Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.version",
+        });
+    }
+    if expected_reference.is_some() && header.reference != expected_reference {
+        return Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.reference",
+        });
+    }
+    match single_text(segment, 1, "TAN deployment option")?.as_str() {
+        "0" | "1" | "2" => {}
+        _ => {
+            return Err(Error::InvalidValue {
+                field: "TAN deployment option",
+            });
+        }
+    }
+    let layout = match header.version {
+        2 => TanMediumLayout {
+            allowed_classes: &["G", "L", "M"],
+            card_number: 2,
+            card_sequence: 3,
+            list_number: 8,
+            name: 9,
+            masked_phone: None,
+            phone: None,
+            security_function: None,
+        },
+        4 => TanMediumLayout {
+            allowed_classes: &["A", "G", "L", "M", "S"],
+            card_number: 2,
+            card_sequence: 3,
+            list_number: 8,
+            name: 9,
+            masked_phone: Some(10),
+            phone: Some(11),
+            security_function: None,
+        },
+        5 => TanMediumLayout {
+            allowed_classes: &["A", "G", "L", "M", "S", "B"],
+            card_number: 3,
+            card_sequence: 4,
+            list_number: 9,
+            name: 10,
+            masked_phone: Some(11),
+            phone: Some(12),
+            security_function: Some(2),
+        },
+        _ => unreachable!("supported HITAB versions were matched"),
+    };
     let mut media = Vec::new();
     for element in segment.elements().iter().skip(2) {
         let components = element.components();
-        let class = match component(components, 0, "TAN medium class")?.as_str() {
+        let class_code = component(components, 0, "TAN medium class")?;
+        if !layout.allowed_classes.contains(&class_code.as_str()) {
+            return Err(Error::InvalidValue {
+                field: "TAN medium class",
+            });
+        }
+        let class = match class_code.as_str() {
             "A" => TanMediumClass::All,
             "G" => TanMediumClass::Generator,
             "L" => TanMediumClass::List,
             "M" => TanMediumClass::Mobile,
             "S" => TanMediumClass::Secoder,
             "B" => TanMediumClass::Bilateral,
-            _ => {
-                return Err(Error::InvalidValue {
-                    field: "TAN medium class",
-                });
-            }
+            _ => unreachable!("allowed TAN medium classes were matched"),
         };
         let status = match component(components, 1, "TAN medium status")?.as_str() {
             "1" => TanMediumStatus::Active,
@@ -366,24 +432,55 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Option<Vec<TanMedium>>, 
             }
         };
         match class {
-            TanMediumClass::Generator if optional_component(components, 3).is_none() => {
-                return Err(Error::MissingValue {
-                    field: "TAN generator card number",
-                });
+            TanMediumClass::Generator => {
+                if optional_component(components, layout.card_number).is_none() {
+                    return Err(Error::MissingValue {
+                        field: "TAN generator card number",
+                    });
+                }
+                if optional_component(components, layout.card_sequence).is_none() {
+                    return Err(Error::MissingValue {
+                        field: "TAN generator card sequence",
+                    });
+                }
             }
-            TanMediumClass::List if optional_component(components, 9).is_none() => {
+            TanMediumClass::List
+                if optional_component(components, layout.list_number).is_none() =>
+            {
                 return Err(Error::MissingValue {
                     field: "TAN list number",
                 });
             }
-            TanMediumClass::Mobile if optional_component(components, 10).is_none() => {
-                return Err(Error::MissingValue {
-                    field: "mobile TAN medium identity",
-                });
+            TanMediumClass::Mobile => {
+                if optional_component(components, layout.name).is_none() {
+                    return Err(Error::MissingValue {
+                        field: "mobile TAN medium identity",
+                    });
+                }
+                // Archived E.2.1.4 additionally requires one of the two phone
+                // representations for a v4 mobile entry. Versions 2 and 5 do not.
+                if header.version == 4
+                    && layout
+                        .masked_phone
+                        .and_then(|index| optional_component(components, index))
+                        .is_none()
+                    && layout
+                        .phone
+                        .and_then(|index| optional_component(components, index))
+                        .is_none()
+                {
+                    return Err(Error::MissingValue {
+                        field: "mobile TAN phone",
+                    });
+                }
             }
             TanMediumClass::Bilateral => {
-                let security_function =
-                    optional_component(components, 2).ok_or(Error::MissingValue {
+                let security_function_index =
+                    layout.security_function.ok_or(Error::InvalidResponse {
+                        structure: "tan_media.HITAB.layout",
+                    })?;
+                let security_function = optional_component(components, security_function_index)
+                    .ok_or(Error::MissingValue {
                         field: "bilateral TAN security function",
                     })?;
                 if security_function.len() != 3
@@ -399,12 +496,27 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Option<Vec<TanMedium>>, 
         media.push(TanMedium {
             class,
             status,
-            security_function: optional_component(components, 2),
-            name: optional_component(components, 10),
-            masked_phone: optional_component(components, 11),
+            security_function: layout
+                .security_function
+                .and_then(|index| optional_component(components, index)),
+            name: optional_component(components, layout.name),
+            masked_phone: layout
+                .masked_phone
+                .and_then(|index| optional_component(components, index)),
         });
     }
     Ok(Some(media))
+}
+
+struct TanMediumLayout {
+    allowed_classes: &'static [&'static str],
+    card_number: usize,
+    card_sequence: usize,
+    list_number: usize,
+    name: usize,
+    masked_phone: Option<usize>,
+    phone: Option<usize>,
+    security_function: Option<usize>,
 }
 
 fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {

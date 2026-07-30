@@ -19,6 +19,8 @@ use crate::{
 mod initialization;
 mod products;
 
+pub(crate) use initialization::TanMediaInitializationResult;
+
 const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
 const LOCAL_CONTINUATION_LIMIT: u16 = 20;
 const LOCAL_TRANSACTION_PAGE_LIMIT: u16 = 100;
@@ -33,6 +35,7 @@ pub(crate) struct Engine {
     allowed_tan_methods: Vec<String>,
     allowed_tan_methods_known: bool,
     tan_media: Vec<TanMedium>,
+    selected_tan_media_version: Option<u16>,
     transient_accounts: Option<Vec<crate::model::Account>>,
     last_responses: Vec<BankResponse>,
     tan_media_discovery_responses: Vec<BankResponse>,
@@ -148,6 +151,7 @@ impl Engine {
             allowed_tan_methods: Vec::new(),
             allowed_tan_methods_known: false,
             tan_media: Vec::new(),
+            selected_tan_media_version: None,
             transient_accounts: None,
             last_responses: Vec::new(),
             tan_media_discovery_responses: Vec::new(),
@@ -187,6 +191,14 @@ impl Engine {
 
     pub(crate) fn tan_media(&self) -> &[TanMedium] {
         &self.tan_media
+    }
+
+    pub(crate) fn advertised_tan_media_versions(&self) -> Vec<u16> {
+        self.parameters().advertised_tan_media_versions()
+    }
+
+    pub(crate) fn selected_tan_media_version(&self) -> Option<u16> {
+        self.selected_tan_media_version
     }
 
     pub(crate) fn last_responses(&self) -> &[BankResponse] {

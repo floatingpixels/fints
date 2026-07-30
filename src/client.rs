@@ -4,7 +4,7 @@ use crate::{
     engine::{
         BalanceResult, CreditCardBalanceResult, CreditCardTransactionsResult, DepotPositionsResult,
         Engine, InitializationResult, PendingChallenge, SecuritiesTransactionsResult,
-        SynchronizationResult, TransactionsResult,
+        SynchronizationResult, TanMediaInitializationResult, TransactionsResult,
     },
     error::{BankResponse, Error},
     model::{
@@ -206,6 +206,18 @@ impl Client {
         self.engine.tan_media()
     }
 
+    /// HKTAB/HITAB versions advertised in the current BPD, highest first.
+    ///
+    /// Segment versions are generic protocol facts and contain no personal data.
+    pub fn advertised_tan_media_versions(&self) -> Vec<u16> {
+        self.engine.advertised_tan_media_versions()
+    }
+
+    /// The HKTAB/HITAB version selected for the latest discovery attempt.
+    pub fn selected_tan_media_version(&self) -> Option<u16> {
+        self.engine.selected_tan_media_version()
+    }
+
     /// Typed responses from the most recently parsed bank message.
     ///
     /// Explicit response-text accessors are caller-owned display/logging data and
@@ -243,8 +255,9 @@ impl Client {
     ///
     /// This survives the internal HKEND exchange that replaces [`Self::last_responses`]
     /// with the termination response. It contains only ordered segment codes/versions,
-    /// response codes/request-segment references, and a parsed medium count, never
-    /// medium names, response text/parameters, or segment contents.
+    /// advertised/selected media-discovery versions, response codes/request-segment
+    /// references, and a parsed medium count; it never contains medium names, response
+    /// text/parameters, or segment contents.
     #[cfg(feature = "development-diagnostics")]
     pub fn development_tan_media_discovery(&self) -> Option<&crate::TanMediaDiscoveryFacts> {
         self.engine.development_tan_media_discovery()
@@ -284,7 +297,8 @@ impl Client {
         })
     }
 
-    /// Discovers TAN media using the dedicated HKTAB initialization flow, then closes it.
+    /// Discovers TAN media using the dedicated process-4 initialization and the
+    /// highest mutually supported HKTAB/HITAB version, then closes the dialog.
     pub fn discover_tan_media(&mut self, now: NaiveDateTime) -> Result<&[TanMedium], Error> {
         let Self {
             engine, transport, ..
@@ -1050,9 +1064,17 @@ fn discover_tan_media_with_send(
     let response = send(&request).inspect_err(|_error| {
         engine.abort_dialog();
     })?;
-    let discovery = engine
-        .accept_tan_media_initialization(&response)
-        .map(|_| ());
+    let discovery = match engine.accept_tan_media_initialization(&response) {
+        Ok(TanMediaInitializationResult::Complete) => Ok(()),
+        Ok(TanMediaInitializationResult::OrderRequired) => (|| {
+            let request = engine.tan_media_request(now.date(), now.time())?;
+            let response = send(&request).inspect_err(|_error| {
+                engine.abort_dialog();
+            })?;
+            engine.accept_tan_media_response(&response)
+        })(),
+        Err(error) => Err(error),
+    };
 
     let termination = if engine.has_active_dialog() {
         let request = engine.termination_request(now.date(), now.time())?;
@@ -1160,6 +1182,13 @@ mod tests {
     }
 
     fn tan_media_state(process: TanProcess) -> ReusableState {
+        tan_media_state_with_versions(process, &[5])
+    }
+
+    fn tan_media_state_with_versions(
+        process: TanProcess,
+        advertised_versions: &[u16],
+    ) -> ReusableState {
         let mut state = ReusableState::new();
         state.system_id = Some("fictional-system".to_owned());
         state.tan_methods.push(TanMethod {
@@ -1183,8 +1212,62 @@ mod tests {
             manual_polling_allowed: process == TanProcess::Decoupled,
             automatic_polling_allowed: process == TanProcess::Decoupled,
         });
+        state
+            .advertised_parameter_segments
+            .extend(advertised_versions.iter().copied().map(|version| {
+                crate::capabilities::ParameterSegmentAdvertisement::new(
+                    "HITABS".to_owned(),
+                    version,
+                )
+            }));
         state.selected_tan_method = Some("942".to_owned());
         state
+    }
+
+    fn tan_media_initialization_response(hitan_version: u16) -> Vec<u8> {
+        secured_response(
+            format!(
+                "HIRMG:2:2+0010::fictional initialization accepted'\
+                 HITAN:3:{hitan_version}:5+4++noref+nochallenge'"
+            )
+            .as_bytes(),
+            1,
+            4,
+        )
+    }
+
+    fn fictional_tan_medium(version: u16) -> String {
+        let mut components = match version {
+            2 => vec![""; 10],
+            4 => vec![""; 11],
+            5 => vec![""; 12],
+            _ => panic!("fixture supports only specified media versions"),
+        };
+        components[0] = "M";
+        components[1] = "1";
+        let name_index = if version == 5 { 10 } else { 9 };
+        components[name_index] = "Fictional phone";
+        if version == 4 {
+            components[10] = "?+49***123";
+        }
+        components.join(":")
+    }
+
+    fn tan_media_operation_response(version: u16, medium: Option<&str>) -> Vec<u8> {
+        let hitab = medium.map_or_else(
+            || format!("HITAB:3:{version}:3+1"),
+            |medium| format!("HITAB:3:{version}:3+1+{medium}"),
+        );
+        secured_response(
+            format!(
+                "HIRMG:2:2+0010::fictional order accepted'\
+                 {hitab}'\
+                 HIRMS:4:2:3+0020::fictional HKTAB processed'"
+            )
+            .as_bytes(),
+            2,
+            5,
+        )
     }
 
     fn process_four_hitan_without_hitab(hitan_version: u16) -> Vec<u8> {
@@ -1354,68 +1437,108 @@ mod tests {
         )
     }
 
-    // PIN/TAN 2020 B.4.3.1.3 and C.3.1.1: HKTAN 6 and 7 medium
-    // discovery both use process 4 with Segmentkennung HKTAB and return
-    // HITAB 5 before the client closes the dialog exactly once.
+    // PIN/TAN 2020 B.4.3.1.3, C.3.1.1, archived E.2.1.2/E.2.1.4,
+    // and Formals C.10: both HKTAN variants initialize process 4; when
+    // HITAB is not returned with that response, a separate HKTAB order uses
+    // the highest common version and is followed by exactly one HKEND.
     #[test]
-    fn tan_media_discovery_six_and_seven_parse_populated_hitab_then_terminate() {
+    fn tan_media_discovery_six_and_seven_negotiate_legacy_and_current_versions() {
         for (process, version) in [
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
         ] {
-            let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
-            let inner = format!(
-                "HIRMG:2:2+0010::fictional accepted+1010::fictional notice'\
-                 HITAB:3:5:5+1+{medium}'\
-                 HIRMS:4:2:5+0020::fictional HKTAN processed'"
-            );
-            let discovery = secured_response(inner.as_bytes(), 1, 5);
-            let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 2, 3);
-            let mut client = client_with_state(tan_media_state(process), [discovery, termination]);
-
-            let media = client.discover_tan_media(now()).unwrap();
-            assert_eq!(media.len(), 1);
-            assert_eq!(media[0].name(), Some("Fictional phone"));
-            assert_eq!(client.transport.fixture_requests().len(), 2);
-
-            let request = Message::parse(&client.transport.fixture_requests()[0]).unwrap();
-            let payload = request.payload_segments().unwrap();
-            let hktan = payload
-                .iter()
-                .find(|segment| segment.header().unwrap().code == b"HKTAN")
-                .unwrap();
-            assert_eq!(
-                crate::wire::encode_segments(std::slice::from_ref(hktan)).unwrap(),
-                format!("HKTAN:5:{version}+4+HKTAB+++++++++noref'").as_bytes()
-            );
-
-            // last_responses retains its documented most-recent-message
-            // semantics and therefore contains the internal HKEND response.
-            assert_eq!(
-                client
-                    .last_responses()
-                    .iter()
-                    .map(BankResponse::code)
-                    .collect::<Vec<_>>(),
-                [100]
-            );
-
-            #[cfg(feature = "development-diagnostics")]
-            {
-                let facts = client.development_tan_media_discovery().unwrap();
-                assert_eq!(
-                    facts
-                        .received_segments()
-                        .iter()
-                        .map(|segment| (segment.code(), segment.version()))
-                        .collect::<Vec<_>>(),
-                    [("HIRMG", 2), ("HITAB", 5), ("HIRMS", 2)]
+            for media_version in [2, 4, 5] {
+                let initialization = tan_media_initialization_response(version);
+                let medium = fictional_tan_medium(media_version);
+                let operation = tan_media_operation_response(media_version, Some(&medium));
+                let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
+                let mut client = client_with_state(
+                    tan_media_state_with_versions(process, &[media_version]),
+                    [initialization, operation, termination],
                 );
-                assert_eq!(facts.discovered_medium_count(), Some(1));
-                let rendered = format!("{facts:?}");
+
+                let media = client.discover_tan_media(now()).unwrap();
+                assert_eq!(media.len(), 1);
+                assert_eq!(media[0].name(), Some("Fictional phone"));
+                assert_eq!(client.advertised_tan_media_versions(), [media_version]);
+                assert_eq!(client.selected_tan_media_version(), Some(media_version));
+                assert_eq!(client.transport.fixture_requests().len(), 3);
+                assert_eq!(
+                    client
+                        .last_tan_media_discovery_responses()
+                        .iter()
+                        .map(|response| (response.code(), response.segment_number()))
+                        .collect::<Vec<_>>(),
+                    [(10, None), (10, None), (20, Some(3))]
+                );
+                let rendered = format!("{:?}", client.last_tan_media_discovery_responses());
+                assert!(!rendered.contains("fictional"));
                 assert!(!rendered.contains("Fictional phone"));
-                assert!(!rendered.contains("fictional accepted"));
-                assert!(!rendered.contains("fictional-system"));
+
+                let initialization =
+                    Message::parse(&client.transport.fixture_requests()[0]).unwrap();
+                let payload = initialization.payload_segments().unwrap();
+                let hktan = payload
+                    .iter()
+                    .find(|segment| segment.header().unwrap().code == b"HKTAN")
+                    .unwrap();
+                assert_eq!(
+                    crate::wire::encode_segments(std::slice::from_ref(hktan)).unwrap(),
+                    format!("HKTAN:5:{version}+4+HKTAB+++++++++noref'").as_bytes()
+                );
+
+                let operation = Message::parse(&client.transport.fixture_requests()[1]).unwrap();
+                let payload = operation.payload_segments().unwrap();
+                let hktab = payload
+                    .iter()
+                    .find(|segment| segment.header().unwrap().code == b"HKTAB")
+                    .unwrap();
+                let expected = if media_version == 2 {
+                    b"HKTAB:3:2+0'".to_vec()
+                } else {
+                    format!("HKTAB:3:{media_version}+0+A'").into_bytes()
+                };
+                assert_eq!(
+                    crate::wire::encode_segments(std::slice::from_ref(hktab)).unwrap(),
+                    expected
+                );
+
+                // last_responses retains its documented most-recent-message
+                // semantics and therefore contains the internal HKEND response.
+                assert_eq!(
+                    client
+                        .last_responses()
+                        .iter()
+                        .map(BankResponse::code)
+                        .collect::<Vec<_>>(),
+                    [100]
+                );
+
+                #[cfg(feature = "development-diagnostics")]
+                {
+                    let facts = client.development_tan_media_discovery().unwrap();
+                    assert_eq!(
+                        facts
+                            .received_segments()
+                            .iter()
+                            .map(|segment| (segment.code(), segment.version()))
+                            .collect::<Vec<_>>(),
+                        [
+                            ("HIRMG", 2),
+                            ("HITAN", version),
+                            ("HIRMG", 2),
+                            ("HITAB", media_version),
+                            ("HIRMS", 2)
+                        ]
+                    );
+                    assert_eq!(facts.advertised_versions(), [media_version]);
+                    assert_eq!(facts.selected_version(), media_version);
+                    assert_eq!(facts.discovered_medium_count(), Some(1));
+                    let rendered = format!("{facts:?}");
+                    assert!(!rendered.contains("Fictional phone"));
+                    assert!(!rendered.contains("fictional accepted"));
+                    assert!(!rendered.contains("fictional-system"));
+                }
             }
         }
     }
@@ -1432,9 +1555,18 @@ mod tests {
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
         ] {
-            let discovery = process_four_hitan_without_hitab(version);
-            let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 2, 3);
-            let mut client = client_with_state(tan_media_state(process), [discovery, termination]);
+            let initialization = process_four_hitan_without_hitab(version);
+            let order_without_hitab = secured_response(
+                b"HIRMG:2:2+0010::fictional HKTAB accepted'\
+                  HIRMS:3:2:3+0020::fictional order processed'",
+                2,
+                4,
+            );
+            let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
+            let mut client = client_with_state(
+                tan_media_state_with_versions(process, &[2, 4]),
+                [initialization, order_without_hitab, termination],
+            );
 
             assert!(matches!(
                 client.discover_tan_media(now()),
@@ -1442,7 +1574,9 @@ mod tests {
                     field: "HITAB TAN media response"
                 })
             ));
-            assert_eq!(client.transport.fixture_requests().len(), 2);
+            assert_eq!(client.transport.fixture_requests().len(), 3);
+            assert_eq!(client.advertised_tan_media_versions(), [4, 2]);
+            assert_eq!(client.selected_tan_media_version(), Some(4));
             assert_eq!(client.last_responses()[0].code(), 100);
             assert_eq!(client.state().bpd_version(), 78);
             let operation_responses = client.last_tan_media_discovery_responses();
@@ -1459,6 +1593,8 @@ mod tests {
                     (1040, Some(4)),
                     (3920, Some(4)),
                     (940, Some(4)),
+                    (10, None),
+                    (20, Some(3)),
                 ]
             );
             assert_eq!(
@@ -1474,6 +1610,8 @@ mod tests {
                     "fictional current BPD included",
                     "fictional allowed methods",
                     "fictional unpublished success",
+                    "fictional HKTAB accepted",
+                    "fictional order processed",
                 ]
             );
             let rendered = format!("{operation_responses:?}");
@@ -1509,6 +1647,8 @@ mod tests {
                         ("HIKKSS", 1),
                         ("HIKKUS", 1),
                         ("HITAN", version),
+                        ("HIRMG", 2),
+                        ("HIRMS", 2),
                     ]
                 );
                 assert_eq!(
@@ -1525,9 +1665,13 @@ mod tests {
                         (1040, Some(4)),
                         (3920, Some(4)),
                         (940, Some(4)),
+                        (10, None),
+                        (20, Some(3)),
                     ]
                 );
-                assert_eq!(facts.discovered_medium_count(), Some(0));
+                assert_eq!(facts.advertised_versions(), [4, 2]);
+                assert_eq!(facts.selected_version(), 4);
+                assert_eq!(facts.discovered_medium_count(), None);
                 let rendered = format!("{facts:?}");
                 assert!(!rendered.contains("fictional"));
                 assert!(!rendered.contains("private-parameter"));
@@ -1540,22 +1684,23 @@ mod tests {
     // structural diagnostic identifies it without retaining any segment data.
     #[test]
     fn unsupported_hitab_version_remains_typed_and_structurally_visible() {
+        let initialization = tan_media_initialization_response(6);
         let discovery =
-            secured_response(b"HIRMG:2:2+0010::fictional accepted'HITAB:3:4:5+1'", 1, 4);
-        let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 2, 3);
+            secured_response(b"HIRMG:2:2+0010::fictional accepted'HITAB:3:3:3+1'", 2, 4);
+        let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
         let mut client = client_with_state(
             tan_media_state(TanProcess::ProcessVariantTwo),
-            [discovery, termination],
+            [initialization, discovery, termination],
         );
 
         assert!(matches!(
             client.discover_tan_media(now()),
             Err(Error::UnsupportedSegment {
                 code: "HITAB",
-                version: 4
+                version: 3
             })
         ));
-        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(client.transport.fixture_requests().len(), 3);
 
         #[cfg(feature = "development-diagnostics")]
         {
@@ -1566,10 +1711,69 @@ mod tests {
                     .iter()
                     .map(|segment| (segment.code(), segment.version()))
                     .collect::<Vec<_>>(),
-                [("HIRMG", 2), ("HITAB", 4)]
+                [("HIRMG", 2), ("HITAN", 6), ("HIRMG", 2), ("HITAB", 3)]
             );
             assert_eq!(facts.discovered_medium_count(), None);
         }
+    }
+
+    // Formals C.10 requires the highest common advertised operation version.
+    // An unsupported-only advertisement is a local capability result and must
+    // not emit even the process-4 initialization.
+    #[test]
+    fn tan_media_version_selection_is_deterministic_and_fails_before_transport() {
+        let initialization = tan_media_initialization_response(6);
+        let medium = fictional_tan_medium(4);
+        let operation = tan_media_operation_response(4, Some(&medium));
+        let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
+        let mut mixed = client_with_state(
+            tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[2, 4, 2]),
+            [initialization, operation, termination],
+        );
+        mixed.discover_tan_media(now()).unwrap();
+        assert_eq!(mixed.advertised_tan_media_versions(), [4, 2]);
+        assert_eq!(mixed.selected_tan_media_version(), Some(4));
+
+        let mut unsupported = client_with_state(
+            tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[1, 3]),
+            std::iter::empty::<Vec<u8>>(),
+        );
+        assert!(matches!(
+            unsupported.discover_tan_media(now()),
+            Err(Error::Unsupported(Limitation::TanMediumVersion))
+        ));
+        assert!(unsupported.transport.fixture_requests().is_empty());
+        assert_eq!(unsupported.advertised_tan_media_versions(), [3, 1]);
+        assert_eq!(unsupported.selected_tan_media_version(), None);
+    }
+
+    // A successful initialization may atomically replace BPD. The subsequent
+    // order must use that response's highest common version, never the stale
+    // version that was available before opening the dialog.
+    #[test]
+    fn tan_media_order_renegotiates_after_initialization_replaces_bpd() {
+        let initialization = process_four_hitan_without_hitab(6);
+        let medium = fictional_tan_medium(4);
+        let operation = tan_media_operation_response(4, Some(&medium));
+        let termination = secured_response(b"HIRMG:2:2+0100::fictional terminated'", 3, 3);
+        let mut client = client_with_state(
+            tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[5]),
+            [initialization, operation, termination],
+        );
+
+        client.discover_tan_media(now()).unwrap();
+        assert_eq!(client.advertised_tan_media_versions(), [4, 2]);
+        assert_eq!(client.selected_tan_media_version(), Some(4));
+        let request = Message::parse(&client.transport.fixture_requests()[1]).unwrap();
+        let payload = request.payload_segments().unwrap();
+        let hktab = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKTAB")
+            .unwrap();
+        assert_eq!(
+            crate::wire::encode_segments(std::slice::from_ref(hktab)).unwrap(),
+            b"HKTAB:3:4+0+A'"
+        );
     }
 
     fn assert_security_function(request: &[u8], expected: &str) {

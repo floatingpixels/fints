@@ -423,6 +423,8 @@ pub struct ReusableState {
     #[serde(default)]
     pub(crate) advertised_balance_versions: Vec<u16>,
     #[serde(default)]
+    pub(crate) advertised_tan_media_versions: Vec<u16>,
+    #[serde(default)]
     pub(crate) balance_capability_advertised: bool,
     pub(crate) balance_requires_tan: Option<bool>,
     #[serde(default)]
@@ -1467,6 +1469,7 @@ mod tests {
 
         assert_eq!(state.bpd_version(), 57);
         assert_eq!(state.upd_version(), 1);
+        assert!(state.advertised_tan_media_versions().is_empty());
         assert!(
             state
                 .advertised_capabilities()
@@ -1687,7 +1690,11 @@ mod tests {
         {
             if matches!(
                 key,
-                "bpd_version" | "upd_version" | "balance_versions" | "advertised_balance_versions"
+                "bpd_version"
+                    | "upd_version"
+                    | "balance_versions"
+                    | "advertised_balance_versions"
+                    | "advertised_tan_media_versions"
             ) {
                 self.fields
                     .push((key.to_owned(), value.serialize(PreviousValueSerializer)?));
@@ -1902,6 +1909,7 @@ mod tests {
         original.bpd_version = 57;
         original.upd_version = 1;
         original.advertised_balance_versions = vec![5];
+        original.advertised_tan_media_versions = vec![4, 2];
         original
             .advertised_parameter_segments
             .push(ParameterSegmentAdvertisement::new("HISALS".to_owned(), 5));
@@ -1941,6 +1949,7 @@ mod tests {
                 .balance()
                 .supports_version(5)
         );
+        assert_eq!(restored.advertised_tan_media_versions(), [4, 2]);
         assert!(
             restored
                 .advertised_capabilities()

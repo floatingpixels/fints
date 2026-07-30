@@ -205,9 +205,15 @@ access date for each source below is 2026-07-28.
   the filler exception applies only to this HKTAB initialization.
   C.3.1.1 defines HKTAB/HITAB 5 and permits an empty repeated medium list only
   when no medium is available. Archived E.2.1.2 and E.2.1.4 define matching
-  HITABS/HKTAB/HITAB version triples for legacy versions 2 and 4; Formals C.10
-  makes a BPD parameter-segment version the advertisement of that same
-  operation version and calls for the highest common version. The HKTAN 6 and 7
+  HITABS/HKTAB/HITAB version triples for legacy versions 2 and 4: HKTAB 2
+  carries only `TAN-Medium-Art`, while versions 4 and 5 also carry
+  `TAN-Medium-Klasse`; their HITAB responses use TAN-Medium-Liste element
+  versions 2, 4, and 5 respectively. Formals C.10 makes a BPD
+  parameter-segment version the advertisement of that same operation version
+  and calls for the highest common version. F.2 separates dialog
+  initialization from subsequent order messages, authorizing a same-dialog
+  versioned HKTAB order when the process-4 initialization response has not
+  already supplied HITAB. The HKTAN 6 and 7
   entries place the optional medium name at DE 12. Their shared method-parameter
   DD places `Bezeichnung des TAN-Mediums erforderlich` at field 19 and `Anzahl
   unterstützter aktiver TAN-Medien` at optional field 21; DE 12 is mandatory
@@ -216,24 +222,22 @@ access date for each source below is 2026-07-28.
   corresponding HITAN 6 and 7 entries
   permit a process-4 institute response and require its order reference for that
   process; their `noref`/challenge filler rule records that no TAN is required.
-  Neither that HITAN nor the correction register defines a continuation or
-  parameter-refresh step for HKTAB, while B.4.3.1.3 still requires HITAB before
-  the client closes the dialog.
+  Neither that HITAN nor the correction register substitutes for the HKTAB
+  result or defines a parameter-refresh continuation; B.4.3.1.3 still requires
+  HITAB before the client closes the dialog.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
-  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. The
+  HIPINS/HITANS interpretation, and HKTAB/HITAB 2, 4, and 5 media discovery. The
   medium-discovery sections authorize requiring HITAB after an accepted request
   and returning a typed limitation when an advertised required name is not
   selectable. They do not authorize using `noref` as a selected medium in an
   ordinary initialization or acquiring UPD before first-access HKTAB discovery.
-  A process-4 HITAN is validated as the response to the embedded
-  HKTAN but does not substitute for HITAB or authorize a media-discovery
-  continuation. An institution that advertises only HITABS 2/4 and returns no
-  HITAB supplies neither the version-5 response implemented by this crate nor
-  any other specification-defined bootstrap; the crate retains its typed
-  missing-HITAB failure. B.4.3.1 and
+  A process-4 HITAN is validated as the response to the embedded HKTAN. If the
+  same response omits HITAB, the archived/current operation definitions
+  authorize sending the highest common advertised HKTAB 2/4/5 order in that
+  open dialog; the matching HITAB remains mandatory. B.4.3.1 and
   F.2.5 additionally authorize closing an open function-999 discovery with a
   profile-1, security-function-999 HKEND using the active dialog state. It also
   authorizes treating the specification-defined function-999

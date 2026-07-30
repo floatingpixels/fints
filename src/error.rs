@@ -82,6 +82,8 @@ pub enum Limitation {
     TanMethodParametersUnavailable,
     #[error("the institution requires a different TAN medium")]
     TanMedium,
+    #[error("the institution requires an unsupported TAN-media discovery version")]
+    TanMediumVersion,
     #[error("the institution did not return a selectable required TAN medium")]
     TanMediumUnavailable,
     #[error("the operation requires multiple signers")]

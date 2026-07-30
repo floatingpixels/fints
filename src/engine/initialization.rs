@@ -12,6 +12,11 @@ use super::{
     validate_medium, validate_supported_method, validate_tan_process,
 };
 
+pub(crate) enum TanMediaInitializationResult {
+    Complete,
+    OrderRequired,
+}
+
 impl Engine {
     pub(crate) fn initialization_request(
         &mut self,
@@ -63,6 +68,7 @@ impl Engine {
     ) -> Result<Vec<u8>, Error> {
         self.ensure_no_dialog()?;
         self.tan_media.clear();
+        self.selected_tan_media_version = None;
         self.tan_media_discovery_responses.clear();
         #[cfg(feature = "development-diagnostics")]
         {
@@ -70,6 +76,8 @@ impl Engine {
         }
         let method = self.selected_method()?.clone();
         validate_supported_method(&method)?;
+        let version = self.negotiated_tan_media_version()?;
+        self.selected_tan_media_version = Some(version);
         let system_id = self.state.system_id.as_deref().unwrap_or("0");
         let context = SecurityContext {
             institute: &self.institute,
@@ -95,17 +103,9 @@ impl Engine {
     pub(crate) fn accept_tan_media_initialization(
         &mut self,
         input: &[u8],
-    ) -> Result<&[TanMedium], Error> {
+    ) -> Result<TanMediaInitializationResult, Error> {
         let method = self.selected_method()?.clone();
         let response = Response::parse(input)?;
-        #[cfg(feature = "development-diagnostics")]
-        {
-            self.development_tan_media_discovery =
-                Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
-                    response.development_segment_facts(),
-                    response.development_response_facts(),
-                ));
-        }
         self.record_responses(&response);
         self.tan_media_discovery_responses
             .extend_from_slice(response.responses());
@@ -130,6 +130,23 @@ impl Engine {
             method: Some(method.clone()),
             anonymous: false,
         });
+        // The initialization response may replace BPD. Negotiate again before
+        // parsing an inline HITAB or emitting the separate HKTAB order. The
+        // accepted dialog is already recorded so a local version limitation
+        // still closes it exactly once.
+        self.selected_tan_media_version = None;
+        let media_version = self.negotiated_tan_media_version()?;
+        self.selected_tan_media_version = Some(media_version);
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_tan_media_discovery =
+                Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
+                    response.development_segment_facts(),
+                    response.development_response_facts(),
+                    self.advertised_tan_media_versions(),
+                    media_version,
+                ));
+        }
         if let Some(tan_response) = response.tan(method.hktan_version)? {
             // PIN/TAN B.5.1/B.5.2 fixes the institute response to the same
             // process 4 used by the embedded HKTAN. A dummy noref HITAN only
@@ -140,23 +157,98 @@ impl Engine {
                 return Err(Limitation::TanMedium.into());
             }
         }
-        let tan_media = response.tan_media();
+        let tan_media = response.tan_media(media_version, None);
         #[cfg(feature = "development-diagnostics")]
-        if let Ok(media) = &tan_media {
+        if let Ok(Some(media)) = &tan_media {
             self.development_tan_media_discovery
                 .as_mut()
                 .expect("TAN-media diagnostics were initialized")
-                .set_discovered_medium_count(media.as_ref().map_or(0, std::vec::Vec::len));
+                .set_discovered_medium_count(media.len());
         }
-        self.tan_media = tan_media?.ok_or(Error::MissingValue {
-            field: "HITAB TAN media response",
-        })?;
+        let Some(tan_media) = tan_media? else {
+            return Ok(TanMediaInitializationResult::OrderRequired);
+        };
+        self.store_tan_media(tan_media, &method)?;
+        Ok(TanMediaInitializationResult::Complete)
+    }
+
+    pub(crate) fn tan_media_request(
+        &mut self,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        let version = self
+            .selected_tan_media_version
+            .ok_or(Error::InconsistentState)?;
+        let context = self.context(date, time)?;
+        segments::tan_media_request(&context, version)
+    }
+
+    pub(crate) fn accept_tan_media_response(&mut self, input: &[u8]) -> Result<(), Error> {
+        let version = self
+            .selected_tan_media_version
+            .ok_or(Error::InconsistentState)?;
+        let method = self.active_method()?.clone();
+        let response = match self.accept_dialog_response(input) {
+            Ok(response) => response,
+            Err(error @ Error::Bank(_)) => {
+                self.tan_media_discovery_responses
+                    .extend_from_slice(&self.last_responses);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        self.tan_media_discovery_responses
+            .extend_from_slice(response.responses());
+        #[cfg(feature = "development-diagnostics")]
+        {
+            let facts = self
+                .development_tan_media_discovery
+                .as_mut()
+                .ok_or(Error::InconsistentState)?;
+            facts.extend(
+                response.development_segment_facts(),
+                response.development_response_facts(),
+            );
+        }
+        if let Some(error) = response.first_error() {
+            return Err(Error::Bank(error));
+        }
+        let tan_media = response
+            .tan_media(version, Some(3))?
+            .ok_or(Error::MissingValue {
+                field: "HITAB TAN media response",
+            })?;
+        #[cfg(feature = "development-diagnostics")]
+        self.development_tan_media_discovery
+            .as_mut()
+            .expect("TAN-media diagnostics were initialized")
+            .set_discovered_medium_count(tan_media.len());
+        self.store_tan_media(tan_media, &method)
+    }
+
+    fn store_tan_media(
+        &mut self,
+        tan_media: Vec<TanMedium>,
+        method: &crate::model::TanMethod,
+    ) -> Result<(), Error> {
+        self.tan_media = tan_media;
         if method.medium_name_required
             && !self.tan_media.iter().any(|medium| medium.name().is_some())
         {
             return Err(Limitation::TanMediumUnavailable.into());
         }
-        Ok(&self.tan_media)
+        Ok(())
+    }
+
+    fn negotiated_tan_media_version(&self) -> Result<u16, Error> {
+        self.advertised_tan_media_versions()
+            .into_iter()
+            .find(|version| matches!(version, 2 | 4 | 5))
+            .ok_or_else(|| Limitation::TanMediumVersion.into())
     }
 
     pub(crate) fn accept_initialization(

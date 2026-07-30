@@ -61,12 +61,15 @@ impl ReceivedResponseFact {
 ///
 /// The ordered segment facts exclude security controls and all segment contents. The
 /// ordered response facts retain only four-digit codes and request-segment references.
+/// Advertised and selected HKTAB/HITAB versions are generic BPD facts.
 /// `discovered_medium_count` is `None` only when medium parsing failed before a complete
 /// list could be established.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TanMediaDiscoveryFacts {
     received_segments: Vec<ReceivedSegmentFact>,
     received_responses: Vec<ReceivedResponseFact>,
+    advertised_versions: Vec<u16>,
+    selected_version: u16,
     discovered_medium_count: Option<usize>,
 }
 
@@ -74,12 +77,25 @@ impl TanMediaDiscoveryFacts {
     pub(crate) fn new(
         received_segments: Vec<ReceivedSegmentFact>,
         received_responses: Vec<ReceivedResponseFact>,
+        advertised_versions: Vec<u16>,
+        selected_version: u16,
     ) -> Self {
         Self {
             received_segments,
             received_responses,
+            advertised_versions,
+            selected_version,
             discovered_medium_count: None,
         }
+    }
+
+    pub(crate) fn extend(
+        &mut self,
+        received_segments: Vec<ReceivedSegmentFact>,
+        received_responses: Vec<ReceivedResponseFact>,
+    ) {
+        self.received_segments.extend(received_segments);
+        self.received_responses.extend(received_responses);
     }
 
     pub(crate) fn set_discovered_medium_count(&mut self, count: usize) {
@@ -92,6 +108,14 @@ impl TanMediaDiscoveryFacts {
 
     pub fn received_responses(&self) -> &[ReceivedResponseFact] {
         &self.received_responses
+    }
+
+    pub fn advertised_versions(&self) -> &[u16] {
+        &self.advertised_versions
+    }
+
+    pub fn selected_version(&self) -> u16 {
+        self.selected_version
     }
 
     pub fn discovered_medium_count(&self) -> Option<usize> {
