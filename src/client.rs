@@ -29,7 +29,8 @@ pub enum PollingMode {
     Automatic,
 }
 
-/// Last request stage reached by [`Client::initialize`].
+/// Last request stage reached by [`Client::initialize`] or
+/// [`Client::refresh_parameters`].
 ///
 /// This process-memory diagnostic contains no wire data, credentials, identifiers, or
 /// response values and is therefore safe for callers to include in redacted logs.
@@ -191,7 +192,7 @@ impl Client {
         self.engine.last_responses()
     }
 
-    /// Last request stage reached by [`Client::initialize`] in this process.
+    /// Last initialization or parameter-refresh request stage reached in this process.
     pub fn last_initialization_stage(&self) -> Option<InitializationStage> {
         self.last_initialization_stage
     }
@@ -214,13 +215,18 @@ impl Client {
         self.engine.choose_tan_medium(name)
     }
 
-    /// Refreshes anonymous BPD and always closes the anonymous dialog.
+    /// Refreshes anonymous BPD and closes any dialog the institution leaves open.
     pub fn refresh_parameters(&mut self, now: NaiveDateTime) -> Result<(), Error> {
         let Self {
-            engine, transport, ..
+            engine,
+            transport,
+            last_initialization_stage,
         } = self;
-        let mut stage = InitializationStage::AnonymousBpdRefresh;
-        refresh_parameters_with_send(engine, now, &mut stage, |request| {
+        *last_initialization_stage = Some(InitializationStage::AnonymousBpdRefresh);
+        let stage = last_initialization_stage
+            .as_mut()
+            .expect("parameter refresh stage was set");
+        refresh_parameters_with_send(engine, now, stage, |request| {
             transport.send(request).map_err(Error::from)
         })
     }
@@ -1019,7 +1025,7 @@ mod tests {
     use chrono::{NaiveDate, NaiveTime};
 
     use super::*;
-    use crate::{model::TanProcess, transport::Transport, wire::Message};
+    use crate::{Limitation, model::TanProcess, transport::Transport, wire::Message};
 
     fn now() -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 7, 29)
@@ -1328,6 +1334,178 @@ mod tests {
         }
         assert!(!format!("{error:?}").contains("fictional"));
         assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    // PIN/TAN B.4.3.1 and correction T8 require anonymous BPD to describe the
+    // institute-specific methods returned by 3920. Formals C.3.2.2 requires a
+    // BPD-zero request to receive complete current BPD. If that mandatory
+    // source is instead terminated with no BPD, no standardized bootstrap
+    // remains and the client must neither retry nor invent a method.
+    #[test]
+    fn sequential_discovery_and_anonymous_bpd_failure_is_a_typed_limitation() {
+        let personalized = function_999_response(
+            "terminated-discovery",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional unpublished companion",
+                "+3920::fictional methods:942'"
+            )
+            .as_bytes(),
+            1,
+            3,
+        );
+        let anonymous = plain_response(
+            &[concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional unpublished companion",
+                "+3920::fictional methods:942"
+            )],
+            "anonymous-refused",
+            1,
+        );
+        let mut client = fresh_client([personalized, anonymous]);
+
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::RefreshParameters
+        ));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::InitialDiscovery)
+        );
+
+        let error = client.refresh_parameters(now()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Unsupported(Limitation::TanMethodParametersUnavailable)
+        ));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::AnonymousBpdRefresh)
+        );
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+        assert!(!client.engine.has_active_dialog());
+        assert_eq!(client.state().bpd_version(), 0);
+        assert_eq!(client.state().upd_version(), 0);
+        assert!(client.tan_methods().is_empty());
+        assert_eq!(client.allowed_tan_methods(), ["942"]);
+        assert!(matches!(
+            client.select_tan_method("942"),
+            Err(Error::Unsupported(Limitation::TanMethod))
+        ));
+        assert_eq!(
+            client
+                .last_responses()
+                .iter()
+                .map(|response| (response.code(), response.segment_number()))
+                .collect::<Vec<_>>(),
+            [(9050, None), (9800, None), (9952, None), (3920, None)]
+        );
+
+        let anonymous_request = Message::parse(&client.transport.fixture_requests()[1]).unwrap();
+        let payload = anonymous_request.payload_segments().unwrap();
+        assert!(
+            payload
+                .iter()
+                .all(|segment| segment.header().unwrap().code != b"HNSHK")
+        );
+        let hkvvb = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKVVB")
+            .unwrap();
+        assert_eq!(hkvvb.elements()[1].components()[0].as_text().unwrap(), "0");
+        assert!(!format!("{error:?}").contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    // The typed limitation is confined to the exact response set. A published
+    // credential error in the anonymous response remains a bank rejection.
+    #[test]
+    fn anonymous_bpd_failure_does_not_absorb_published_errors() {
+        let personalized = function_999_response(
+            "terminated-discovery",
+            concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional unpublished companion",
+                "+3920::fictional methods:942'"
+            )
+            .as_bytes(),
+            1,
+            3,
+        );
+        let anonymous = plain_response(
+            &[concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional unpublished companion",
+                "+9942::fictional credential error",
+                "+3920::fictional methods:942"
+            )],
+            "anonymous-refused",
+            1,
+        );
+        let mut client = fresh_client([personalized, anonymous]);
+        assert!(matches!(
+            client.initialize(now()).unwrap(),
+            Initialization::RefreshParameters
+        ));
+
+        let error = client.refresh_parameters(now()).unwrap_err();
+
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::AnonymousBpdRefresh)
+        );
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert!(!format!("{error:?}").contains("fictional"));
+
+        let standalone = plain_response(
+            &[concat!(
+                "HIRMG:2:2+9050::fictional summary",
+                "+9800::fictional termination",
+                "+9952::fictional unpublished companion",
+                "+3920::fictional methods:942"
+            )],
+            "anonymous-refused",
+            1,
+        );
+        let mut standalone_client = fresh_client([standalone]);
+
+        let error = standalone_client.refresh_parameters(now()).unwrap_err();
+
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(standalone_client.transport.fixture_requests().len(), 1);
+        assert!(!format!("{error:?}").contains("fictional"));
+    }
+
+    // The persistent stage diagnostic distinguishes a successful anonymous
+    // initialization from its subsequent HKEND request without wire details.
+    #[test]
+    fn direct_parameter_refresh_records_anonymous_termination_stage() {
+        let responses = [
+            anonymous_bpd_response(),
+            plain_response(
+                &["HIRMG:2:2+0100::anonymous terminated"],
+                "anonymous-refresh",
+                2,
+            ),
+        ];
+        let mut client = fresh_client(responses);
+
+        client.refresh_parameters(now()).unwrap();
+
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::AnonymousTermination)
+        );
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
     }
 
     // Placement is part of the narrow classification. A segment-referenced

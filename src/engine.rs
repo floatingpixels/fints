@@ -244,7 +244,24 @@ impl Engine {
     pub(crate) fn accept_anonymous_initialization(&mut self, input: &[u8]) -> Result<(), Error> {
         let response = Response::parse(input)?;
         self.record_responses(&response);
+        let discovery_parameters_pending = self.state.bpd_version == 0
+            && self.state.upd_version == 0
+            && self.state.selected_tan_method.is_none()
+            && self.parameters().tan_methods.is_empty()
+            && self.allowed_tan_methods_known
+            && !self.allowed_tan_methods.is_empty();
         self.apply_parameter_refresh(&response)?;
+        if discovery_parameters_pending
+            && self.state.bpd_version == 0
+            && self.parameters().tan_methods.is_empty()
+            && response.is_exact_anonymous_bpd_method_failure()
+        {
+            // PIN/TAN B.4.3.1 requires anonymous BPD to expose the method
+            // descriptions needed to interpret 3920. T8 supplies no alternate
+            // acquisition when that mandatory source itself is terminated.
+            self.abort_dialog();
+            return Err(Limitation::TanMethodParametersUnavailable.into());
+        }
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));
         }

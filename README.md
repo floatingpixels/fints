@@ -37,6 +37,9 @@ A new connection follows this bounded sequence:
 2. If it instead returns `Initialization::RefreshParameters`, call
    `refresh_parameters` once. Then offer only `tan_methods()` whose identifiers also
    occur in `allowed_tan_methods()`; never construct a method from a 3920 identifier.
+   If the institution terminates that anonymous BPD-zero request without complete BPD,
+   the crate returns `Limitation::TanMethodParametersUnavailable`; there is no
+   specification-defined alternate bootstrap or automatic retry.
 3. Call `select_tan_method` for that intersection. If the method requires a named
    medium, call `discover_tan_media` and
    `select_tan_medium`.
@@ -49,8 +52,9 @@ A new connection follows this bounded sequence:
 `refresh_parameters` actively requests current BPD with client BPD version zero,
 atomically applies the complete response, and closes its anonymous dialog. It is the
 recovery path when 3920 supplies no usable method; the client does not silently guess a
-method. Allowed 3920 identifiers remain process-memory response state and are not added
-to serialized `ReusableState`.
+method. `last_initialization_stage()` reports whether this direct refresh last reached
+anonymous initialization or termination. Allowed 3920 identifiers remain process-memory
+response state and are not added to serialized `ReusableState`.
 
 Typed TAN and decoupled approval challenges are operation-specific, process-memory
 continuations. A continuation reports `ContinuationKind`, the challenge, and the

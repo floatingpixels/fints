@@ -66,7 +66,9 @@ access date for each source below is 2026-07-28.
   already-decided parameter-refresh outcome, a validated HKEND response carrying
   the exact global 9050/9800/unpublished-9952 set proves only that the discovery
   dialog ended; it does not assign a meaning to the unpublished companion or
-  relax any other termination error.
+  relax any other termination error. C.3.2.2 requires a BPD-version-zero request
+  to receive the complete current BPD; the Formals define no alternate BPD
+  acquisition if that anonymous initialization is rejected.
 - **Access/redistribution:** the PDF grants implementation use and permits only
   free, unchanged redistribution with all notices and conditions retained. No PDF
   is committed; owner approval remains required before any redistribution.
@@ -197,7 +199,11 @@ access date for each source below is 2026-07-28.
   authorizes treating the specification-defined function-999
   9050/9800/9955/3920 response set as completed method discovery without a
   client-side HKEND. T8 additionally authorizes a typed anonymous-parameter
-  refresh when valid 3920 identifiers lack matching HITANS descriptions.
+  refresh when valid 3920 identifiers lack matching HITANS descriptions. Because
+  the identifiers are institution-specific and only BPD/HITANS describes them,
+  an anonymous refresh that is itself terminated without BPD leaves no compliant
+  bootstrap path; the crate returns a typed limitation instead of retrying or
+  constructing a method.
   If a BPD-zero client instead receives the exact global
   9050/9800/unpublished-9952 termination without mandatory 3920, B.4.3.1 and T8
   support one bounded repair of the missing anonymous-BPD prerequisite followed

@@ -73,6 +73,8 @@ pub enum Limitation {
     CreditCardBalanceVersion,
     #[error("the institution requires an unsupported TAN method")]
     TanMethod,
+    #[error("the institution did not provide TAN method parameters through anonymous BPD")]
+    TanMethodParametersUnavailable,
     #[error("the institution requires a different TAN medium")]
     TanMedium,
     #[error("the operation requires multiple signers")]

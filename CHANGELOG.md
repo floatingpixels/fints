@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Added a typed no-bootstrap limitation when function-999 discovery has 3920 but its required anonymous BPD-zero refresh is terminated without BPD.
+  No retry or method inference occurs; sequential fictional fixtures also make direct-refresh initialization versus termination stages observable without wire data.
+
 - **2026-07-30** — Preserved a pending parameter refresh when its open function-999 discovery ends with the exact validated global 9050/9800/unpublished-9952 HKEND response.
   Normal termination errors stay fatal; independent profile-1 HKEND and two-response fixtures cover envelope, numbering, lifecycle, adjacent published errors, and redaction.
 

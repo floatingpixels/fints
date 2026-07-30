@@ -243,11 +243,40 @@ impl Response {
         // meaning: it only proves that an otherwise validated dialog has ended.
         self.segments.len() == 1
             && self.responses.len() == 3
+            && self.has_exact_global_discovery_errors()
+    }
+
+    pub(crate) fn is_exact_anonymous_bpd_method_failure(&self) -> bool {
+        // PIN/TAN correction T8 requires anonymous BPD when 3920 identifiers
+        // have no usable descriptions. This exact failure shape establishes
+        // only that the mandatory parameter source remained unavailable; the
+        // unpublished companion receives no inferred meaning.
+        self.has_tan_method_response
+            && !self.allowed_tan_methods.is_empty()
+            && self.responses.len() == 4
+            && self
+                .responses
+                .iter()
+                .filter(|response| response.code() == 3920)
+                .count()
+                == 1
+            && self.responses.iter().any(|response| {
+                response.code() == 3920 && response.class() == ResponseClass::Warning
+            })
+            && self.has_exact_global_discovery_errors()
+    }
+
+    fn has_exact_global_discovery_errors(&self) -> bool {
+        self.responses
+            .iter()
+            .filter(|response| response.class() == ResponseClass::Error)
+            .count()
+            == 3
             && self.responses.iter().all(|response| {
-                response.class() == ResponseClass::Error
-                    && response.segment_number().is_none()
-                    && (matches!(response.code(), 9050 | 9800)
-                        || (response.code() == 9952 && is_unpublished_99xx(response.code())))
+                response.class() != ResponseClass::Error
+                    || (response.segment_number().is_none()
+                        && (matches!(response.code(), 9050 | 9800)
+                            || (response.code() == 9952 && is_unpublished_99xx(response.code()))))
             })
             && self
                 .responses
