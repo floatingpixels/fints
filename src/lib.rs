@@ -10,6 +10,9 @@ mod client;
 mod development_diagnostics;
 mod engine;
 mod error;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 mod model;
 mod response;
 mod segments;

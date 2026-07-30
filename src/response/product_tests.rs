@@ -315,10 +315,11 @@ fn malformed_securities_documents_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, mismatched)).unwrap();
-    assert!(matches!(
-        response.depot_positions(),
-        Err(Error::MalformedSecuritiesData)
-    ));
+    let mismatched_site = match response.depot_positions() {
+        Err(Error::MalformedSecuritiesData { site }) => site,
+        _ => panic!("expected malformed MT535 block"),
+    };
+    assert!(mismatched_site.starts_with("fints::response::securities:"));
 
     let missing_quantity = concat!(
         "\r\n",
@@ -339,10 +340,12 @@ fn malformed_securities_documents_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, missing_quantity)).unwrap();
-    assert!(matches!(
-        response.depot_positions(),
-        Err(Error::MalformedSecuritiesData)
-    ));
+    let missing_quantity_site = match response.depot_positions() {
+        Err(Error::MalformedSecuritiesData { site }) => site,
+        _ => panic!("expected malformed MT535 position"),
+    };
+    assert!(missing_quantity_site.starts_with("fints::response::securities:"));
+    assert_ne!(mismatched_site, missing_quantity_site);
 }
 
 // DK Anlage 3 v3.9, chapter 4 general syntax rule 6: an MT535/MT536
@@ -366,7 +369,7 @@ fn securities_document_rejects_missing_leading_crlf() {
 
     assert!(matches!(
         response.depot_positions(),
-        Err(Error::MalformedSecuritiesData)
+        Err(Error::MalformedSecuritiesData { .. })
     ));
 }
 
@@ -420,7 +423,10 @@ fn securities_documents_accept_exactly_one_trailing_crlf() {
         } else {
             response.securities_transactions().map(|_| ())
         };
-        assert!(matches!(rejected, Err(Error::MalformedSecuritiesData)));
+        assert!(matches!(
+            rejected,
+            Err(Error::MalformedSecuritiesData { .. })
+        ));
     }
 }
 
@@ -465,7 +471,7 @@ fn securities_date_with_latin1_high_byte_is_typed_error() {
 
     assert!(matches!(
         response.depot_positions(),
-        Err(Error::MalformedSecuritiesData)
+        Err(Error::MalformedSecuritiesData { .. })
     ));
 }
 
@@ -503,7 +509,7 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
     let response = Response::parse(&message_with_binary("HIWDU", 5, two_transactions)).unwrap();
     assert!(matches!(
         response.securities_transactions(),
-        Err(Error::MalformedSecuritiesData)
+        Err(Error::MalformedSecuritiesData { .. })
     ));
 
     let wrong_payment = concat!(
@@ -538,7 +544,7 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
     let response = Response::parse(&message_with_binary("HIWDU", 5, wrong_payment)).unwrap();
     assert!(matches!(
         response.securities_transactions(),
-        Err(Error::MalformedSecuritiesData)
+        Err(Error::MalformedSecuritiesData { .. })
     ));
 
     let truncated_details = concat!(
@@ -572,7 +578,7 @@ fn malformed_mt536_blocks_fail_without_partial_results() {
     let response = Response::parse(&message_with_binary("HIWDU", 5, truncated_details)).unwrap();
     assert!(matches!(
         response.securities_transactions(),
-        Err(Error::MalformedSecuritiesData)
+        Err(Error::MalformedSecuritiesData { .. })
     ));
 }
 

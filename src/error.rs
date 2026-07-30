@@ -218,6 +218,7 @@ pub enum Error {
     Wire(#[from] WireError),
     #[error(transparent)]
     Transport(#[from] TransportError),
+    /// Invalid response structure at a static, non-secret parser site.
     #[error("FinTS response has an invalid {structure} structure")]
     InvalidResponse { structure: &'static str },
     #[error("FinTS response uses unsupported segment {code} version {version}")]
@@ -240,12 +241,18 @@ pub enum Error {
     PaginationLimitReached,
     #[error("the institution repeated a transaction continuation point")]
     RepeatedContinuationPoint,
-    #[error("booked transaction data is malformed")]
-    MalformedTransactionData,
+    /// Malformed booked-transaction content at a compile-time parser site.
+    ///
+    /// `site` contains only a module and source-line identifier, never received data.
+    #[error("booked transaction data is malformed at {site}")]
+    MalformedTransactionData { site: &'static str },
     #[error("camt transaction data contains more than one report")]
     MultipleCamtReports,
-    #[error("securities data is malformed")]
-    MalformedSecuritiesData,
+    /// Malformed securities content at a compile-time parser site.
+    ///
+    /// `site` contains only a module and source-line identifier, never received data.
+    #[error("securities data is malformed at {site}")]
+    MalformedSecuritiesData { site: &'static str },
     #[error("the decoupled approval may not be polled again yet")]
     PollTooEarly,
     #[error("FinTS bank rejected or qualified the request with code {0:?}")]
@@ -253,3 +260,21 @@ pub enum Error {
     #[error(transparent)]
     Unsupported(#[from] Limitation),
 }
+
+macro_rules! malformed_transaction_data {
+    () => {
+        $crate::error::Error::MalformedTransactionData {
+            site: concat!(module_path!(), ":", line!()),
+        }
+    };
+}
+
+macro_rules! malformed_securities_data {
+    () => {
+        $crate::error::Error::MalformedSecuritiesData {
+            site: concat!(module_path!(), ":", line!()),
+        }
+    };
+}
+
+pub(crate) use {malformed_securities_data, malformed_transaction_data};

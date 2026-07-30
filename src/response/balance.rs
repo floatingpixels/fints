@@ -25,7 +25,9 @@ pub(super) fn parse(segments: &[Segment]) -> Result<Option<Balance>, Error> {
     }
     let elements = segment.elements();
     if elements.len() < 5 {
-        return Err(Error::InvalidResponse { structure: "HISAL" });
+        return Err(Error::InvalidResponse {
+            structure: "balance.HISAL.element_shape",
+        });
     }
 
     let account = parse_account(elements[1].components(), version)?;
@@ -98,7 +100,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
     if version <= 6 {
         if components.len() != 4 {
             return Err(Error::InvalidResponse {
-                structure: "national account",
+                structure: "balance.national_account",
             });
         }
         let account_number = component(components, 0, "account number")?;
@@ -134,7 +136,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
         (None, None) => None,
         _ => {
             return Err(Error::InvalidResponse {
-                structure: "international account",
+                structure: "balance.international_account",
             });
         }
     };
@@ -163,7 +165,7 @@ fn parse_account(components: &[Value], version: u16) -> Result<Account, Error> {
 fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
     if !(4..=5).contains(&components.len()) {
         return Err(Error::InvalidResponse {
-            structure: "balance amount",
+            structure: "balance.amount_group",
         });
     }
     let direction = match component(components, 0, "credit/debit sign")?.as_str() {
@@ -186,7 +188,7 @@ fn parse_signed_amount(components: &[Value]) -> Result<SignedAmount, Error> {
 fn parse_amount(components: &[Value]) -> Result<Amount, Error> {
     if components.len() != 2 {
         return Err(Error::InvalidResponse {
-            structure: "amount",
+            structure: "balance.amount",
         });
     }
     let value = component(components, 0, "amount value")?;
@@ -229,7 +231,7 @@ fn parse_currency(value: &str) -> Result<String, Error> {
 fn parse_timestamp(components: &[Value]) -> Result<Timestamp, Error> {
     if !(1..=2).contains(&components.len()) {
         return Err(Error::InvalidResponse {
-            structure: "timestamp",
+            structure: "balance.timestamp",
         });
     }
     let date = parse_date(&component(components, 0, "booking date")?)?;

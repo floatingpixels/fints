@@ -1,5 +1,5 @@
 use crate::{
-    error::Error,
+    error::{Error, malformed_transaction_data},
     model::{Account, BookedEntry, InstituteState, TransactionFormat},
     wire::{Segment, Value},
 };
@@ -81,7 +81,7 @@ fn parse_camt(
                 .checked_add(payload.entries.len())
                 .is_none_or(|count| count > MAX_TRANSACTION_PAGE_ENTRIES)
             {
-                return Err(Error::MalformedTransactionData);
+                return Err(malformed_transaction_data!());
             }
             entries.extend(payload.entries);
         }
@@ -116,7 +116,7 @@ fn parse_mt940(
             .checked_add(parsed.len())
             .is_none_or(|count| count > MAX_TRANSACTION_PAGE_ENTRIES)
         {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
         entries.extend(parsed);
     }
@@ -208,9 +208,7 @@ fn single_text(segment: &Segment, index: usize, field: &'static str) -> Result<S
         .ok_or(Error::MissingValue { field })?
         .components();
     if components.len() != 1 {
-        return Err(Error::InvalidResponse {
-            structure: "single text element",
-        });
+        return Err(Error::InvalidResponse { structure: field });
     }
     optional_component(components, 0).ok_or(Error::MissingValue { field })
 }
@@ -245,11 +243,19 @@ fn single_binary<'a>(
         .ok_or(Error::MissingValue { field })?
         .components();
     if components.len() != 1 {
-        return Err(Error::InvalidResponse {
-            structure: "single binary element",
-        });
+        return Err(Error::InvalidResponse { structure: field });
     }
     components[0]
         .as_binary()
         .ok_or(Error::InvalidValue { field })
+}
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_camt(input: &[u8]) -> bool {
+    camt::parse(input).is_ok()
+}
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_mt940(input: &[u8]) -> bool {
+    mt940::parse(input).is_ok()
 }

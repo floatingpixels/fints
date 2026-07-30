@@ -7,7 +7,7 @@ use quick_xml::{
 };
 
 use crate::{
-    error::Error,
+    error::{Error, malformed_transaction_data},
     model::{Amount, BookedEntry, BookedTransactionDetail, CreditDebit},
 };
 
@@ -34,27 +34,27 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     loop {
         let (namespace, event) = reader
             .read_resolved_event()
-            .map_err(|_| Error::MalformedTransactionData)?;
+            .map_err(|_| malformed_transaction_data!())?;
         if supplementary_depth > 0 {
             match event {
                 Event::Start(_) => {
                     nodes = nodes
                         .checked_add(1)
                         .filter(|count| *count <= MAX_XML_NODES)
-                        .ok_or(Error::MalformedTransactionData)?;
+                        .ok_or(malformed_transaction_data!())?;
                     supplementary_depth = supplementary_depth
                         .checked_add(1)
                         .filter(|depth| *depth <= MAX_XML_DEPTH)
-                        .ok_or(Error::MalformedTransactionData)?;
+                        .ok_or(malformed_transaction_data!())?;
                 }
                 Event::Empty(_) => {
                     nodes = nodes
                         .checked_add(1)
                         .filter(|count| *count <= MAX_XML_NODES)
-                        .ok_or(Error::MalformedTransactionData)?;
+                        .ok_or(malformed_transaction_data!())?;
                 }
                 Event::End(_) => supplementary_depth -= 1,
-                Event::DocType(_) | Event::Eof => return Err(Error::MalformedTransactionData),
+                Event::DocType(_) | Event::Eof => return Err(malformed_transaction_data!()),
                 _ => {}
             }
             continue;
@@ -68,12 +68,12 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 nodes = nodes
                     .checked_add(1)
                     .filter(|count| *count <= MAX_XML_NODES)
-                    .ok_or(Error::MalformedTransactionData)?;
+                    .ok_or(malformed_transaction_data!())?;
                 if stack.len() >= MAX_XML_DEPTH {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
                 let local = std::str::from_utf8(start.local_name().as_ref())
-                    .map_err(|_| Error::MalformedTransactionData)?
+                    .map_err(|_| malformed_transaction_data!())?
                     .to_owned();
                 if local == "SplmtryData" {
                     // ISO 20022 permits an arbitrary-namespace Envlp below
@@ -88,30 +88,30 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 };
                 if local == "Document" {
                     if !stack.is_empty() || state.saw_document {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                     state.saw_document = true;
                 } else if local == "BkToCstmrAcctRpt" {
                     if !ends_with(&stack, &["Document"]) || state.saw_message {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                     state.saw_message = true;
                 } else if local == "Rpt" {
                     if !ends_with(&stack, &["BkToCstmrAcctRpt"]) {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                     state.reports = state
                         .reports
                         .checked_add(1)
-                        .ok_or(Error::MalformedTransactionData)?;
+                        .ok_or(malformed_transaction_data!())?;
                 } else if local == "Ntry" {
                     if !ends_with(&stack, &["Rpt"]) || state.entry.is_some() {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                     state.entry = Some(EntryBuilder::default());
                 } else if local == "TxDtls" {
                     if !ends_with(&stack, &["Ntry", "NtryDtls"]) || state.detail.is_some() {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                     state.detail = Some(DetailBuilder::default());
                 }
@@ -129,74 +129,74 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 nodes = nodes
                     .checked_add(1)
                     .filter(|count| *count <= MAX_XML_NODES)
-                    .ok_or(Error::MalformedTransactionData)?;
+                    .ok_or(malformed_transaction_data!())?;
                 if matches!(
                     start.local_name().as_ref(),
                     b"Document" | b"BkToCstmrAcctRpt" | b"Rpt" | b"Ntry" | b"TxDtls"
                 ) {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
             }
             Event::Text(text) => {
                 let text = text
                     .xml10_content()
-                    .map_err(|_| Error::MalformedTransactionData)?;
+                    .map_err(|_| malformed_transaction_data!())?;
                 let text = quick_xml::escape::unescape(&text)
-                    .map_err(|_| Error::MalformedTransactionData)?;
+                    .map_err(|_| malformed_transaction_data!())?;
                 if let Some(current) = stack.last_mut() {
                     current.text.push_str(&text);
                 } else if !text.trim().is_empty() {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
             }
             Event::CData(text) => {
-                let current = stack.last_mut().ok_or(Error::MalformedTransactionData)?;
+                let current = stack.last_mut().ok_or(malformed_transaction_data!())?;
                 // CDATA is already literal character data; entity-looking text must
                 // not pass through the normal text-node unescaper.
                 current
                     .text
-                    .push_str(&text.decode().map_err(|_| Error::MalformedTransactionData)?);
+                    .push_str(&text.decode().map_err(|_| malformed_transaction_data!())?);
             }
             Event::GeneralRef(reference) => {
-                let current = stack.last_mut().ok_or(Error::MalformedTransactionData)?;
+                let current = stack.last_mut().ok_or(malformed_transaction_data!())?;
                 let reference = reference
                     .decode()
-                    .map_err(|_| Error::MalformedTransactionData)?;
+                    .map_err(|_| malformed_transaction_data!())?;
                 let escaped = format!("&{reference};");
                 current.text.push_str(
                     &quick_xml::escape::unescape(&escaped)
-                        .map_err(|_| Error::MalformedTransactionData)?,
+                        .map_err(|_| malformed_transaction_data!())?,
                 );
             }
             Event::End(end) => {
                 require_camt_namespace(namespace, false)?;
                 let local = std::str::from_utf8(end.local_name().as_ref())
-                    .map_err(|_| Error::MalformedTransactionData)?
+                    .map_err(|_| malformed_transaction_data!())?
                     .to_owned();
-                let node = stack.pop().ok_or(Error::MalformedTransactionData)?;
+                let node = stack.pop().ok_or(malformed_transaction_data!())?;
                 if node.local != local {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
                 let text = node.text.trim().to_owned();
                 state.finish_node(&stack, node.local, text, node.currency)?;
                 if state.entries.len() > MAX_TRANSACTION_PAGE_ENTRIES {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
             }
             Event::Decl(declaration) => {
                 if saw_declaration || state.saw_document {
-                    return Err(Error::MalformedTransactionData);
+                    return Err(malformed_transaction_data!());
                 }
                 saw_declaration = true;
                 if let Some(encoding) = declaration.encoding() {
-                    let encoding = encoding.map_err(|_| Error::MalformedTransactionData)?;
+                    let encoding = encoding.map_err(|_| malformed_transaction_data!())?;
                     if !encoding.eq_ignore_ascii_case(b"UTF-8") {
-                        return Err(Error::MalformedTransactionData);
+                        return Err(malformed_transaction_data!());
                     }
                 }
             }
             Event::Comment(_) | Event::PI(_) => {}
-            Event::DocType(_) => return Err(Error::MalformedTransactionData),
+            Event::DocType(_) => return Err(malformed_transaction_data!()),
             Event::Eof => break,
         }
     }
@@ -207,16 +207,16 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
         || state.entry.is_some()
         || state.detail.is_some()
     {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     if state.reports > 1 {
         return Err(Error::MultipleCamtReports);
     }
     if state.reports == 0 {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     if state.iban.is_none() && state.other_account_id.is_none() {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     Ok(CamtPayload {
         iban: state.iban,
@@ -229,22 +229,22 @@ fn require_camt_namespace(namespace: ResolveResult<'_>, document_root: bool) -> 
     match namespace {
         ResolveResult::Bound(Namespace(value)) if value == CAMT_NAMESPACE => Ok(()),
         ResolveResult::Bound(_) if document_root => Err(crate::Limitation::CamtNamespace.into()),
-        ResolveResult::Bound(_) => Err(Error::MalformedTransactionData),
-        ResolveResult::Unbound | ResolveResult::Unknown(_) => Err(Error::MalformedTransactionData),
+        ResolveResult::Bound(_) => Err(malformed_transaction_data!()),
+        ResolveResult::Unbound | ResolveResult::Unknown(_) => Err(malformed_transaction_data!()),
     }
 }
 
 fn amount_currency(start: &quick_xml::events::BytesStart<'_>) -> Result<Option<String>, Error> {
     let mut currency = None;
     for attribute in start.attributes().with_checks(true) {
-        let attribute = attribute.map_err(|_| Error::MalformedTransactionData)?;
+        let attribute = attribute.map_err(|_| malformed_transaction_data!())?;
         if attribute.key.as_ref() == b"Ccy" {
             if currency.is_some() {
-                return Err(Error::MalformedTransactionData);
+                return Err(malformed_transaction_data!());
             }
             let value = attribute
                 .normalized_value(XmlVersion::Implicit1_0)
-                .map_err(|_| Error::MalformedTransactionData)?
+                .map_err(|_| malformed_transaction_data!())?
                 .into_owned();
             validate_currency(&value)?;
             currency = Some(value);
@@ -283,16 +283,16 @@ impl CamtState {
             let entry_direction = self
                 .entry
                 .as_ref()
-                .ok_or(Error::MalformedTransactionData)?
+                .ok_or(malformed_transaction_data!())?
                 .direction;
             let detail = self
                 .detail
                 .take()
-                .ok_or(Error::MalformedTransactionData)?
+                .ok_or(malformed_transaction_data!())?
                 .finish(entry_direction)?;
             self.entry
                 .as_mut()
-                .ok_or(Error::MalformedTransactionData)?
+                .ok_or(malformed_transaction_data!())?
                 .details
                 .push(detail);
             return Ok(());
@@ -301,7 +301,7 @@ impl CamtState {
             let entry = self
                 .entry
                 .take()
-                .ok_or(Error::MalformedTransactionData)?
+                .ok_or(malformed_transaction_data!())?
                 .finish()?;
             if let Some(entry) = entry {
                 self.entries.push(entry);
@@ -385,15 +385,15 @@ impl EntryBuilder {
     }
 
     fn finish(self) -> Result<Option<BookedEntry>, Error> {
-        let status = self.status.ok_or(Error::MalformedTransactionData)?;
+        let status = self.status.ok_or(malformed_transaction_data!())?;
         if status != "BOOK" {
             return Ok(None);
         }
         if self.details.is_empty() {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
-        let amount = self.amount.ok_or(Error::MalformedTransactionData)?;
-        let direction = self.direction.ok_or(Error::MalformedTransactionData)?;
+        let amount = self.amount.ok_or(malformed_transaction_data!())?;
+        let direction = self.direction.ok_or(malformed_transaction_data!())?;
         if self.details.iter().any(|detail| {
             detail
                 .direction
@@ -401,7 +401,7 @@ impl EntryBuilder {
                 || detail.bank_transaction_code.is_none()
         }) || !detail_amounts_equal_entry(&self.details, &amount)?
         {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
         Ok(Some(BookedEntry {
             amount,
@@ -414,7 +414,7 @@ impl EntryBuilder {
             entry_reference: self.entry_reference,
             account_servicer_reference: Some(
                 self.account_servicer_reference
-                    .ok_or(Error::MalformedTransactionData)?,
+                    .ok_or(malformed_transaction_data!())?,
             ),
             // Anlage 3 v3.9, 7.1.8.5.1 permits an empty entry-level BkTxCd;
             // the required BTC is preserved from each TxDtls instead.
@@ -546,12 +546,12 @@ fn parse_amount(value: &str, currency: String) -> Result<Amount, Error> {
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
         || integer.len() + fraction.len() > 18
     {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     let coefficient = format!("{integer}{fraction}")
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
-    let scale = u8::try_from(fraction.len()).map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
+    let scale = u8::try_from(fraction.len()).map_err(|_| malformed_transaction_data!())?;
     Ok(Amount::new(coefficient, scale, currency))
 }
 
@@ -559,19 +559,19 @@ fn validate_currency(value: &str) -> Result<(), Error> {
     if value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase()) {
         Ok(())
     } else {
-        Err(Error::MalformedTransactionData)
+        Err(malformed_transaction_data!())
     }
 }
 
 fn required_currency(value: Option<String>) -> Result<String, Error> {
-    value.ok_or(Error::MalformedTransactionData)
+    value.ok_or(malformed_transaction_data!())
 }
 
 fn parse_direction(value: &str) -> Result<CreditDebit, Error> {
     match value {
         "CRDT" => Ok(CreditDebit::Credit),
         "DBIT" => Ok(CreditDebit::Debit),
-        _ => Err(Error::MalformedTransactionData),
+        _ => Err(malformed_transaction_data!()),
     }
 }
 
@@ -579,7 +579,7 @@ fn parse_boolean(value: &str) -> Result<bool, Error> {
     match value {
         "true" | "1" => Ok(true),
         "false" | "0" => Ok(false),
-        _ => Err(Error::MalformedTransactionData),
+        _ => Err(malformed_transaction_data!()),
     }
 }
 
@@ -593,7 +593,7 @@ fn transaction_code(
         (Some(domain), Some(family), Some(subfamily)) => {
             Ok(Some(format!("{domain}.{family}.{subfamily}")))
         }
-        _ => Err(Error::MalformedTransactionData),
+        _ => Err(malformed_transaction_data!()),
     }
 }
 
@@ -610,12 +610,12 @@ fn detail_amounts_equal_entry(
         let amount = detail
             .amount
             .as_ref()
-            .ok_or(Error::MalformedTransactionData)?;
+            .ok_or(malformed_transaction_data!())?;
         if amount.currency() != entry.currency() {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
         sum.checked_add(scaled_coefficient(amount, scale)?)
-            .ok_or(Error::MalformedTransactionData)
+            .ok_or(malformed_transaction_data!())
     })?;
     Ok(detail_sum == entry_coefficient)
 }
@@ -624,24 +624,24 @@ fn scaled_coefficient(amount: &Amount, scale: u8) -> Result<u128, Error> {
     let exponent = u32::from(
         scale
             .checked_sub(amount.scale())
-            .ok_or(Error::MalformedTransactionData)?,
+            .ok_or(malformed_transaction_data!())?,
     );
     amount
         .coefficient()
         .checked_mul(
             10_u128
                 .checked_pow(exponent)
-                .ok_or(Error::MalformedTransactionData)?,
+                .ok_or(malformed_transaction_data!())?,
         )
-        .ok_or(Error::MalformedTransactionData)
+        .ok_or(malformed_transaction_data!())
 }
 
 fn parse_date(value: &str) -> Result<NaiveDate, Error> {
-    let date = value.get(..10).ok_or(Error::MalformedTransactionData)?;
-    if !valid_timezone(value.get(10..).ok_or(Error::MalformedTransactionData)?) {
-        return Err(Error::MalformedTransactionData);
+    let date = value.get(..10).ok_or(malformed_transaction_data!())?;
+    if !valid_timezone(value.get(10..).ok_or(malformed_transaction_data!())?) {
+        return Err(malformed_transaction_data!());
     }
-    NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| Error::MalformedTransactionData)
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| malformed_transaction_data!())
 }
 
 fn valid_timezone(value: &str) -> bool {
@@ -665,7 +665,7 @@ fn valid_timezone(value: &str) -> bool {
 fn parse_date_time_date(value: &str) -> Result<NaiveDate, Error> {
     value
         .get(..10)
-        .ok_or(Error::MalformedTransactionData)
+        .ok_or(malformed_transaction_data!())
         .and_then(parse_date)
 }
 
@@ -675,7 +675,7 @@ fn useful_reference(value: Option<String>) -> Option<String> {
 
 fn nonempty(value: String) -> Result<String, Error> {
     if value.is_empty() {
-        Err(Error::MalformedTransactionData)
+        Err(malformed_transaction_data!())
     } else {
         Ok(value)
     }
@@ -683,7 +683,7 @@ fn nonempty(value: String) -> Result<String, Error> {
 
 fn set_once<T>(target: &mut Option<T>, value: T) -> Result<(), Error> {
     if target.replace(value).is_some() {
-        Err(Error::MalformedTransactionData)
+        Err(malformed_transaction_data!())
     } else {
         Ok(())
     }

@@ -227,6 +227,22 @@ cargo doc --no-deps
 Live bank access is never part of the default test suite. Owner credentials and captures
 must stay outside the repository.
 
+### Owner-run parser fuzzing
+
+The separate `fuzz/` crate contains bounded cargo-fuzz targets for the wire, camt,
+MT940, securities-document, and credit-card-entry parsers. It is not a workspace member
+and is never part of CI or the default verification stack. Its committed seed corpora
+come only from the repository's fictional specification fixtures.
+
+Run a target explicitly with nightly Rust, for example:
+
+```sh
+cargo +nightly fuzz run message
+```
+
+Typed parser errors are expected; the target succeeds while parsing remains panic- and
+OOM-free. Generated corpora, crashes, and artifacts stay ignored under `fuzz/`.
+
 ### Owner-run live probe
 
 `examples/live_probe.rs` is an opt-in diagnostic caller and persists nothing. It refuses

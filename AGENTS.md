@@ -100,6 +100,9 @@ Keep optional features out until a current gate proves them necessary.
   default path, and documented as carrying credential-bearing traffic; the caller owns
   everything it does with the data. The crate itself still never logs, stores, or
   embeds raw traffic in errors.
+- Typed errors carry static descriptions plus non-secret structural context such as a
+  field or site identifier, offset, or protocol code. Uniform context-free messages are
+  a defect, not a virtue.
 - Product registration ID and version are caller inputs. The real Finanzplaner
   registration ID never enters this repository, its fixtures, or its history.
 - One-time TANs, challenges, dialog identifiers, tokens, and live sessions remain
@@ -123,8 +126,10 @@ Keep optional features out until a current gate proves them necessary.
   opt-in, never part of the default verification stack, and never persist captures.
 - A bank-specific workaround requires a fictional regression fixture and a comment
   identifying the observed protocol condition without naming the owner or account.
-- Do not add fuzzing, property-test frameworks, code generators, mock servers, or
-  snapshot tooling unless the current `SCOPE.md` gate explicitly requires them.
+- Bounded fuzz targets for the wire and format parsers are authorized as owner-run
+  tooling outside the default verification stack. Do not add property-test frameworks,
+  code generators, mock servers, or snapshot tooling unless the current `SCOPE.md` gate
+  explicitly requires them.
 
 ## Documentation and commits
 

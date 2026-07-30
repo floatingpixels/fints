@@ -320,7 +320,7 @@ fn signed_but_unencrypted_response_is_validated_as_a_control_pair() {
     assert!(matches!(
         Response::parse(&missing_trailer),
         Err(Error::InvalidResponse {
-            structure: "authenticated response security controls"
+            structure: "response.security_controls.pair"
         })
     ));
 }
@@ -2021,7 +2021,7 @@ fn bank_response_diagnostic_wire_bounds_are_enforced() {
     assert!(matches!(
         Response::parse(&fixture),
         Err(Error::InvalidResponse {
-            structure: "response parameter count"
+            structure: "response.feedback.parameters"
         })
     ));
 }
@@ -2099,7 +2099,7 @@ fn message_response_order_is_strict_but_unknown_optional_segments_are_skipped() 
     assert!(matches!(
         Response::parse(&misplaced),
         Err(Error::InvalidResponse {
-            structure: "HIRMG must be the first response segment"
+            structure: "response.HIRMG.first"
         })
     ));
 
@@ -2114,7 +2114,7 @@ fn message_response_order_is_strict_but_unknown_optional_segments_are_skipped() 
     assert!(matches!(
         Response::parse(&duplicate),
         Err(Error::InvalidResponse {
-            structure: "duplicate HIRMG response segment"
+            structure: "response.HIRMG.duplicate"
         })
     ));
 
@@ -2122,7 +2122,7 @@ fn message_response_order_is_strict_but_unknown_optional_segments_are_skipped() 
     assert!(matches!(
         Response::parse(&empty),
         Err(Error::InvalidResponse {
-            structure: "HIRMG without response elements"
+            structure: "response.HIRMG.elements"
         })
     ));
 }

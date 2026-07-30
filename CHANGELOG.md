@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Added static, redacted rejection-site context across transaction,
+  securities, and generic response parsing plus isolated owner-run parser fuzz targets.
+
 - **2026-07-30** — Kept chrono clock support dev-only for the owner-run probe and
   documented the pre-snapshot transaction-capability caveat and diagnostics sunset.
 

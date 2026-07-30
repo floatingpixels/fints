@@ -234,7 +234,7 @@ fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
-        Err(Error::MalformedTransactionData)
+        Err(Error::MalformedTransactionData { .. })
     ));
 
     let declarations = (0..257)
@@ -249,7 +249,7 @@ fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
-        Err(Error::MalformedTransactionData)
+        Err(Error::MalformedTransactionData { .. })
     ));
 
     let wrong_encoding = br#"<?xml version="1.0" encoding="ISO-8859-1"?>
@@ -262,7 +262,7 @@ fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
-        Err(Error::MalformedTransactionData)
+        Err(Error::MalformedTransactionData { .. })
     ));
 }
 
@@ -326,7 +326,7 @@ fn camt_accepts_permitted_lexical_and_supplementary_shapes() {
                 .transactions(&TransactionFormat::Camt {
                     descriptor: CAMT_DESCRIPTOR.to_owned()
                 }),
-            Err(Error::MalformedTransactionData)
+            Err(Error::MalformedTransactionData { .. })
         ));
     }
 
@@ -376,7 +376,7 @@ fn camt_multiple_reports_have_a_distinct_typed_error() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
-        Err(Error::MalformedTransactionData)
+        Err(Error::MalformedTransactionData { .. })
     ));
 }
 
@@ -392,16 +392,33 @@ fn malformed_camt_documents_fail_without_partial_results() {
     let missing_details = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-no-details</AcctSvcrRef><BkTxCd/></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
 
     let documents: &[&[u8]] = &[truncated, sum_mismatch, misplaced_entry, missing_details];
+    let mut sites = Vec::new();
     for document in documents {
-        assert!(matches!(
-            Response::parse(&camt_message(document))
-                .unwrap()
-                .transactions(&TransactionFormat::Camt {
-                    descriptor: CAMT_DESCRIPTOR.to_owned()
-                }),
-            Err(Error::MalformedTransactionData)
-        ));
+        let result = Response::parse(&camt_message(document))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned(),
+            });
+        let site = match result {
+            Err(Error::MalformedTransactionData { site }) => site,
+            _ => panic!("expected malformed camt transaction data"),
+        };
+        assert!(site.starts_with("fints::response::transactions::camt:"));
+        sites.push(site);
     }
+    assert!(
+        sites.windows(2).any(|pair| pair[0] != pair[1]),
+        "distinct camt rejection sites must remain distinguishable"
+    );
+
+    assert!(matches!(
+        Response::parse(&camt_message(truncated))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::MalformedTransactionData { .. })
+    ));
 }
 
 // DK Anlage 3 v3.8, 8.1 and 8.2.1-8.2.5; FinTS Messages 2022-04-15
@@ -490,7 +507,7 @@ fn mt940_accepts_variable_opening_date_blank_lines_and_one_trailing_crlf() {
     .unwrap();
     assert!(matches!(
         response.transactions(&TransactionFormat::Mt940 { version: 7 }),
-        Err(Error::MalformedTransactionData)
+        Err(Error::MalformedTransactionData { .. })
     ));
 }
 
@@ -566,7 +583,7 @@ fn malformed_mt940_statements_fail_without_partial_results() {
             ))
             .unwrap()
             .transactions(&TransactionFormat::Mt940 { version: 7 }),
-            Err(Error::MalformedTransactionData)
+            Err(Error::MalformedTransactionData { .. })
         ));
     }
 }

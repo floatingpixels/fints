@@ -158,6 +158,22 @@ fn parse_entry(components: &[Value]) -> Result<CreditCardEntry, Error> {
     })
 }
 
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_entry(input: &[u8]) -> bool {
+    const MAX_FUZZ_INPUT_BYTES: usize = 1024 * 1024;
+    const MAX_FUZZ_COMPONENTS: usize = 1_000;
+
+    if input.len() > MAX_FUZZ_INPUT_BYTES {
+        return false;
+    }
+    let components = input
+        .split(|byte| *byte == b':')
+        .take(MAX_FUZZ_COMPONENTS + 1)
+        .map(|component| Value::Text(component.to_vec()))
+        .collect::<Vec<_>>();
+    components.len() <= MAX_FUZZ_COMPONENTS && parse_entry(&components).is_ok()
+}
+
 fn parse_signed_balance(components: &[Value]) -> Result<CreditCardCurrentBalance, Error> {
     if !(4..=5).contains(&components.len()) {
         return Err(Error::InvalidResponse {

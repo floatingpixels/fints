@@ -1,7 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::{
-    error::Error,
+    error::{Error, malformed_transaction_data},
     model::{Amount, BookedEntry, BookedTransactionDetail, CreditDebit, StatementPosition},
 };
 
@@ -13,14 +13,14 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
     // One transport-style CRLF after the terminator is an owner-ratified tolerance.
     let text = text.strip_suffix("\r\n").unwrap_or(&text);
     if !text.starts_with("\r\n") || !text.ends_with("\r\n-") {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     let mut statements = Vec::new();
     let mut fields = Vec::new();
     for line in text.split("\r\n").skip(1) {
         if line == "-" {
             if fields.is_empty() {
-                return Err(Error::MalformedTransactionData);
+                return Err(malformed_transaction_data!());
             }
             statements.push(std::mem::take(&mut fields));
             continue;
@@ -35,20 +35,20 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<BookedEntry>, Error> {
                 value: value.to_owned(),
             });
         } else {
-            let current = fields.last_mut().ok_or(Error::MalformedTransactionData)?;
+            let current = fields.last_mut().ok_or(malformed_transaction_data!())?;
             current.value.push('\n');
             current.value.push_str(line);
         }
     }
     if !fields.is_empty() || statements.is_empty() {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
 
     let mut entries = Vec::new();
     for statement in statements {
         entries.extend(parse_statement(&statement)?);
         if entries.len() > MAX_TRANSACTION_PAGE_ENTRIES {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
     }
     Ok(entries)
@@ -80,7 +80,7 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
     let opening = fields
         .iter()
         .find(|field| matches!(field.tag.as_str(), "60F" | "60M"))
-        .ok_or(Error::MalformedTransactionData)?;
+        .ok_or(malformed_transaction_data!())?;
     let currency = parse_balance_currency(&opening.value)?;
     if !fields
         .iter()
@@ -88,7 +88,7 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
         || required_unique(fields, "20").is_err()
         || required_unique(fields, "25").is_err()
     {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
 
     let mut entries = Vec::new();
@@ -99,9 +99,7 @@ fn parse_statement(fields: &[Field]) -> Result<Vec<BookedEntry>, Error> {
             cursor += 1;
             continue;
         }
-        index = index
-            .checked_add(1)
-            .ok_or(Error::MalformedTransactionData)?;
+        index = index.checked_add(1).ok_or(malformed_transaction_data!())?;
         let information = fields
             .get(cursor + 1)
             .filter(|field| field.tag == "86")
@@ -158,15 +156,15 @@ struct ParsedEntry {
 }
 
 fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
-    let value_date = value.get(..6).ok_or(Error::MalformedTransactionData)?;
+    let value_date = value.get(..6).ok_or(malformed_transaction_data!())?;
     let value_date = parse_short_date(value_date)?;
-    let mut rest = value.get(6..).ok_or(Error::MalformedTransactionData)?;
+    let mut rest = value.get(6..).ok_or(malformed_transaction_data!())?;
     let booking_date = if rest
         .get(..4)
         .is_some_and(|date| date.bytes().all(|byte| byte.is_ascii_digit()))
     {
-        let date = rest.get(..4).ok_or(Error::MalformedTransactionData)?;
-        rest = rest.get(4..).ok_or(Error::MalformedTransactionData)?;
+        let date = rest.get(..4).ok_or(malformed_transaction_data!())?;
+        rest = rest.get(4..).ok_or(malformed_transaction_data!())?;
         Some(parse_month_day(date, value_date)?)
     } else {
         None
@@ -180,21 +178,20 @@ fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
     } else if let Some(rest) = rest.strip_prefix('D') {
         (CreditDebit::Debit, false, rest)
     } else {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     };
     rest = after_direction;
     if rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
-        rest = rest.get(1..).ok_or(Error::MalformedTransactionData)?;
+        rest = rest.get(1..).ok_or(malformed_transaction_data!())?;
     }
-    let separator = rest.find('N').ok_or(Error::MalformedTransactionData)?;
+    let separator = rest.find('N').ok_or(malformed_transaction_data!())?;
     let amount = parse_amount(
-        rest.get(..separator)
-            .ok_or(Error::MalformedTransactionData)?,
+        rest.get(..separator).ok_or(malformed_transaction_data!())?,
         currency,
     )?;
     rest = rest
         .get(separator + 1..)
-        .ok_or(Error::MalformedTransactionData)?;
+        .ok_or(malformed_transaction_data!())?;
     let booking_code = rest
         .get(..3)
         .filter(|code| {
@@ -203,9 +200,9 @@ fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
                     .bytes()
                     .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
         })
-        .ok_or(Error::MalformedTransactionData)?
+        .ok_or(malformed_transaction_data!())?
         .to_owned();
-    rest = rest.get(3..).ok_or(Error::MalformedTransactionData)?;
+    rest = rest.get(3..).ok_or(malformed_transaction_data!())?;
     // DK Anlage 3 v3.8, 8.2.3 defines a possible supplementary second line
     // after subfield 9. Gate 2 deliberately preserves only the first-line
     // customer and bank references that have typed result fields.
@@ -213,13 +210,13 @@ fn parse_entry(value: &str, currency: &str) -> Result<ParsedEntry, Error> {
     let (customer_reference, bank_reference) = match first_line.split_once("//") {
         Some((customer, bank)) => {
             if customer.len() > 16 || bank.is_empty() || bank.len() > 16 {
-                return Err(Error::MalformedTransactionData);
+                return Err(malformed_transaction_data!());
             }
             (nonempty_optional(customer), Some(bank.to_owned()))
         }
         None => {
             if first_line.is_empty() || first_line.len() > 16 {
-                return Err(Error::MalformedTransactionData);
+                return Err(malformed_transaction_data!());
             }
             (Some(first_line.to_owned()), None)
         }
@@ -262,7 +259,7 @@ fn parse_information(value: &str) -> Result<StructuredInformation, Error> {
         transaction_code: Some(transaction_code.to_owned()),
         ..StructuredInformation::default()
     };
-    let subfields = compact.get(3..).ok_or(Error::MalformedTransactionData)?;
+    let subfields = compact.get(3..).ok_or(malformed_transaction_data!())?;
     if !subfields.starts_with('?') {
         result.remittance_information.push(value.to_owned());
         return Ok(result);
@@ -295,13 +292,13 @@ fn split_control_fields(value: &str) -> Result<Vec<(u8, &str)>, Error> {
     let mut cursor = 0;
     while cursor < value.len() {
         if value.as_bytes().get(cursor) != Some(&b'?') {
-            return Err(Error::MalformedTransactionData);
+            return Err(malformed_transaction_data!());
         }
         let code = value
             .get(cursor + 1..cursor + 3)
-            .ok_or(Error::MalformedTransactionData)?
+            .ok_or(malformed_transaction_data!())?
             .parse()
-            .map_err(|_| Error::MalformedTransactionData)?;
+            .map_err(|_| malformed_transaction_data!())?;
         let start = cursor + 3;
         let end = value[start..]
             .find('?')
@@ -330,72 +327,70 @@ fn parse_statement_number(value: &str) -> Result<(String, Option<String>), Error
         .split_once('/')
         .map_or((value, None), |(statement, page)| (statement, Some(page)));
     if !valid_number(statement, 5) || page.is_some_and(|page| !valid_number(page, 5)) {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     Ok((statement.to_owned(), page.map(str::to_owned)))
 }
 
 fn parse_balance_currency(value: &str) -> Result<String, Error> {
-    let after_direction = value.get(1..).ok_or(Error::MalformedTransactionData)?;
+    let after_direction = value.get(1..).ok_or(malformed_transaction_data!())?;
     after_direction
         .as_bytes()
         .windows(3)
         .position(|window| window.iter().all(u8::is_ascii_uppercase))
         .and_then(|start| after_direction.get(start..start + 3))
         .map(str::to_owned)
-        .ok_or(Error::MalformedTransactionData)
+        .ok_or(malformed_transaction_data!())
 }
 
 fn parse_amount(value: &str, currency: &str) -> Result<Amount, Error> {
     if value.len() > 15 {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
-    let (integer, fraction) = value
-        .split_once(',')
-        .ok_or(Error::MalformedTransactionData)?;
+    let (integer, fraction) = value.split_once(',').ok_or(malformed_transaction_data!())?;
     if integer.is_empty()
         || !integer.bytes().all(|byte| byte.is_ascii_digit())
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     let coefficient = format!("{integer}{fraction}")
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
-    let scale = u8::try_from(fraction.len()).map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
+    let scale = u8::try_from(fraction.len()).map_err(|_| malformed_transaction_data!())?;
     Ok(Amount::new(coefficient, scale, currency.to_owned()))
 }
 
 fn parse_short_date(value: &str) -> Result<NaiveDate, Error> {
     if value.len() != 6 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     // DK Anlage 3 v3.8, 8.2.1 encodes the year as two-digit JJ. The fixed
     // 80/79 pivot makes that underspecified wire value deterministic.
     let year: i32 = value[..2]
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
     let year = if year > 79 { 1900 + year } else { 2000 + year };
     let month = value[2..4]
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
     let day = value[4..6]
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
-    NaiveDate::from_ymd_opt(year, month, day).ok_or(Error::MalformedTransactionData)
+        .map_err(|_| malformed_transaction_data!())?;
+    NaiveDate::from_ymd_opt(year, month, day).ok_or(malformed_transaction_data!())
 }
 
 fn parse_month_day(value: &str, value_date: NaiveDate) -> Result<NaiveDate, Error> {
     let month: u32 = value
         .get(..2)
-        .ok_or(Error::MalformedTransactionData)?
+        .ok_or(malformed_transaction_data!())?
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
     let day: u32 = value
         .get(2..)
-        .ok_or(Error::MalformedTransactionData)?
+        .ok_or(malformed_transaction_data!())?
         .parse()
-        .map_err(|_| Error::MalformedTransactionData)?;
+        .map_err(|_| malformed_transaction_data!())?;
     // DK Anlage 3 v3.8, 8.2.1 supplies the optional booking date as MMTT.
     // Resolve only the adjacent Dec/Jan rollover relative to the full value date.
     let year = match (value_date.month(), month) {
@@ -403,14 +398,14 @@ fn parse_month_day(value: &str, value_date: NaiveDate) -> Result<NaiveDate, Erro
         (1, 12) => value_date.year() - 1,
         _ => value_date.year(),
     };
-    NaiveDate::from_ymd_opt(year, month, day).ok_or(Error::MalformedTransactionData)
+    NaiveDate::from_ymd_opt(year, month, day).ok_or(malformed_transaction_data!())
 }
 
 fn required_unique<'a>(fields: &'a [Field], tag: &str) -> Result<&'a str, Error> {
     let mut matches = fields.iter().filter(|field| field.tag == tag);
-    let value = matches.next().ok_or(Error::MalformedTransactionData)?;
+    let value = matches.next().ok_or(malformed_transaction_data!())?;
     if matches.next().is_some() {
-        return Err(Error::MalformedTransactionData);
+        return Err(malformed_transaction_data!());
     }
     Ok(&value.value)
 }

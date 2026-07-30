@@ -1,7 +1,7 @@
 use chrono::{NaiveDate, NaiveTime};
 
 use crate::{
-    error::Error,
+    error::{Error, malformed_securities_data},
     model::{
         Amount, DepotPosition, PriceQuality, QuantityUnit, SecuritiesAmount, SecuritiesMovement,
         SecuritiesQuantity, SecuritiesTransaction, SecurityInstrument, SecurityPrice,
@@ -106,7 +106,7 @@ fn document(input: &[u8]) -> Result<Block, Error> {
     let body = text
         .strip_prefix("\r\n")
         .and_then(|value| value.strip_suffix("\r\n-"))
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     let mut logical = Vec::<Field>::new();
     for line in body.split("\r\n") {
         if let Some(rest) = line.strip_prefix(':')
@@ -120,7 +120,7 @@ fn document(input: &[u8]) -> Result<Block, Error> {
                     .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
             {
                 if logical.len() >= MAX_FIELDS {
-                    return Err(Error::MalformedSecuritiesData);
+                    return Err(malformed_securities_data!());
                 }
                 logical.push(Field {
                     tag: tag.to_owned(),
@@ -129,7 +129,7 @@ fn document(input: &[u8]) -> Result<Block, Error> {
                 continue;
             }
         }
-        let field = logical.last_mut().ok_or(Error::MalformedSecuritiesData)?;
+        let field = logical.last_mut().ok_or(malformed_securities_data!())?;
         field.value.push('\n');
         field.value.push_str(line);
     }
@@ -141,23 +141,28 @@ fn document(input: &[u8]) -> Result<Block, Error> {
     let mut cursor = 0;
     while cursor < logical.len() {
         if logical[cursor].tag != "16R" {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
         root.children.push(parse_block(&logical, &mut cursor, 1)?);
     }
     if root.children.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(root)
 }
 
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_document(input: &[u8]) -> bool {
+    document(input).is_ok()
+}
+
 fn parse_block(fields: &[Field], cursor: &mut usize, depth: usize) -> Result<Block, Error> {
     if depth > MAX_BLOCK_DEPTH {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
-    let start = fields.get(*cursor).ok_or(Error::MalformedSecuritiesData)?;
+    let start = fields.get(*cursor).ok_or(malformed_securities_data!())?;
     if start.tag != "16R" || start.value.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     *cursor += 1;
     let mut block = Block {
@@ -166,12 +171,12 @@ fn parse_block(fields: &[Field], cursor: &mut usize, depth: usize) -> Result<Blo
         children: Vec::new(),
     };
     loop {
-        let field = fields.get(*cursor).ok_or(Error::MalformedSecuritiesData)?;
+        let field = fields.get(*cursor).ok_or(malformed_securities_data!())?;
         match field.tag.as_str() {
             "16R" => block.children.push(parse_block(fields, cursor, depth + 1)?),
             "16S" => {
                 if field.value != block.name {
-                    return Err(Error::MalformedSecuritiesData);
+                    return Err(malformed_securities_data!());
                 }
                 *cursor += 1;
                 return Ok(block);
@@ -195,10 +200,10 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         .map(parse_position)
         .collect::<Result<Vec<_>, _>>()?;
     if positions.len() > MAX_PAGE_ENTRIES {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     if active != !positions.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let total_values = root
         .children
@@ -231,7 +236,7 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
     let mut entries = Vec::new();
     for financial in children(&root, "FIN") {
         if financial.children.len() != 1 || financial.children[0].name != "TRAN" {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
         let instrument = parse_instrument(required_field(financial, "35B")?)?;
         let price = optional_field(financial, "90A")
@@ -241,11 +246,11 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
         let transaction = unique_child(financial, "TRAN")?;
         entries.push(parse_transaction(transaction, &instrument, price.as_ref())?);
         if entries.len() > MAX_PAGE_ENTRIES {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
     }
     if active != !entries.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(SecuritiesTransactionPage {
         more,
@@ -259,12 +264,10 @@ fn safe_identity(block: &Block) -> Result<(String, String), Error> {
     let value = required_qualified(block, "97A", ":SAFE//")?
         .value
         .strip_prefix(":SAFE//")
-        .ok_or(Error::MalformedSecuritiesData)?;
-    let (institute, account) = value
-        .split_once('/')
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
+    let (institute, account) = value.split_once('/').ok_or(malformed_securities_data!())?;
     if institute.is_empty() || account.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok((institute.to_owned(), account.to_owned()))
 }
@@ -275,14 +278,14 @@ fn validate_root(root: &Block, positions: bool) -> Result<(), Error> {
         .first()
         .is_none_or(|block| block.name != "GENL")
     {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let mut add_info_seen = false;
     for block in root.children.iter().skip(1) {
         match block.name.as_str() {
             "FIN" if !add_info_seen => {}
             "ADDINFO" if positions && !add_info_seen => add_info_seen = true,
-            _ => return Err(Error::MalformedSecuritiesData),
+            _ => return Err(malformed_securities_data!()),
         }
     }
     Ok(())
@@ -291,22 +294,22 @@ fn validate_root(root: &Block, positions: bool) -> Result<(), Error> {
 fn validate_general(block: &Block, transaction: bool) -> Result<bool, Error> {
     required_field(block, "28E")?;
     if required_qualified(block, "20C", ":SEME//")?.value != ":SEME//NONREF" {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     if required_field(block, "23G")?.value != "NEWM" {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     if transaction {
         if !fields(block, "69A")
             .chain(fields(block, "69B"))
             .any(|field| field.value.starts_with(":STAT//"))
         {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
     } else {
         required_qualified_any(block, &["98A", "98C"], ":STAT//")?;
         if required_qualified(block, "22F", ":STTY//")?.value != ":STTY//CUST" {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
     }
     required_qualified(block, "97A", ":SAFE//")?;
@@ -316,7 +319,7 @@ fn validate_general(block: &Block, transaction: bool) -> Result<bool, Error> {
     {
         Some("Y") => Ok(true),
         Some("N") => Ok(false),
-        _ => Err(Error::MalformedSecuritiesData),
+        _ => Err(malformed_securities_data!()),
     }
 }
 
@@ -336,11 +339,11 @@ fn parse_position(block: &Block) -> Result<DepotPosition, Error> {
         .map(|field| parse_signed_amount(&field.value, ":HOLD//"))
         .collect::<Result<Vec<_>, _>>()?;
     if children(block, "SUBBAL").next().is_none() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     for child in &block.children {
         if child.name != "SUBBAL" || required_field(child, "93C").is_err() {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
     }
     let cost_basis = optional_qualified(block, "70E", ":HOLD//")
@@ -367,7 +370,7 @@ fn parse_transaction(
         _ => false,
     };
     if !valid_children {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let link = unique_child(block, "LINK")?;
     let reference = match required_qualified(link, "20C", ":RELA//")?
@@ -376,7 +379,7 @@ fn parse_transaction(
     {
         Some("NONREF") => None,
         Some(value) if !value.is_empty() => Some(value.to_owned()),
-        _ => return Err(Error::MalformedSecuritiesData),
+        _ => return Err(malformed_securities_data!()),
     };
     let mut parsed = optional_unique_child(block, "TRANSDET")?
         .map(parse_transaction_details)
@@ -425,17 +428,17 @@ fn parse_transaction_details(details: &Block) -> Result<TransactionDetails, Erro
     {
         Some("DELI") => SecuritiesMovement::Delivery,
         Some("RECE") => SecuritiesMovement::Receipt,
-        _ => return Err(Error::MalformedSecuritiesData),
+        _ => return Err(malformed_securities_data!()),
     };
     if required_qualified(details, "22H", ":PAYM//")?.value != ":PAYM//FREE" {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let transaction_kind = match required_qualified(details, "22F", ":TRAN//")?
         .value
         .strip_prefix(":TRAN//")
     {
         Some(value @ ("BOLE" | "COLL" | "CORP" | "SETT")) => Some(value.to_owned()),
-        _ => return Err(Error::MalformedSecuritiesData),
+        _ => return Err(malformed_securities_data!()),
     };
     let effective_date =
         parse_qualified_date(required_qualified_any(details, &["98A", "98C"], ":ESET//")?)?;
@@ -456,7 +459,7 @@ fn parse_transaction_details(details: &Block) -> Result<TransactionDetails, Erro
         reversal: optional_qualified(details, "25D", ":MOVE//")
             .map(|field| match field.value.strip_prefix(":MOVE//") {
                 Some("REVE") => Ok(true),
-                _ => Err(Error::MalformedSecuritiesData),
+                _ => Err(malformed_securities_data!()),
             })
             .transpose()?,
         free_text: optional_qualified(details, "70E", ":TRDE//")
@@ -479,22 +482,22 @@ fn parse_instrument(field: &Field) -> Result<SecurityInstrument, Error> {
     for line in field.value.split('\n') {
         if let Some(value) = line.strip_prefix("ISIN ") {
             if isin.replace(value.to_owned()).is_some() {
-                return Err(Error::MalformedSecuritiesData);
+                return Err(malformed_securities_data!());
             }
         } else if let Some(value) = line.strip_prefix("/DE/") {
             if wkn.replace(value.to_owned()).is_some() {
-                return Err(Error::MalformedSecuritiesData);
+                return Err(malformed_securities_data!());
             }
         } else if !line.is_empty() {
             names.push(line);
         }
     }
     if isin.is_none() && wkn.is_none() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let name = names.join("\n");
     if name.is_empty() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(SecurityInstrument { isin, wkn, name })
 }
@@ -505,21 +508,21 @@ fn parse_price(value: &str, block: &Block) -> Result<SecurityPrice, Error> {
     } else if let Some(rest) = value.strip_prefix(":INDC//") {
         (PriceQuality::Indicative, rest)
     } else {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     };
     let (percentage, rest) = if let Some(rest) = rest.strip_prefix("PRCT/") {
         (true, rest)
     } else if let Some(rest) = rest.strip_prefix("ACTU/") {
         (false, rest)
     } else {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     };
     let (currency, number) = if percentage {
         (None, rest)
     } else {
         let (currency, number) = rest
             .split_at_checked(3)
-            .ok_or(Error::MalformedSecuritiesData)?;
+            .ok_or(malformed_securities_data!())?;
         validate_currency(currency)?;
         (Some(currency.to_owned()), number)
     };
@@ -550,17 +553,17 @@ fn parse_quantity(
     // separate metadata value; it is not inferred from the quantity itself.
     let rest = value
         .strip_prefix(prefix)
-        .ok_or(Error::MalformedSecuritiesData)?;
-    let (unit, mut number) = rest.split_once('/').ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
+    let (unit, mut number) = rest.split_once('/').ok_or(malformed_securities_data!())?;
     let unit = match unit {
         "UNIT" => QuantityUnit::Units,
         "FAMT" => QuantityUnit::Nominal,
-        _ => return Err(Error::MalformedSecuritiesData),
+        _ => return Err(malformed_securities_data!()),
     };
     let negative = number.starts_with('N');
     if negative {
         if !allow_negative {
-            return Err(Error::MalformedSecuritiesData);
+            return Err(malformed_securities_data!());
         }
         number = &number[1..];
     }
@@ -571,14 +574,14 @@ fn parse_quantity(
 fn parse_signed_amount(value: &str, prefix: &str) -> Result<SecuritiesAmount, Error> {
     let mut rest = value
         .strip_prefix(prefix)
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     let negative = rest.starts_with('N');
     if negative {
         rest = &rest[1..];
     }
     let (currency, number) = rest
         .split_at_checked(3)
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     validate_currency(currency)?;
     let (coefficient, scale) = decimal(number)?;
     Ok(SecuritiesAmount {
@@ -593,20 +596,18 @@ fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
     // Anlage 3 v3.9 4.3 mandates the structured 70E::HOLD line-number digits.
     let body = value
         .strip_prefix(":HOLD//")
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     if !body
         .split('\n')
         .next()
         .is_some_and(|line| line.starts_with('1'))
     {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let Some(line) = body.split('\n').nth(1) else {
         return Ok(None);
     };
-    let line = line
-        .strip_prefix('2')
-        .ok_or(Error::MalformedSecuritiesData)?;
+    let line = line.strip_prefix('2').ok_or(malformed_securities_data!())?;
     let mut fields = line.split('+');
     let Some(number) = fields.next().filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -629,21 +630,19 @@ fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
 
 fn decimal(value: &str) -> Result<(u128, u8), Error> {
     if value.len() > 24 {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
-    let (integer, fraction) = value
-        .split_once(',')
-        .ok_or(Error::MalformedSecuritiesData)?;
+    let (integer, fraction) = value.split_once(',').ok_or(malformed_securities_data!())?;
     if integer.is_empty()
         || !integer.bytes().all(|byte| byte.is_ascii_digit())
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     let coefficient = format!("{integer}{fraction}")
         .parse()
-        .map_err(|_| Error::MalformedSecuritiesData)?;
-    let scale = u8::try_from(fraction.len()).map_err(|_| Error::MalformedSecuritiesData)?;
+        .map_err(|_| malformed_securities_data!())?;
+    let scale = u8::try_from(fraction.len()).map_err(|_| malformed_securities_data!())?;
     Ok((coefficient, scale))
 }
 
@@ -651,7 +650,7 @@ fn validate_currency(value: &str) -> Result<(), Error> {
     if value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase()) {
         Ok(())
     } else {
-        Err(Error::MalformedSecuritiesData)
+        Err(malformed_securities_data!())
     }
 }
 
@@ -660,19 +659,19 @@ fn parse_qualified_date(field: &Field) -> Result<NaiveDate, Error> {
         .value
         .rsplit_once("//")
         .map(|(_, value)| value)
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     if !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     match field.tag.as_str() {
         "98A" if value.len() == 8 => parse_date(value),
         "98C" if value.len() == 14 => {
             let date = parse_date(&value[..8])?;
             NaiveTime::parse_from_str(&value[8..], "%H%M%S")
-                .map_err(|_| Error::MalformedSecuritiesData)?;
+                .map_err(|_| malformed_securities_data!())?;
             Ok(date)
         }
-        _ => Err(Error::MalformedSecuritiesData),
+        _ => Err(malformed_securities_data!()),
     }
 }
 
@@ -683,9 +682,9 @@ fn parse_qualified_timestamp(
         .value
         .rsplit_once("//")
         .map(|(_, value)| value)
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     if !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     match field.tag.as_str() {
         "98A" if value.len() == 8 => Ok((Some(parse_date(value)?), None)),
@@ -693,29 +692,29 @@ fn parse_qualified_timestamp(
             Some(parse_date(&value[..8])?),
             Some(
                 NaiveTime::parse_from_str(&value[8..], "%H%M%S")
-                    .map_err(|_| Error::MalformedSecuritiesData)?,
+                    .map_err(|_| malformed_securities_data!())?,
             ),
         )),
-        _ => Err(Error::MalformedSecuritiesData),
+        _ => Err(malformed_securities_data!()),
     }
 }
 
 fn parse_date(value: &str) -> Result<NaiveDate, Error> {
-    NaiveDate::parse_from_str(value, "%Y%m%d").map_err(|_| Error::MalformedSecuritiesData)
+    NaiveDate::parse_from_str(value, "%Y%m%d").map_err(|_| malformed_securities_data!())
 }
 
 fn page_more(field: &Field) -> Result<bool, Error> {
     let (page, indicator) = field
         .value
         .split_once('/')
-        .ok_or(Error::MalformedSecuritiesData)?;
+        .ok_or(malformed_securities_data!())?;
     if page.is_empty() || page.len() > 5 || !page.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     match indicator {
         "MORE" => Ok(true),
         "ONLY" | "LAST" => Ok(false),
-        _ => Err(Error::MalformedSecuritiesData),
+        _ => Err(malformed_securities_data!()),
     }
 }
 
@@ -728,9 +727,9 @@ fn children<'a>(block: &'a Block, name: &'a str) -> impl Iterator<Item = &'a Blo
 
 fn unique_child<'a>(block: &'a Block, name: &str) -> Result<&'a Block, Error> {
     let mut matching = block.children.iter().filter(|child| child.name == name);
-    let value = matching.next().ok_or(Error::MalformedSecuritiesData)?;
+    let value = matching.next().ok_or(malformed_securities_data!())?;
     if matching.next().is_some() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(value)
 }
@@ -739,7 +738,7 @@ fn optional_unique_child<'a>(block: &'a Block, name: &str) -> Result<Option<&'a 
     let mut matching = block.children.iter().filter(|child| child.name == name);
     let value = matching.next();
     if matching.next().is_some() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(value)
 }
@@ -750,9 +749,9 @@ fn fields<'a>(block: &'a Block, tag: &'a str) -> impl Iterator<Item = &'a Field>
 
 fn required_field<'a>(block: &'a Block, tag: &str) -> Result<&'a Field, Error> {
     let mut matching = block.fields.iter().filter(|field| field.tag == tag);
-    let value = matching.next().ok_or(Error::MalformedSecuritiesData)?;
+    let value = matching.next().ok_or(malformed_securities_data!())?;
     if matching.next().is_some() {
-        return Err(Error::MalformedSecuritiesData);
+        return Err(malformed_securities_data!());
     }
     Ok(value)
 }
@@ -762,7 +761,7 @@ fn optional_field<'a>(block: &'a Block, tag: &str) -> Option<&'a Field> {
 }
 
 fn required_qualified<'a>(block: &'a Block, tag: &str, prefix: &str) -> Result<&'a Field, Error> {
-    optional_qualified(block, tag, prefix).ok_or(Error::MalformedSecuritiesData)
+    optional_qualified(block, tag, prefix).ok_or(malformed_securities_data!())
 }
 
 fn optional_qualified<'a>(block: &'a Block, tag: &str, prefix: &str) -> Option<&'a Field> {
@@ -777,7 +776,7 @@ fn required_qualified_any<'a>(
     tags: &[&str],
     prefix: &str,
 ) -> Result<&'a Field, Error> {
-    optional_qualified_any(block, tags, prefix).ok_or(Error::MalformedSecuritiesData)
+    optional_qualified_any(block, tags, prefix).ok_or(malformed_securities_data!())
 }
 
 fn optional_qualified_any<'a>(block: &'a Block, tags: &[&str], prefix: &str) -> Option<&'a Field> {

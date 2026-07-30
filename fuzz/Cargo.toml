@@ -1,0 +1,47 @@
+[package]
+name = "fints-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+fints = { path = "..", features = ["fuzzing"] }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "camt"
+path = "fuzz_targets/camt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mt940"
+path = "fuzz_targets/mt940.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "securities_document"
+path = "fuzz_targets/securities_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "credit_card_entry"
+path = "fuzz_targets/credit_card_entry.rs"
+test = false
+doc = false
+bench = false

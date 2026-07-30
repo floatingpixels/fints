@@ -53,7 +53,7 @@ pub(super) fn apply(
 
     for segment in segments {
         let header = segment.header().ok_or(Error::InvalidResponse {
-            structure: "segment header",
+            structure: "parameters.business.segment_header",
         })?;
         if replace_bpd && is_parameter_segment(header.code) {
             advertised_parameter_segments.push(ParameterSegmentAdvertisement::new(
@@ -254,7 +254,7 @@ pub(super) fn bpd_version(segments: &[Segment]) -> Result<Option<u16>, Error> {
     for segment in segments {
         let Some(header) = segment.header() else {
             return Err(Error::InvalidResponse {
-                structure: "segment header",
+                structure: "parameters.BPD.segment_header",
             });
         };
         if header.code != b"HIBPA" {

@@ -46,7 +46,7 @@ impl Response {
                 })?;
         if first_header.code != b"HIRMG" {
             return Err(Error::InvalidResponse {
-                structure: "HIRMG must be the first response segment",
+                structure: "response.HIRMG.first",
             });
         }
         let mut responses = Vec::new();
@@ -57,13 +57,13 @@ impl Response {
 
         for segment in &segments {
             let header = segment.header().ok_or(Error::InvalidResponse {
-                structure: "segment header",
+                structure: "response.segment_header",
             })?;
             match header.code {
                 b"HIRMG" | b"HIRMS" => {
                     if header.code == b"HIRMG" && has_message_response {
                         return Err(Error::InvalidResponse {
-                            structure: "duplicate HIRMG response segment",
+                            structure: "response.HIRMG.duplicate",
                         });
                     }
                     if header.version != 2 {
@@ -78,7 +78,7 @@ impl Response {
                     }
                     if header.code == b"HIRMG" && segment.elements().len() == 1 {
                         return Err(Error::InvalidResponse {
-                            structure: "HIRMG without response elements",
+                            structure: "response.HIRMG.elements",
                         });
                     }
                     has_message_response |= header.code == b"HIRMG";
@@ -119,7 +119,7 @@ impl Response {
                         ensure_latin1_wire_length(Some(&text), 80, "response text")?;
                         if components.len() > 13 {
                             return Err(Error::InvalidResponse {
-                                structure: "response parameter count",
+                                structure: "response.feedback.parameters",
                             });
                         }
                         let parameters = components
@@ -147,7 +147,7 @@ impl Response {
                         ));
                         if numeric_code == 3040 {
                             let segment_number = reference.ok_or(Error::InvalidResponse {
-                                structure: "3040 without referenced request segment",
+                                structure: "response.3040.segment_reference",
                             })?;
                             let value = component(components, 3, "continuation point")?;
                             if encoding_rs::mem::encode_latin1_lossy(&value).len() > 35 {
@@ -409,7 +409,7 @@ impl Response {
         let point = points.next();
         if points.next().is_some() {
             return Err(Error::InvalidResponse {
-                structure: "multiple continuation points for one request",
+                structure: "response.continuation.duplicate",
             });
         }
         Ok(point.map(|point| point.value.as_str()))
@@ -464,15 +464,15 @@ fn response_segments(message: &Message) -> Result<Vec<Segment>, Error> {
     }
     if signature_headers != 1 || signature_trailers != 1 || payload.len() < 3 {
         return Err(Error::InvalidResponse {
-            structure: "authenticated response security controls",
+            structure: "response.security_controls.pair",
         });
     }
 
     let signature_header = payload.first().ok_or(Error::InvalidResponse {
-        structure: "authenticated response security controls",
+        structure: "response.security_controls.header",
     })?;
     let signature_trailer = payload.last().ok_or(Error::InvalidResponse {
-        structure: "authenticated response security controls",
+        structure: "response.security_controls.trailer",
     })?;
     let control_reference = validate_signature_header(signature_header)?;
     validate_signature_trailer(signature_trailer, &control_reference)?;
@@ -961,6 +961,26 @@ fn is_unpublished_99xx(code: u16) -> bool {
                 | 9998
                 | 9999
         )
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_camt(input: &[u8]) -> bool {
+    transactions::fuzz_camt(input)
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_mt940(input: &[u8]) -> bool {
+    transactions::fuzz_mt940(input)
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_securities_document(input: &[u8]) -> bool {
+    securities::fuzz_document(input)
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_credit_card_entry(input: &[u8]) -> bool {
+    credit_card::fuzz_entry(input)
 }
 
 #[cfg(test)]
