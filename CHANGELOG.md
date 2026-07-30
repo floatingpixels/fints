@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Kept chrono clock support dev-only for the owner-run probe and
+  documented the pre-snapshot transaction-capability caveat and diagnostics sunset.
+
 - **2026-07-30** — Added the gated owner-run live probe, an explicit per-client raw
   transport trace sink, and one derived redacted BPD capability snapshot. Default
   clients remain trace-free; tests cover exchange pairing, redaction, and serde confinement.

@@ -88,6 +88,8 @@ impl OperationCapabilitySnapshot {
 /// The snapshot contains no account or personal data and is not serialized. The
 /// generic parameter-segment list is complete for BPD acquired in this process;
 /// older deserialized state can expose only the operation facts it already retained.
+/// In particular, operation-specific transaction `advertised()` facts can under-report
+/// after deserializing state created before capability snapshots, until BPD is refreshed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdvertisedCapabilitySnapshot {
     balance: OperationCapabilitySnapshot,
