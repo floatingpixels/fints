@@ -197,11 +197,21 @@ access date for each source below is 2026-07-28.
   both phone-number fields optional); F.2 (each institute response has
   HNVSK/HNVSD and may have one HNSHK/HNSHA pair around HIRMG and response data);
   F.2.5 (profile-1, security-function-999 HKEND composition).
+  B.4.3.1.3 requires medium discovery to initialize with HKTAN process 4 and
+  `Segmentkennung=HKTAB`, with the supplied medium-name filler ignored, then
+  return HITAB after successful PIN validation and close the dialog with HKEND.
+  C.3.1.1 defines HKTAB/HITAB 5 and permits an empty repeated medium list only
+  when no medium is available. The HKTAN 6 and 7 Data Dictionary entries place
+  the optional medium name at DE 12; correction T33 permits `Segmentkennung`
+  during process 4 for both versions.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
-  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. B.4.3.1 and
+  HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. The
+  medium-discovery sections authorize requiring HITAB after an accepted request
+  and returning a typed limitation when an advertised required name is not
+  selectable; they do not authorize a medium-free continuation. B.4.3.1 and
   F.2.5 additionally authorize closing an open function-999 discovery with a
   profile-1, security-function-999 HKEND using the active dialog state. It also
   authorizes treating the specification-defined function-999
@@ -225,7 +235,7 @@ access date for each source below is 2026-07-28.
   authorizes strict inbound PIN/TAN security-control occupancy while accepting
   format-valid filler contents without evaluating their concrete values; it
   does not authorize a raw or loosely searched response sequence.
-- **Access/redistribution:** accessed 2026-07-29; the same implementation
+- **Access/redistribution:** accessed 2026-07-30; the same implementation
   grant and unchanged, free-redistribution conditions as the Formals PDF. No
   PDF is committed.
 

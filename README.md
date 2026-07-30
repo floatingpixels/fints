@@ -43,7 +43,10 @@ A new connection follows this bounded sequence:
    specification-defined alternate bootstrap or automatic retry.
 3. Call `select_tan_method` for that intersection. If the method requires a named
    medium, call `discover_tan_media` and
-   `select_tan_medium`.
+   `select_tan_medium`. A missing HITAB response fails as a typed missing value;
+   an empty or non-selectable required list returns
+   `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
+   closed exactly once.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.
@@ -282,8 +285,10 @@ paste its output into an issue or agent conversation, or enable it in normal con
 
 ### Temporary development diagnostics
 
-The non-default `development-diagnostics` feature exposes boolean-only initialization
-decision facts for bounded, owner-attended interoperability work. Normal consumers must
-leave it disabled; the public API and its storage field are absent without the feature.
+The non-default `development-diagnostics` feature exposes initialization decision
+booleans and TAN-medium-discovery segment code/version facts for bounded, owner-attended
+interoperability work. It never exposes segment contents or medium names. Normal
+consumers must leave it disabled; the public API and its storage fields are absent
+without the feature.
 Remove the feature, `src/development_diagnostics.rs`, and its explicitly marked call
 sites together once live verification of the three target banks is complete.

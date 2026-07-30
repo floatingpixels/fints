@@ -62,6 +62,11 @@ impl Engine {
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_no_dialog()?;
+        self.tan_media.clear();
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_tan_media_discovery = None;
+        }
         let method = self.selected_method()?.clone();
         validate_supported_method(&method)?;
         let system_id = self.state.system_id.as_deref().unwrap_or("0");
@@ -92,6 +97,13 @@ impl Engine {
     ) -> Result<&[TanMedium], Error> {
         let method = self.selected_method()?.clone();
         let response = Response::parse(input)?;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_tan_media_discovery =
+                Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
+                    response.development_segment_facts(),
+                ));
+        }
         self.record_responses(&response);
         self.apply_parameters(&response)?;
         if let Some(error) = response.first_error() {
@@ -120,7 +132,22 @@ impl Engine {
             validate_tan_process(&tan_response.process, "4")?;
             return Err(Limitation::TanMedium.into());
         }
-        self.tan_media = response.tan_media()?;
+        let tan_media = response.tan_media();
+        #[cfg(feature = "development-diagnostics")]
+        if let Ok(media) = &tan_media {
+            self.development_tan_media_discovery
+                .as_mut()
+                .expect("TAN-media diagnostics were initialized")
+                .set_discovered_medium_count(media.as_ref().map_or(0, std::vec::Vec::len));
+        }
+        self.tan_media = tan_media?.ok_or(Error::MissingValue {
+            field: "HITAB TAN media response",
+        })?;
+        if method.medium_name_required
+            && !self.tan_media.iter().any(|medium| medium.name().is_some())
+        {
+            return Err(Limitation::TanMediumUnavailable.into());
+        }
         Ok(&self.tan_media)
     }
 

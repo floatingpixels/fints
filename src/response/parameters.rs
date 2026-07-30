@@ -319,14 +319,20 @@ pub(super) fn system_id(segments: &[Segment]) -> Result<Option<String>, Error> {
     Ok(Some(single_text(segment, 1, "assigned system ID")?))
 }
 
-pub(super) fn tan_media(segments: &[Segment]) -> Result<Vec<TanMedium>, Error> {
-    let Some(segment) = segments.iter().find(|segment| {
+pub(super) fn tan_media(segments: &[Segment]) -> Result<Option<Vec<TanMedium>>, Error> {
+    let mut matching = segments.iter().filter(|segment| {
         segment
             .header()
             .is_some_and(|header| header.code == b"HITAB")
-    }) else {
-        return Ok(Vec::new());
+    });
+    let Some(segment) = matching.next() else {
+        return Ok(None);
     };
+    if matching.next().is_some() {
+        return Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.duplicate",
+        });
+    }
     require_version(
         segment.header().expect("header checked").version,
         5,
@@ -398,7 +404,7 @@ pub(super) fn tan_media(segments: &[Segment]) -> Result<Vec<TanMedium>, Error> {
             masked_phone: optional_component(components, 11),
         });
     }
-    Ok(media)
+    Ok(Some(media))
 }
 
 fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {

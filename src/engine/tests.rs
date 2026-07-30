@@ -819,37 +819,114 @@ fn synchronization_accepts_direct_and_continued_hisyn_fixtures() {
     );
 }
 
-// FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1.3: first-use medium discovery
-// is a special initialization with HKTAN referring to HKTAB, not an HKTAB order.
+// FinTS 3.0 PIN/TAN 2020-07-10, B.4.3.1.3 and the HKTAN 6/7 Data
+// Dictionary entries, with correction T33: first-use medium discovery is
+// process 4 with Segmentkennung HKTAB and a meaning-neutral medium filler.
+// This is an independently asserted wire shape, not an encoder round trip.
 #[test]
-fn tan_medium_discovery_uses_the_special_initialization_shape() {
-    let mut engine = engine_with_method(TanProcess::Decoupled);
+fn tan_medium_discovery_uses_the_special_hktan_six_and_seven_shapes() {
+    for (process, version) in [
+        (TanProcess::ProcessVariantTwo, 6),
+        (TanProcess::Decoupled, 7),
+    ] {
+        let mut engine = engine_with_method(process);
+        engine.state.tan_methods[0].medium_name_required = true;
 
-    let request = engine
+        let request = engine
+            .tan_media_initialization_request(now().date(), now().time())
+            .unwrap();
+        let parsed = crate::wire::Message::parse(&request).unwrap();
+        let payload = parsed.payload_segments().unwrap();
+        let hktan = payload
+            .iter()
+            .find(|segment| segment.header().unwrap().code == b"HKTAN")
+            .unwrap();
+
+        assert_eq!(hktan.header().unwrap().version, version);
+        assert_eq!(
+            crate::wire::encode_segments(std::slice::from_ref(hktan)).unwrap(),
+            format!("HKTAN:5:{version}+4+HKTAB+++++++++noref'").as_bytes()
+        );
+        assert!(
+            payload
+                .iter()
+                .all(|segment| segment.header().unwrap().code != b"HKTAB")
+        );
+    }
+}
+
+// PIN/TAN B.4.3.1.3 requires HITAB after successful PIN validation; C.3.1.1
+// permits its repeated list to be empty only when no medium is available.
+// A method whose advertised name is required cannot continue in either state.
+#[test]
+fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialog() {
+    let mut missing = engine_with_method(TanProcess::ProcessVariantTwo);
+    missing.state.tan_methods[0].medium_name_required = true;
+    missing
         .tan_media_initialization_request(now().date(), now().time())
         .unwrap();
-    let parsed = crate::wire::Message::parse(&request).unwrap();
-    let payload = parsed.payload_segments().unwrap();
-    let hktan = payload
-        .iter()
-        .find(|segment| segment.header().unwrap().code == b"HKTAN")
-        .unwrap();
+    let missing_response = response(&["HIRMG:2:2+0010::accepted"], "missing-media", 1);
+    assert!(matches!(
+        missing.accept_tan_media_initialization(&missing_response),
+        Err(Error::MissingValue {
+            field: "HITAB TAN media response"
+        })
+    ));
+    assert!(missing.has_active_dialog());
 
-    assert_eq!(hktan.header().unwrap().version, 7);
-    assert_eq!(hktan.elements()[1].components()[0].as_text().unwrap(), "4");
-    assert_eq!(
-        hktan.elements()[2].components()[0].as_text().unwrap(),
-        "HKTAB"
+    let mut empty = engine_with_method(TanProcess::Decoupled);
+    empty.state.tan_methods[0].medium_name_required = true;
+    empty
+        .tan_media_initialization_request(now().date(), now().time())
+        .unwrap();
+    let empty_response = response(
+        &["HIRMG:2:2+0010::accepted", "HITAB:3:5:5+1"],
+        "empty-media",
+        1,
     );
-    assert!(
-        payload
+    assert!(matches!(
+        empty.accept_tan_media_initialization(&empty_response),
+        Err(Error::Unsupported(Limitation::TanMediumUnavailable))
+    ));
+    assert!(empty.has_active_dialog());
+}
+
+// Formals B.7.5 and PIN/TAN C.3.1.1: message responses, the HITAB data
+// segment, and segment responses retain wire order while the media parser
+// consumes only HITAB. Institution-authored text remains absent from Debug.
+#[test]
+fn populated_hitab_preserves_ordered_bank_responses_and_redaction() {
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.tan_methods[0].medium_name_required = true;
+    engine
+        .tan_media_initialization_request(now().date(), now().time())
+        .unwrap();
+    let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
+    let hitab = format!("HITAB:3:5:5+1+{medium}");
+    let response = response(
+        &[
+            "HIRMG:2:2+0010::fictional accepted+1010::fictional notice",
+            &hitab,
+            "HIRMS:4:2:5+0020::fictional HKTAN processed",
+        ],
+        "ordered-media",
+        1,
+    );
+
+    let media = engine.accept_tan_media_initialization(&response).unwrap();
+    assert_eq!(media[0].name(), Some("Fictional phone"));
+    assert_eq!(
+        engine
+            .last_responses()
             .iter()
-            .all(|segment| segment.header().unwrap().code != b"HKTAB")
+            .map(BankResponse::code)
+            .collect::<Vec<_>>(),
+        [10, 1010, 20]
     );
-    assert_eq!(
-        hktan.elements()[11].components()[0].as_text().unwrap(),
-        "noref"
-    );
+    let rendered = format!("{:?}", engine.last_responses());
+    assert!(!rendered.contains("fictional accepted"));
+    assert!(!rendered.contains("fictional notice"));
+    assert!(!rendered.contains("Fictional phone"));
 }
 
 // FinTS 3.0 Formals 2017-10-06, C.5.3: an accepted dialog remains open

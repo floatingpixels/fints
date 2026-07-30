@@ -1,3 +1,5 @@
+#[cfg(feature = "development-diagnostics")]
+use crate::development_diagnostics::ReceivedSegmentFact;
 use crate::{
     error::{BankResponse, Error, Recovery, ResponseClass},
     model::{Balance, ReusableState, TanMedium, TransactionFormat},
@@ -362,8 +364,21 @@ impl Response {
         parameters::system_id(&self.segments)
     }
 
-    pub(crate) fn tan_media(&self) -> Result<Vec<TanMedium>, Error> {
+    pub(crate) fn tan_media(&self) -> Result<Option<Vec<TanMedium>>, Error> {
         parameters::tan_media(&self.segments)
+    }
+
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_segment_facts(&self) -> Vec<ReceivedSegmentFact> {
+        self.segments
+            .iter()
+            .filter_map(Segment::header)
+            .filter_map(|header| {
+                std::str::from_utf8(header.code)
+                    .ok()
+                    .map(|code| ReceivedSegmentFact::new(code.to_owned(), header.version))
+            })
+            .collect()
     }
 
     pub(crate) fn balance(&self) -> Result<Option<Balance>, Error> {

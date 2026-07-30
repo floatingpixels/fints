@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added explicit missing-HITAB and
+  `TanMediumUnavailable` outcomes, bounded discovery structure diagnostics, and
+  exactly-once HKEND handling for accepted but unusable medium discovery.
+
 - **2026-07-30** — Accepted and retained bounded class-1 bank notices as
   non-fatal ordered responses, with a new public `ResponseClass::Notice` branch.
   Undefined classes remain rejected with only their safe numeric code exposed.

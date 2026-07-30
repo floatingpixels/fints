@@ -1912,7 +1912,10 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     );
 
     let response = Response::parse(&fixture).unwrap();
-    let media = response.tan_media().unwrap();
+    let media = response
+        .tan_media()
+        .unwrap()
+        .expect("fictional HITAB is present");
 
     assert_eq!(media.len(), 1);
     assert_eq!(media[0].class(), crate::TanMediumClass::Mobile);
@@ -1930,8 +1933,57 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
         1,
     );
     assert!(matches!(
-        Response::parse(&fixture).unwrap().tan_media(),
+        Response::parse(&fixture)
+            .unwrap()
+            .tan_media()
+            .map(Option::unwrap),
         Err(Error::MissingValue { .. })
+    ));
+}
+
+// PIN/TAN 2020 B.4.3.1.3 and C.3.1.1: successful dedicated medium
+// discovery returns exactly one HITAB data segment. Its repeated medium list
+// may be empty, but the segment itself may not be silently inferred.
+#[test]
+fn hitab_presence_and_uniqueness_remain_structurally_distinct() {
+    let missing = message(&["HIRMG:2:2+0010::accepted".into()], "dialog1", 1);
+    assert!(
+        Response::parse(&missing)
+            .unwrap()
+            .tan_media()
+            .unwrap()
+            .is_none()
+    );
+
+    let empty = message(
+        &["HIRMG:2:2+0010::accepted".into(), "HITAB:3:5:4+1".into()],
+        "dialog2",
+        1,
+    );
+    assert_eq!(
+        Response::parse(&empty)
+            .unwrap()
+            .tan_media()
+            .unwrap()
+            .expect("empty HITAB remains present")
+            .len(),
+        0
+    );
+
+    let duplicate = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HITAB:3:5:4+1".into(),
+            "HITAB:4:5:4+1".into(),
+        ],
+        "dialog3",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&duplicate).unwrap().tan_media(),
+        Err(Error::InvalidResponse {
+            structure: "tan_media.HITAB.duplicate"
+        })
     ));
 }
 

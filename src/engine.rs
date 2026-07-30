@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 
 #[cfg(feature = "development-diagnostics")]
-use crate::development_diagnostics::InitializationRecoveryFacts;
+use crate::development_diagnostics::{InitializationRecoveryFacts, TanMediaDiscoveryFacts};
 use crate::{
     client::PollingMode,
     error::{BankResponse, Error, InputError, Limitation},
@@ -37,6 +37,8 @@ pub(crate) struct Engine {
     last_responses: Vec<BankResponse>,
     #[cfg(feature = "development-diagnostics")]
     development_initialization_recovery: Option<InitializationRecoveryFacts>,
+    #[cfg(feature = "development-diagnostics")]
+    development_tan_media_discovery: Option<TanMediaDiscoveryFacts>,
     requested_balance: Option<crate::model::Account>,
     transaction: Option<TransactionState>,
     products: products::ProductStates,
@@ -149,6 +151,8 @@ impl Engine {
             last_responses: Vec::new(),
             #[cfg(feature = "development-diagnostics")]
             development_initialization_recovery: None,
+            #[cfg(feature = "development-diagnostics")]
+            development_tan_media_discovery: None,
             requested_balance: None,
             transaction: None,
             products: products::ProductStates::default(),
@@ -192,6 +196,11 @@ impl Engine {
         &self,
     ) -> Option<InitializationRecoveryFacts> {
         self.development_initialization_recovery
+    }
+
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_tan_media_discovery(&self) -> Option<&TanMediaDiscoveryFacts> {
+        self.development_tan_media_discovery.as_ref()
     }
 
     pub(crate) fn choose_tan_method(&mut self, security_function: &str) -> Result<(), Error> {
