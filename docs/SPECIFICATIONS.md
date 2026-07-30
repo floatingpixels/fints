@@ -245,7 +245,14 @@ access date for each source below is 2026-07-28.
   process; their `noref`/challenge filler rule records that no TAN is required.
   Neither that HITAN nor the correction register substitutes for the HKTAB
   result or defines a parameter-refresh continuation; B.4.3.1.3 still requires
-  HITAB before the client closes the dialog.
+  HITAB before the client closes the dialog. The HITAB 4 response additionally
+  carries mandatory `TAN-Einsatzoption` (`0`, `1`, or `2`), which describes
+  parallel-use policy but does not waive HKTAN DE 12. Consequently, a method
+  advertising field 21 greater than one plus requirement code `2`, together
+  with an all/all HITAB result containing only unnamed media, defines no
+  standards-backed ordinary HKTAN selector. Testing omitted or explicitly
+  empty DE 12 values is therefore registered only as an opt-in owner-attended
+  interoperability experiment, not as behavior authorized by this source.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,

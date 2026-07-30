@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added an opt-in, single-shot experiment for omitted versus
+  explicitly empty HKTAN DE 12 after contradictory unnamed-media discovery.
+  Production behavior remains `TanMediumUnavailable`.
+
 - **2026-07-30** — Added opt-in structural diagnostics for HITANS 6/7
   medium requirements, emitted HKTAB selectors, and identifier-free HITAB
   occupancy facts. TAN-medium protocol behavior is unchanged.

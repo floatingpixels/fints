@@ -42,6 +42,116 @@ pub enum InitializationStage {
     RepeatedDiscovery,
 }
 
+/// Deliberate HKTAN DE 12 shape for the owner-attended TAN-medium experiment.
+///
+/// This type exists only with the non-default `tan-medium-selector-experiment`
+/// feature. Neither variant is supported production behavior.
+#[cfg(feature = "tan-medium-selector-experiment")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TanMediumSelectorExperimentVariant {
+    /// Cut HKTAN after DE 11, leaving DE 12 absent.
+    Omitted,
+    /// Occupy HKTAN DE 12 with an explicitly empty value.
+    Empty,
+}
+
+/// Result of one owner-attended TAN-medium selector experiment.
+///
+/// The result retains only the requested variant, whether the initialization
+/// opened, and the bounded response facts from that initialization. No dialog
+/// identifier, response parameter, medium data, challenge, continuation, or
+/// wire payload is retained.
+#[cfg(feature = "tan-medium-selector-experiment")]
+pub struct TanMediumSelectorExperimentResult {
+    variant: TanMediumSelectorExperimentVariant,
+    initialization_opened: bool,
+    responses: Vec<TanMediumSelectorExperimentResponse>,
+}
+
+#[cfg(feature = "tan-medium-selector-experiment")]
+impl TanMediumSelectorExperimentResult {
+    fn new(
+        variant: TanMediumSelectorExperimentVariant,
+        initialization_opened: bool,
+        responses: Vec<TanMediumSelectorExperimentResponse>,
+    ) -> Self {
+        Self {
+            variant,
+            initialization_opened,
+            responses,
+        }
+    }
+
+    pub fn variant(&self) -> TanMediumSelectorExperimentVariant {
+        self.variant
+    }
+
+    pub fn initialization_opened(&self) -> bool {
+        self.initialization_opened
+    }
+
+    /// Ordered responses from the experimental initialization, before HKEND.
+    pub fn responses(&self) -> &[TanMediumSelectorExperimentResponse] {
+        &self.responses
+    }
+}
+
+/// Bounded bank response retained by the TAN-medium selector experiment.
+///
+/// Institution-authored text is reachable only through [`Self::text`], is
+/// omitted from `Debug`, and remains subject to caller-owned display and
+/// logging policy. Data-element references and response parameters are not
+/// retained by the experiment.
+#[cfg(feature = "tan-medium-selector-experiment")]
+#[derive(Clone, PartialEq, Eq)]
+pub struct TanMediumSelectorExperimentResponse {
+    code: u16,
+    class: crate::ResponseClass,
+    segment_number: Option<u16>,
+    text: String,
+}
+
+#[cfg(feature = "tan-medium-selector-experiment")]
+impl TanMediumSelectorExperimentResponse {
+    fn from_response(response: &BankResponse) -> Self {
+        Self {
+            code: response.code(),
+            class: response.class(),
+            segment_number: response.segment_number(),
+            text: response.text().to_owned(),
+        }
+    }
+
+    pub fn code(&self) -> u16 {
+        self.code
+    }
+
+    pub fn class(&self) -> crate::ResponseClass {
+        self.class
+    }
+
+    pub fn segment_number(&self) -> Option<u16> {
+        self.segment_number
+    }
+
+    /// Institution-authored response text from the experimental initialization.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+#[cfg(feature = "tan-medium-selector-experiment")]
+impl std::fmt::Debug for TanMediumSelectorExperimentResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TanMediumSelectorExperimentResponse")
+            .field("code", &self.code)
+            .field("class", &self.class)
+            .field("segment_number", &self.segment_number)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Result of a personalized dialog initialization.
 pub enum Initialization {
     Connected,
@@ -308,6 +418,31 @@ impl Client {
             transport.send(request).map_err(Error::from)
         })?;
         Ok(self.engine.tan_media())
+    }
+
+    /// Runs one owner-attended experiment for a contradictory unnamed TAN medium.
+    ///
+    /// This method exists only with the non-default
+    /// `tan-medium-selector-experiment` feature. It is not reachable from
+    /// [`Self::initialize`] or any supported operation. The caller must first
+    /// complete TAN-media discovery and receive
+    /// [`crate::Limitation::TanMediumUnavailable`].
+    ///
+    /// Exactly one personalized initialization is sent. No business operation,
+    /// retry, TAN submission, or continuation poll is performed. An opened
+    /// dialog is closed exactly once with HKEND before this method returns.
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    pub fn experiment_tan_medium_selector_initialization(
+        &mut self,
+        variant: TanMediumSelectorExperimentVariant,
+        now: NaiveDateTime,
+    ) -> Result<TanMediumSelectorExperimentResult, Error> {
+        let Self {
+            engine, transport, ..
+        } = self;
+        experiment_tan_medium_selector_with_send(engine, variant, now, |request| {
+            transport.send(request).map_err(Error::from)
+        })
     }
 
     /// Opens the personalized dialog used for subsequent supported operations.
@@ -1090,6 +1225,40 @@ fn discover_tan_media_with_send(
     discovery
 }
 
+#[cfg(feature = "tan-medium-selector-experiment")]
+fn experiment_tan_medium_selector_with_send(
+    engine: &mut Engine,
+    variant: TanMediumSelectorExperimentVariant,
+    now: NaiveDateTime,
+    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
+) -> Result<TanMediumSelectorExperimentResult, Error> {
+    let request = engine.tan_medium_selector_experiment_request(variant, now.date(), now.time())?;
+    let response = send(&request).inspect_err(|_error| {
+        engine.abort_dialog();
+    })?;
+    let initialization_opened =
+        engine.accept_tan_medium_selector_experiment_initialization(&response)?;
+    let responses = engine
+        .last_responses()
+        .iter()
+        .map(TanMediumSelectorExperimentResponse::from_response)
+        .collect();
+
+    if initialization_opened {
+        let request = engine.termination_request(now.date(), now.time())?;
+        let response = send(&request).inspect_err(|_error| {
+            engine.abort_dialog();
+        })?;
+        engine.accept_termination(&response)?;
+    }
+
+    Ok(TanMediumSelectorExperimentResult::new(
+        variant,
+        initialization_opened,
+        responses,
+    ))
+}
+
 fn map_balance(result: BalanceResult) -> Result<BalanceRequest, Error> {
     Ok(match result {
         BalanceResult::Complete(balance) => BalanceRequest::Complete(balance),
@@ -1151,6 +1320,13 @@ mod tests {
         assert_send::<SecuritiesTransactionContinuation>();
         assert_send::<CreditCardTransactionContinuation>();
         assert_send::<CreditCardBalanceContinuation>();
+
+        #[cfg(feature = "tan-medium-selector-experiment")]
+        {
+            assert_send::<TanMediumSelectorExperimentVariant>();
+            assert_send::<TanMediumSelectorExperimentResult>();
+            assert_send::<TanMediumSelectorExperimentResponse>();
+        }
     }
 
     fn synchronization_engine() -> Engine {
@@ -1554,6 +1730,7 @@ mod tests {
                     assert_eq!(facts.advertised_versions(), [media_version]);
                     assert_eq!(facts.selected_version(), media_version);
                     assert_eq!(facts.discovered_medium_count(), Some(1));
+                    assert_eq!(facts.tan_usage_option(), Some(1));
                     let request = facts.hktab_request().unwrap();
                     assert_eq!(request.version(), media_version);
                     assert_eq!(request.medium_type(), 0);
@@ -1688,6 +1865,201 @@ mod tests {
                 }
             }
         }
+    }
+
+    // PIN/TAN 2020 B.5.1/B.5.2 makes HKTAN DE 12 mandatory for the
+    // contradictory fixture's HITANS values. B.4.3.1.3 authorizes a filler
+    // only during HKTAB discovery, not this ordinary selected-method
+    // initialization. These two wire shapes are owner-authorized,
+    // non-production experiments and are asserted independently.
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    #[test]
+    fn tan_medium_selector_experiment_is_single_shot_and_closes_once() {
+        for (variant, expected_hktan) in [
+            (
+                TanMediumSelectorExperimentVariant::Omitted,
+                b"HKTAN:5:6+4+HKIDN++++++++'".as_slice(),
+            ),
+            (
+                TanMediumSelectorExperimentVariant::Empty,
+                b"HKTAN:5:6+4+HKIDN+++++++++'".as_slice(),
+            ),
+        ] {
+            let discovery_initialization =
+                process_four_hitan_without_hitab_with_requirement(6, 2, 9);
+            let discovery_order = tan_media_operation_response(4, Some("G:1::::::::"));
+            let discovery_termination =
+                secured_response(b"HIRMG:2:2+0100::fictional discovery closed'", 3, 3);
+            let experiment_initialization = secured_response(
+                concat!(
+                    "HIRMG:2:2+0010::fictional experiment opened",
+                    "+1010::fictional experiment notice'",
+                    "HIBPA:3:3:5+99+280:12345678+Fictional Bank+9+1+300'",
+                    "HITAN:4:6:5+4++fictional-reference+fictional challenge'"
+                )
+                .as_bytes(),
+                1,
+                5,
+            );
+            let experiment_termination =
+                secured_response(b"HIRMG:2:2+0100::fictional experiment closed'", 2, 3);
+            let mut client = client_with_state(
+                tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[4, 2]),
+                [
+                    discovery_initialization,
+                    discovery_order,
+                    discovery_termination,
+                    experiment_initialization,
+                    experiment_termination,
+                ],
+            );
+
+            assert!(matches!(
+                client.discover_tan_media(now()),
+                Err(Error::Unsupported(Limitation::TanMediumUnavailable))
+            ));
+            assert_eq!(client.state().bpd_version(), 78);
+
+            let result = client
+                .experiment_tan_medium_selector_initialization(variant, now())
+                .unwrap();
+            assert_eq!(result.variant(), variant);
+            assert!(result.initialization_opened());
+            assert_eq!(
+                result
+                    .responses()
+                    .iter()
+                    .map(|response| (
+                        response.code(),
+                        response.class(),
+                        response.segment_number(),
+                        response.text(),
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (
+                        10,
+                        crate::ResponseClass::Success,
+                        None,
+                        "fictional experiment opened",
+                    ),
+                    (
+                        1010,
+                        crate::ResponseClass::Notice,
+                        None,
+                        "fictional experiment notice",
+                    ),
+                ]
+            );
+            assert_eq!(client.state().bpd_version(), 78);
+            assert_eq!(client.transport.fixture_responses_remaining(), 0);
+
+            let requests = client.transport.fixture_requests();
+            assert_eq!(requests.len(), 5);
+            let experiment = Message::parse(&requests[3]).unwrap();
+            let hktan = experiment
+                .payload_segments()
+                .unwrap()
+                .iter()
+                .find(|segment| segment.header().unwrap().code == b"HKTAN")
+                .cloned()
+                .unwrap();
+            assert_eq!(
+                crate::wire::encode_segments(std::slice::from_ref(&hktan)).unwrap(),
+                expected_hktan
+            );
+            let termination = Message::parse(&requests[4]).unwrap();
+            assert!(
+                termination
+                    .payload_segments()
+                    .unwrap()
+                    .iter()
+                    .any(|segment| {
+                        segment
+                            .header()
+                            .is_some_and(|header| header.code == b"HKEND")
+                    })
+            );
+
+            let rendered = format!("{:?}", result.responses());
+            assert!(!rendered.contains("fictional experiment opened"));
+            assert!(!rendered.contains("fictional experiment notice"));
+            assert!(!rendered.contains("fictional-reference"));
+            assert!(!rendered.contains("fictional challenge"));
+        }
+    }
+
+    // A rejected experimental initialization never opens a dialog, so no
+    // HKEND, retry, business operation, or continuation request is emitted.
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    #[test]
+    fn rejected_tan_medium_selector_experiment_does_not_retry_or_terminate() {
+        let discovery_initialization = process_four_hitan_without_hitab_with_requirement(6, 2, 9);
+        let discovery_order = tan_media_operation_response(4, Some("G:1::::::::"));
+        let discovery_termination =
+            secured_response(b"HIRMG:2:2+0100::fictional discovery closed'", 3, 3);
+        let experiment_rejection = secured_response(
+            concat!(
+                "HIRMG:2:2+9050::fictional experiment rejected",
+                "+9800::fictional dialog ended'"
+            )
+            .as_bytes(),
+            1,
+            3,
+        );
+        let mut client = client_with_state(
+            tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[4, 2]),
+            [
+                discovery_initialization,
+                discovery_order,
+                discovery_termination,
+                experiment_rejection,
+            ],
+        );
+
+        assert!(matches!(
+            client.discover_tan_media(now()),
+            Err(Error::Unsupported(Limitation::TanMediumUnavailable))
+        ));
+        let result = client
+            .experiment_tan_medium_selector_initialization(
+                TanMediumSelectorExperimentVariant::Omitted,
+                now(),
+            )
+            .unwrap();
+
+        assert!(!result.initialization_opened());
+        assert_eq!(
+            result
+                .responses()
+                .iter()
+                .map(TanMediumSelectorExperimentResponse::code)
+                .collect::<Vec<_>>(),
+            [9050, 9800]
+        );
+        assert_eq!(client.transport.fixture_requests().len(), 4);
+        assert_eq!(client.transport.fixture_responses_remaining(), 0);
+    }
+
+    // The feature alone is insufficient: normal clients cannot reach the
+    // experiment until a required-name discovery has retained only unnamed
+    // media and returned TanMediumUnavailable.
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    #[test]
+    fn tan_medium_selector_experiment_requires_the_exact_discovery_precondition() {
+        let mut client = client_with_state(
+            tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[4, 2]),
+            [],
+        );
+
+        assert!(matches!(
+            client.experiment_tan_medium_selector_initialization(
+                TanMediumSelectorExperimentVariant::Omitted,
+                now(),
+            ),
+            Err(Error::InconsistentState)
+        ));
+        assert!(client.transport.fixture_requests().is_empty());
     }
 
     // The same official sections require a HITAB response even when its

@@ -14,6 +14,9 @@ default = []
 # Temporary, owner-attended live diagnostics. Never enable this for normal consumers.
 # Remove after live verification of the three target banks is complete.
 development-diagnostics = []
+# Owner-attended, single-shot interoperability experiment. This is not a
+# supported protocol path and must never be enabled in normal consumers.
+tan-medium-selector-experiment = ["development-diagnostics"]
 # Internal harness entry points for the separate owner-run fuzz crate.
 fuzzing = []
 

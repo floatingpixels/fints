@@ -361,6 +361,19 @@ impl Response {
     }
 
     #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_tan_usage_option(
+        &self,
+        expected_version: u16,
+        expected_reference: Option<u16>,
+    ) -> Option<u8> {
+        parameters::development_tan_usage_option(
+            &self.segments,
+            expected_version,
+            expected_reference,
+        )
+    }
+
+    #[cfg(feature = "development-diagnostics")]
     pub(crate) fn development_segment_facts(&self) -> Vec<ReceivedSegmentFact> {
         self.segments
             .iter()

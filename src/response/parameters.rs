@@ -465,6 +465,28 @@ pub(super) fn tan_media(
     Ok(Some(media))
 }
 
+#[cfg(feature = "development-diagnostics")]
+pub(super) fn development_tan_usage_option(
+    segments: &[Segment],
+    expected_version: u16,
+    expected_reference: Option<u16>,
+) -> Option<u8> {
+    let segment = segments.iter().find(|segment| {
+        segment.header().is_some_and(|header| {
+            header.code == b"HITAB"
+                && header.version == expected_version
+                && expected_reference.is_none_or(|reference| header.reference == Some(reference))
+        })
+    })?;
+    let value = optional_component(segment.elements().get(1)?.components(), 0)?;
+    match value.as_str() {
+        "0" => Some(0),
+        "1" => Some(1),
+        "2" => Some(2),
+        _ => None,
+    }
+}
+
 struct TanMediumLayout {
     name: usize,
     masked_phone: Option<usize>,

@@ -228,6 +228,7 @@ pub struct TanMediaDiscoveryFacts {
     hitans_requirement: Option<HitansMediumRequirementFact>,
     hktab_request: Option<HktabRequestFact>,
     returned_media: Vec<ReturnedTanMediumFact>,
+    tan_usage_option: Option<u8>,
     initialization_hktan_medium_name_supplied: Option<bool>,
 }
 
@@ -249,6 +250,7 @@ impl TanMediaDiscoveryFacts {
             hitans_requirement,
             hktab_request: None,
             returned_media: Vec::new(),
+            tan_usage_option: None,
             initialization_hktan_medium_name_supplied,
         }
     }
@@ -272,6 +274,10 @@ impl TanMediaDiscoveryFacts {
             .iter()
             .map(ReturnedTanMediumFact::from_medium)
             .collect();
+    }
+
+    pub(crate) fn set_tan_usage_option(&mut self, option: Option<u8>) {
+        self.tan_usage_option = option;
     }
 
     pub fn received_segments(&self) -> &[ReceivedSegmentFact] {
@@ -304,6 +310,15 @@ impl TanMediaDiscoveryFacts {
 
     pub fn returned_media(&self) -> &[ReturnedTanMediumFact] {
         &self.returned_media
+    }
+
+    /// HITAB's TAN usage option (`0`, `1`, or `2`), when valid and present.
+    ///
+    /// This generic code describes whether the customer may use all active
+    /// media in parallel, exactly one at a time, or one mobile and one
+    /// generator in parallel. It contains no medium identifier.
+    pub fn tan_usage_option(&self) -> Option<u8> {
+        self.tan_usage_option
     }
 
     /// Whether the process-4 initialization HKTAN occupied its DE 12 medium name.

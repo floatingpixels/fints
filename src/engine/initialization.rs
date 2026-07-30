@@ -61,6 +61,90 @@ impl Engine {
         )
     }
 
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    pub(crate) fn tan_medium_selector_experiment_request(
+        &mut self,
+        variant: crate::client::TanMediumSelectorExperimentVariant,
+        date: NaiveDate,
+        time: NaiveTime,
+    ) -> Result<Vec<u8>, Error> {
+        self.ensure_no_dialog()?;
+        if self.continuation_active {
+            return Err(Error::InconsistentState);
+        }
+        let method = self.selected_method()?.clone();
+        validate_supported_method(&method)?;
+        if !method.medium_name_required
+            || self.state.selected_tan_medium.is_some()
+            || self.tan_media.is_empty()
+            || self.tan_media.iter().any(|medium| medium.name().is_some())
+        {
+            return Err(Error::InconsistentState);
+        }
+        let context = SecurityContext {
+            institute: &self.institute,
+            credentials: &self.credentials,
+            system_id: self.state.system_id.as_deref().unwrap_or("0"),
+            security_function: &method.security_function,
+            profile_version: "2",
+            dialog_id: "0",
+            message_number: 1,
+            date,
+            time,
+        };
+        let medium_name = match variant {
+            crate::client::TanMediumSelectorExperimentVariant::Omitted => None,
+            crate::client::TanMediumSelectorExperimentVariant::Empty => Some(""),
+        };
+        segments::initialization(
+            &context,
+            &self.product,
+            &self.state,
+            Some(&method),
+            "HKIDN",
+            medium_name,
+        )
+    }
+
+    #[cfg(feature = "tan-medium-selector-experiment")]
+    pub(crate) fn accept_tan_medium_selector_experiment_initialization(
+        &mut self,
+        input: &[u8],
+    ) -> Result<bool, Error> {
+        let method = self.selected_method()?.clone();
+        let response = Response::parse(input)?;
+        self.record_responses(&response);
+        if let Some(institute) = response.bpd_institute()?
+            && (institute.country_code != self.institute.country_code
+                || institute.institute_code != self.institute.institute_code)
+        {
+            return Err(Limitation::InstituteMismatch.into());
+        }
+        if response.first_error().is_some() {
+            self.abort_dialog();
+            return Ok(false);
+        }
+        let next_message_number = response
+            .message_number()
+            .checked_add(1)
+            .ok_or(Error::InconsistentState)?;
+        self.dialog = Some(DialogState {
+            id: response.dialog_id().to_owned(),
+            next_message_number,
+            security_function: method.security_function.clone(),
+            profile_version: "2",
+            system_id: self
+                .state
+                .system_id
+                .clone()
+                .unwrap_or_else(|| "0".to_owned()),
+            method: Some(method),
+            anonymous: false,
+        });
+        self.continuation_active = false;
+        Ok(true)
+    }
+
     pub(crate) fn tan_media_initialization_request(
         &mut self,
         date: NaiveDate,
@@ -172,11 +256,15 @@ impl Engine {
         }
         let tan_media = response.tan_media(media_version, None);
         #[cfg(feature = "development-diagnostics")]
-        if let Ok(Some(media)) = &tan_media {
-            self.development_tan_media_discovery
+        {
+            let facts = self
+                .development_tan_media_discovery
                 .as_mut()
-                .expect("TAN-media diagnostics were initialized")
-                .set_discovered_media(media);
+                .expect("TAN-media diagnostics were initialized");
+            facts.set_tan_usage_option(response.development_tan_usage_option(media_version, None));
+            if let Ok(Some(media)) = &tan_media {
+                facts.set_discovered_media(media);
+            }
         }
         let Some(tan_media) = tan_media? else {
             return Ok(TanMediaInitializationResult::OrderRequired);
@@ -248,10 +336,14 @@ impl Engine {
                 field: "HITAB TAN media response",
             })?;
         #[cfg(feature = "development-diagnostics")]
-        self.development_tan_media_discovery
-            .as_mut()
-            .expect("TAN-media diagnostics were initialized")
-            .set_discovered_media(&tan_media);
+        {
+            let facts = self
+                .development_tan_media_discovery
+                .as_mut()
+                .expect("TAN-media diagnostics were initialized");
+            facts.set_tan_usage_option(response.development_tan_usage_option(version, Some(3)));
+            facts.set_discovered_media(&tan_media);
+        }
         let current_method = self.selected_method()?.clone();
         self.store_tan_media(tan_media, &current_method)
     }

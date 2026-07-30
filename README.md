@@ -301,9 +301,29 @@ paste its output into an issue or agent conversation, or enable it in normal con
 The non-default `development-diagnostics` feature exposes initialization decision
 booleans plus TAN-medium-discovery segment/response facts, the HITANS requirement
 code and active-medium count with their field positions, the emitted HKTAB selector
-shape, and returned-medium classification/occupancy booleans for bounded,
-owner-attended interoperability work. It never exposes segment contents, response
-text or parameters, medium names, or generator-card values. Normal consumers must
-leave it disabled; the public API and its storage fields are absent without the feature.
-Remove the feature, `src/development_diagnostics.rs`, and its explicitly marked call
-sites together once live verification of the three target banks is complete.
+shape, HITAB TAN usage option, and returned-medium classification/occupancy booleans
+for bounded, owner-attended interoperability work. It never exposes segment contents,
+response text or parameters, medium names, or generator-card values. Normal consumers
+must leave it disabled; the public API and its storage fields are absent without the
+feature. Remove the feature, `src/development_diagnostics.rs`, and its explicitly
+marked call sites together once live verification of the three target banks is
+complete.
+
+The still narrower `tan-medium-selector-experiment` feature enables one explicitly
+owner-authorized interoperability experiment after normal discovery returns
+`TanMediumUnavailable`. It does not change `initialize`, medium discovery, or any
+supported operation. Run variant A first in a fresh probe process:
+
+```sh
+FINTS_LIVE_PROBE=1 \
+FINTS_TAN_MEDIUM_EXPERIMENT=omitted \
+cargo run --features tan-medium-selector-experiment --example live_probe
+```
+
+Only if variant A fails, repeat in another fresh process with
+`FINTS_TAN_MEDIUM_EXPERIMENT=empty`. Each invocation sends one selected-method
+personalized initialization, no business order, TAN, retry, or continuation, and one
+HKEND only when the initialization opened. Output includes the initialization's
+caller-visible bank texts and therefore remains owner-controlled diagnostic data. A
+successful experiment is deployment evidence only and does not enable that wire shape
+in production.

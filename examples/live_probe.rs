@@ -9,14 +9,29 @@ use std::{
 use chrono::{Local, NaiveDateTime};
 use encoding_rs::mem::decode_latin1;
 use fints::{
-    AdvertisedCapabilitySnapshot, BalanceRequest, Client, ContinuationKind, Credentials,
-    CreditCardBalanceRequest, CreditCardTransactionRequest, DepotPositionRequest, Initialization,
-    InstituteId, OperationCapabilitySnapshot, ProductIdentity, ReusableState,
+    AdvertisedCapabilitySnapshot, BalanceRequest, BankResponse, Client, ContinuationKind,
+    Credentials, CreditCardBalanceRequest, CreditCardTransactionRequest, DepotPositionRequest,
+    Initialization, InstituteId, OperationCapabilitySnapshot, ProductIdentity, ReusableState,
     SecuritiesTransactionRequest, Synchronization, Tan, TanMethod, TraceDirection, TraceEvent,
     TraceSink,
 };
+#[cfg(feature = "tan-medium-selector-experiment")]
+use fints::{Error as FintsError, Limitation, TanMediumSelectorExperimentVariant};
 
 type ProbeResult<T> = Result<T, Box<dyn Error>>;
+
+#[derive(Clone, Copy)]
+enum ProbeOutcome {
+    Connected,
+    ExperimentComplete,
+}
+
+#[derive(Clone, Copy)]
+enum MethodSelectionOutcome {
+    Continue,
+    #[cfg_attr(not(feature = "tan-medium-selector-experiment"), allow(dead_code))]
+    ExperimentComplete,
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -54,6 +69,10 @@ fn run() -> ProbeResult<()> {
     )?;
 
     let session = probe_session(&mut client);
+    if matches!(session, Ok(ProbeOutcome::ExperimentComplete)) {
+        println!("probe status=experiment_complete");
+        return Ok(());
+    }
     let termination = client.terminate(now());
     print_bank_responses(&client, "terminate");
     session?;
@@ -62,8 +81,11 @@ fn run() -> ProbeResult<()> {
     Ok(())
 }
 
-fn probe_session(client: &mut Client) -> ProbeResult<()> {
-    initialize_until_connected(client)?;
+fn probe_session(client: &mut Client) -> ProbeResult<ProbeOutcome> {
+    let outcome = initialize_until_connected(client)?;
+    if matches!(outcome, ProbeOutcome::ExperimentComplete) {
+        return Ok(outcome);
+    }
     print_capabilities(&client.advertised_capabilities());
 
     if let Some(account) = account_flag("FINTS_PROBE_BALANCE_ACCOUNT")? {
@@ -81,10 +103,10 @@ fn probe_session(client: &mut Client) -> ProbeResult<()> {
     if let Some(account) = account_flag("FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT")? {
         probe_card_transactions(client, account)?;
     }
-    Ok(())
+    Ok(ProbeOutcome::Connected)
 }
 
-fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
+fn initialize_until_connected(client: &mut Client) -> ProbeResult<ProbeOutcome> {
     let mut synchronized = false;
     for _ in 0..3 {
         let initialization = client.initialize(now());
@@ -93,11 +115,16 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
             Initialization::Connected => {
                 print_tan_methods(client);
                 print_tan_media(client);
-                return Ok(());
+                return Ok(ProbeOutcome::Connected);
             }
             Initialization::ChooseTanMethod => {
                 print_tan_methods(client);
-                choose_tan_method(client)?;
+                if matches!(
+                    choose_tan_method(client)?,
+                    MethodSelectionOutcome::ExperimentComplete
+                ) {
+                    return Ok(ProbeOutcome::ExperimentComplete);
+                }
             }
             Initialization::RefreshParameters => {
                 let refresh = client.refresh_parameters(now());
@@ -105,7 +132,12 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
                 refresh?;
                 print_capabilities(&client.advertised_capabilities());
                 print_tan_methods(client);
-                choose_tan_method(client)?;
+                if matches!(
+                    choose_tan_method(client)?,
+                    MethodSelectionOutcome::ExperimentComplete
+                ) {
+                    return Ok(ProbeOutcome::ExperimentComplete);
+                }
             }
             Initialization::Challenge(continuation) => {
                 print_challenge(
@@ -117,7 +149,7 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
                 let result = client.submit_initialization_tan(*continuation, &tan, now());
                 print_bank_responses(client, "submit_initialization_tan");
                 match result? {
-                    Initialization::Connected => return Ok(()),
+                    Initialization::Connected => return Ok(ProbeOutcome::Connected),
                     Initialization::Challenge(_) => {
                         return Err(input_error(
                             "the probe handles one typed TAN submission per initialization",
@@ -145,7 +177,7 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
     ))
 }
 
-fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
+fn choose_tan_method(client: &mut Client) -> ProbeResult<MethodSelectionOutcome> {
     let allowed = client.allowed_tan_methods();
     let candidates = client
         .tan_methods()
@@ -172,6 +204,14 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
             "tan_media_versions advertised={:?} selected=none",
             client.advertised_tan_media_versions()
         );
+        #[cfg(feature = "tan-medium-selector-experiment")]
+        let experiment_variant = requested_experiment_variant()?;
+        #[cfg(not(feature = "tan-medium-selector-experiment"))]
+        if env::var_os("FINTS_TAN_MEDIUM_EXPERIMENT").is_some() {
+            return Err(input_error(
+                "FINTS_TAN_MEDIUM_EXPERIMENT requires --features tan-medium-selector-experiment",
+            ));
+        }
         let discovery = client.discover_tan_media(now()).map(|_| ());
         print_bank_responses(client, "discover_tan_media");
         println!(
@@ -184,6 +224,30 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
         );
         #[cfg(feature = "development-diagnostics")]
         print_tan_media_discovery_facts(client);
+        #[cfg(feature = "tan-medium-selector-experiment")]
+        if let (Err(FintsError::Unsupported(Limitation::TanMediumUnavailable)), Some(variant)) =
+            (&discovery, experiment_variant)
+        {
+            let result = client.experiment_tan_medium_selector_initialization(variant, now())?;
+            println!(
+                "tan_medium_experiment variant={:?} initialization_opened={}",
+                result.variant(),
+                result.initialization_opened()
+            );
+            for response in result.responses() {
+                println!(
+                    "bank_response operation=tan_medium_experiment code={:04} class={:?} segment={} text={}",
+                    response.code(),
+                    response.class(),
+                    response
+                        .segment_number()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "none".to_owned()),
+                    response.text()
+                );
+            }
+            return Ok(MethodSelectionOutcome::ExperimentComplete);
+        }
         discovery?;
         print_tan_media(client);
         let names = client
@@ -200,7 +264,21 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
             selected_index("FINTS_TAN_MEDIUM_INDEX", "TAN medium index", names.len())?;
         client.select_tan_medium(&names[selected_index])?;
     }
-    Ok(())
+    Ok(MethodSelectionOutcome::Continue)
+}
+
+#[cfg(feature = "tan-medium-selector-experiment")]
+fn requested_experiment_variant() -> ProbeResult<Option<TanMediumSelectorExperimentVariant>> {
+    let Some(value) = env::var_os("FINTS_TAN_MEDIUM_EXPERIMENT") else {
+        return Ok(None);
+    };
+    match value.to_str() {
+        Some("omitted") => Ok(Some(TanMediumSelectorExperimentVariant::Omitted)),
+        Some("empty") => Ok(Some(TanMediumSelectorExperimentVariant::Empty)),
+        _ => Err(input_error(
+            "FINTS_TAN_MEDIUM_EXPERIMENT must be omitted or empty",
+        )),
+    }
 }
 
 fn select_method<'a>(methods: &'a [&TanMethod]) -> ProbeResult<&'a TanMethod> {
@@ -502,10 +580,14 @@ fn print_tan_media_discovery_facts(client: &Client) {
         );
     }
     println!(
-        "tan_media_initialization hktan_medium_name_supplied={}",
+        "tan_media_initialization hktan_medium_name_supplied={} tan_usage_option={}",
         facts
             .initialization_hktan_medium_name_supplied()
             .map(|supplied| supplied.to_string())
+            .unwrap_or_else(|| "unknown".to_owned()),
+        facts
+            .tan_usage_option()
+            .map(|option| option.to_string())
             .unwrap_or_else(|| "unknown".to_owned())
     );
     for (index, medium) in facts.returned_media().iter().enumerate() {
@@ -521,7 +603,11 @@ fn print_tan_media_discovery_facts(client: &Client) {
 }
 
 fn print_bank_responses(client: &Client, operation: &str) {
-    for response in client.last_responses() {
+    print_responses(client.last_responses(), operation);
+}
+
+fn print_responses(responses: &[BankResponse], operation: &str) {
+    for response in responses {
         println!(
             "bank_response operation={operation} code={:04} class={:?} segment={} data_element={} text={} parameters={}",
             response.code(),
