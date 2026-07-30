@@ -175,6 +175,10 @@ impl TanMethod {
         &self.display_name
     }
 
+    /// Whether HKTAN requires a selected medium name for this method.
+    ///
+    /// PIN/TAN makes this effective only when the requirement code is `2` and
+    /// the institution advertises more than one active medium.
     pub fn medium_name_required(&self) -> bool {
         self.medium_name_required
     }

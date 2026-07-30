@@ -41,15 +41,18 @@ A new connection follows this bounded sequence:
    If the institution terminates that anonymous BPD-zero request without complete BPD,
    the crate returns `Limitation::TanMethodParametersUnavailable`; there is no
    specification-defined alternate bootstrap or automatic retry.
-3. Call `select_tan_method` for that intersection. If the method requires a named
-   medium, call `discover_tan_media` and
+3. Call `select_tan_method` for that intersection. `medium_name_required()` is true
+   only when HITANS advertises requirement code 2 and more than one active medium.
+   If the method requires a named medium, call `discover_tan_media` and
    `select_tan_medium`. A missing HITAB response fails as a typed missing value;
    an empty or non-selectable required list returns
    `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
    closed exactly once. A process-4 HITAN may acknowledge the embedded HKTAN but
    does not replace HITAB or create another media-discovery continuation. A
-   gateway that omits HITAB cannot complete required-medium selection under the
-   current official contract.
+   gateway that advertises only legacy HITABS versions and omits HITAB cannot
+   complete required-medium selection under the current supported contract.
+   UPD is not a prerequisite for this first-access flow, and the HKTAB filler is
+   not a substitute for a real medium in an ordinary initialization.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.

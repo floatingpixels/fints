@@ -857,7 +857,9 @@ fn tan_medium_discovery_uses_the_special_hktan_six_and_seven_shapes() {
 
 // PIN/TAN B.4.3.1.3 requires HITAB after successful PIN validation; C.3.1.1
 // permits its repeated list to be empty only when no medium is available.
-// A method whose advertised name is required cannot continue in either state.
+// There is no UPD-first or ordinary-initialization bootstrap around this
+// first-access flow. A method whose effective advertised name is required
+// cannot continue in either state.
 #[test]
 fn required_tan_medium_rejects_missing_and_empty_hitab_without_closing_the_dialog() {
     let mut missing = engine_with_method(TanProcess::ProcessVariantTwo);

@@ -761,9 +761,25 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
             structure: "cut decoupled HITANS method parameters",
         });
     }
+    // PIN/TAN 2020 DD, "Verfahrensparameter Zwei-Schritt-Verfahren" 6/7:
+    // field 19 is the name-requirement code and optional field 21 is the
+    // number of active media. HKTAN 6/7 DE 12 is mandatory only when the
+    // former is 2 and the latter is greater than one.
+    let active_media_count = optional_component(components, 20)
+        .map(|value| {
+            if value.len() != 1 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(Error::InvalidValue {
+                    field: "active TAN media count",
+                });
+            }
+            value.parse::<u8>().map_err(|_| Error::InvalidValue {
+                field: "active TAN media count",
+            })
+        })
+        .transpose()?;
     let medium_name_required = match component(components, 18, "TAN medium requirement")?.as_str() {
         "0" | "1" => false,
-        "2" => true,
+        "2" => active_media_count.is_some_and(|count| count > 1),
         _ => {
             return Err(Error::InvalidValue {
                 field: "TAN medium requirement",

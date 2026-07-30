@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Applied the complete HITANS 6/7 TAN-medium requirement and
+  documented that UPD-zero adds no pre-HKTAB bootstrap; mandatory missing HITAB
+  remains a typed failure without a common delivered media version.
+
 - **2026-07-30** — Preserved TAN-media discovery bank responses across internal
   HKEND while retaining strict missing-HITAB handling; documented 1040 and
   unpublished 0940 without assigning either a new control-flow meaning.

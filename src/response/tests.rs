@@ -2280,6 +2280,71 @@ fn typed_method(security_function: &str, technical_id: &str) -> Vec<String> {
     .to_vec()
 }
 
+// FinTS 3.0 PIN/TAN 2020-07-10 DD, "Verfahrensparameter
+// Zwei-Schritt-Verfahren" 6/7 fields 19 and 21, plus B.5.1/B.5.2 HKTAN
+// DE 12: a medium name is mandatory only for requirement code 2 together
+// with more than one advertised active medium. The same positions govern
+// HKTAN 6 and 7; an absent optional count does not invent a requirement.
+#[test]
+fn hitans_six_and_seven_apply_the_complete_medium_name_requirement() {
+    for version in [6, 7] {
+        for (requirement, active_count, expected) in [
+            ("0", Some("2"), false),
+            ("1", Some("2"), false),
+            ("2", Some("2"), true),
+            ("2", Some("1"), false),
+            ("2", None, false),
+        ] {
+            let mut method = typed_method("942", "fictional-medium-condition");
+            method[18] = requirement.to_owned();
+            method[20] = active_count.unwrap_or_default().to_owned();
+            if version == 6 {
+                method.truncate(if active_count.is_some() { 21 } else { 20 });
+            } else if active_count.is_none() {
+                method.truncate(20);
+            }
+            let fixture = message(
+                &[
+                    "HIRMG:2:2+0010::accepted".into(),
+                    "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+                    format!("HITANS:4:{version}:3+1+1+0+N:N:0:{}", method.join(":")),
+                ],
+                "dialog1",
+                1,
+            );
+            let mut state = ReusableState::new();
+
+            Response::parse(&fixture)
+                .unwrap()
+                .apply_parameters(&mut state)
+                .unwrap();
+
+            assert_eq!(state.tan_methods()[0].medium_name_required(), expected);
+        }
+    }
+
+    let mut malformed_method = typed_method("942", "fictional-malformed-count");
+    malformed_method[18] = "2".to_owned();
+    malformed_method[20] = "10".to_owned();
+    let malformed = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+7+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HITANS:4:7:3+1+1+0+N:N:0:{}", malformed_method.join(":")),
+        ],
+        "dialog1",
+        1,
+    );
+    assert!(matches!(
+        Response::parse(&malformed)
+            .unwrap()
+            .apply_parameters(&mut ReusableState::new()),
+        Err(Error::InvalidValue {
+            field: "active TAN media count"
+        })
+    ));
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, B.8.2 permits up to 98 repeated
 // two-step-method parameter blocks in one HITANS 7 DEG.
 #[test]

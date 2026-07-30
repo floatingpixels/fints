@@ -1421,8 +1421,11 @@ mod tests {
     }
 
     // The same official sections require a HITAB response even when its
-    // optional list is empty. A missing HITAB remains distinguishable after
-    // the required HKEND response replaces last_responses.
+    // optional list is empty. Formals C.10 ties HITABS advertisements to the
+    // corresponding HKTAB/HITAB version; advertising only legacy 2/4 does not
+    // authorize inventing a version-5 response or a UPD-first bootstrap. A
+    // missing HITAB remains distinguishable after the required HKEND response
+    // replaces last_responses.
     #[test]
     fn missing_hitab_is_typed_and_still_terminates_once_for_both_hktan_versions() {
         for (process, version) in [

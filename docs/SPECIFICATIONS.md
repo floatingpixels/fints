@@ -200,10 +200,20 @@ access date for each source below is 2026-07-28.
   B.4.3.1.3 requires medium discovery to initialize with HKTAN process 4 and
   `Segmentkennung=HKTAB`, with the supplied medium-name filler ignored, then
   return HITAB after successful PIN validation and close the dialog with HKEND.
+  It defines this as the first dialog for first use of a method and does not
+  require UPD acquisition or an ordinary selected-method initialization first;
+  the filler exception applies only to this HKTAB initialization.
   C.3.1.1 defines HKTAB/HITAB 5 and permits an empty repeated medium list only
-  when no medium is available. The HKTAN 6 and 7 Data Dictionary entries place
-  the optional medium name at DE 12; correction T33 permits `Segmentkennung`
-  during process 4 for both versions. The corresponding HITAN 6 and 7 entries
+  when no medium is available. Archived E.2.1.2 and E.2.1.4 define matching
+  HITABS/HKTAB/HITAB version triples for legacy versions 2 and 4; Formals C.10
+  makes a BPD parameter-segment version the advertisement of that same
+  operation version and calls for the highest common version. The HKTAN 6 and 7
+  entries place the optional medium name at DE 12. Their shared method-parameter
+  DD places `Bezeichnung des TAN-Mediums erforderlich` at field 19 and `Anzahl
+  unterstützter aktiver TAN-Medien` at optional field 21; DE 12 is mandatory
+  only when field 19 is `2` and field 21 is greater than one. Correction T33
+  permits `Segmentkennung` during process 4 for both versions. The
+  corresponding HITAN 6 and 7 entries
   permit a process-4 institute response and require its order reference for that
   process; their `noref`/challenge filler rule records that no TAN is required.
   Neither that HITAN nor the correction register defines a continuation or
@@ -216,9 +226,14 @@ access date for each source below is 2026-07-28.
   HIPINS/HITANS interpretation, and HKTAB/HITAB 5 media discovery. The
   medium-discovery sections authorize requiring HITAB after an accepted request
   and returning a typed limitation when an advertised required name is not
-  selectable. A process-4 HITAN is validated as the response to the embedded
+  selectable. They do not authorize using `noref` as a selected medium in an
+  ordinary initialization or acquiring UPD before first-access HKTAB discovery.
+  A process-4 HITAN is validated as the response to the embedded
   HKTAN but does not substitute for HITAB or authorize a media-discovery
-  continuation. B.4.3.1 and
+  continuation. An institution that advertises only HITABS 2/4 and returns no
+  HITAB supplies neither the version-5 response implemented by this crate nor
+  any other specification-defined bootstrap; the crate retains its typed
+  missing-HITAB failure. B.4.3.1 and
   F.2.5 additionally authorize closing an open function-999 discovery with a
   profile-1, security-function-999 HKEND using the active dialog state. It also
   authorizes treating the specification-defined function-999
