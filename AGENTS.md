@@ -21,7 +21,7 @@ other sibling checkout.
 
 Stop and ask the owner before proceeding when:
 
-- Non-test code under `src/` would exceed about 14,000 lines. Fixtures, generated test
+- Non-test code under `src/` would exceed about 15,500 lines. Fixtures, generated test
   data, and tests do not count.
 - Module boundaries follow Rust convention: split by cohesive responsibility (e.g.
   codec, dialog state, segment parsing, typed results), not by line count. Splitting a

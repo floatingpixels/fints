@@ -101,22 +101,44 @@ access date for each source below is 2026-07-28.
   advertisement by parameter-segment version), and VII.2.2
   (HKSAL/HISAL/HISALS version 5 request, response, optional fields, and
   parameter segment without operation-specific parameters).
+- **Depot-position-version-5 sections:** II.5.3.3 (`ktv` national
+  account), II.7.3 (maximum entries and opaque continuation), II.8.4
+  (response version matches request version), IV.6 (legacy business-parameter
+  envelope), VII.4.3.1 (HKWPD/HIWPD/HIWPDS versions 4 and 5), and IX.2.4
+  (MT535 `Statement of Holdings`, SWIFT Standards Release Guide October
+  1998). HKWPD 5 has the same depot, optional currency, price-quality,
+  maximum-entry, and continuation fields as HKWPD 6. HIWPD 5 explicitly
+  carries MT535; version 4 instead carries the unsupported MT571 format.
+  HIWPDS 5 predates the generic security-class element, so its three-field
+  operation parameter DEG is segment element 3 rather than HIWPDS 6 element
+  4. The MT535 `:97A::SAFE//` identity remains institute code followed by
+  depot account number.
 - **Retained-BPD sections:** III.3.2.2 (BPD are returned when the supplied
   version differs and, when returned, must be complete) and IV.1-IV.2
   (changed BPD become immediately active and receive a new BPD version).
 - **Apply alongside:** FinTS 3.0 Formals C.3.2.2 and D.2, correction P26,
   FinTS 3.0 PIN/TAN including T31, and the current Messages definitions for
   the later HKSAL/HISAL/HISALS versions 6-8. The current change register's
-  G102 adds version 8 without changing the archived version-5 contract.
+  G102 adds version 8 without changing the archived balance-version-5
+  contract. For depot positions, apply FinTS Formals B.6 pagination, PIN/TAN
+  TAN-requirement handling, the current return-code register, and Messages
+  2022 HKWPD/HIWPD/HIWPDS 6. HBCI 2.2 IX.2.4 and DK Anlage 3 v3.9 chapter
+  4.3 independently specify the same SRG-1998 MT535 structure; no current
+  correction changes HKWPD/HIWPD/HIWPDS 5.
 - **Authorizes:** advertised HKSAL/HISAL/HISALS 5 using its exact national
   account request and legacy response layout, mapped into the existing typed
   balance without fabricating absent optional values. It also authorizes
   retaining complete same-version BPD and atomically replacing all retained
-  capabilities only when a changed complete BPD version is supplied.
-- **Access/redistribution:** accessed 2026-07-29. The PDF grants implementation
-  use and permits only free, unchanged redistribution with all notices and
-  conditions retained. No archive or PDF is committed; owner approval remains
-  required before redistribution.
+  capabilities only when a changed complete BPD version is supplied. For Gate
+  4 it authorizes advertised HKWPD/HIWPD/HIWPDS 5 using the exact legacy
+  parameter envelope and national-account request while reusing the existing
+  bounded SRG-1998 MT535 parser. Version 4 remains unsupported because its
+  binary payload is MT571, not MT535.
+- **Access/redistribution:** accessed 2026-07-29 and re-checked against the
+  official archive and current correction register on 2026-07-30. The PDF
+  grants implementation use and permits only free, unchanged redistribution
+  with all notices and conditions retained. No archive or PDF is committed;
+  owner approval remains required before redistribution.
 
 ### ZKA — HBCI 2.2 Erweiterung PIN/TAN
 
