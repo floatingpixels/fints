@@ -29,6 +29,18 @@ pub enum PollingMode {
     Automatic,
 }
 
+/// Last request stage reached by [`Client::initialize`].
+///
+/// This process-memory diagnostic contains no wire data, credentials, identifiers, or
+/// response values and is therefore safe for callers to include in redacted logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitializationStage {
+    InitialDiscovery,
+    AnonymousBpdRefresh,
+    AnonymousTermination,
+    RepeatedDiscovery,
+}
+
 /// Result of a personalized dialog initialization.
 pub enum Initialization {
     Connected,
@@ -130,6 +142,7 @@ pub struct CreditCardBalanceContinuation {
 pub struct Client {
     engine: Engine,
     transport: Transport,
+    last_initialization_stage: Option<InitializationStage>,
 }
 
 impl Client {
@@ -143,6 +156,7 @@ impl Client {
         Ok(Self {
             engine: Engine::new(institute, product, credentials, state)?,
             transport: Transport::new(endpoint)?,
+            last_initialization_stage: None,
         })
     }
 
@@ -177,6 +191,11 @@ impl Client {
         self.engine.last_responses()
     }
 
+    /// Last request stage reached by [`Client::initialize`] in this process.
+    pub fn last_initialization_stage(&self) -> Option<InitializationStage> {
+        self.last_initialization_stage
+    }
+
     pub fn select_tan_method(&mut self, security_function: &str) -> Result<(), Error> {
         self.engine.choose_tan_method(security_function)
     }
@@ -187,15 +206,20 @@ impl Client {
 
     /// Refreshes anonymous BPD and always closes the anonymous dialog.
     pub fn refresh_parameters(&mut self, now: NaiveDateTime) -> Result<(), Error> {
-        let Self { engine, transport } = self;
-        refresh_parameters_with_send(engine, now, |request| {
+        let Self {
+            engine, transport, ..
+        } = self;
+        let mut stage = InitializationStage::AnonymousBpdRefresh;
+        refresh_parameters_with_send(engine, now, &mut stage, |request| {
             transport.send(request).map_err(Error::from)
         })
     }
 
     /// Obtains a new assigned system ID and closes the synchronization dialog.
     pub fn synchronize(&mut self, now: NaiveDateTime) -> Result<Synchronization, Error> {
-        let Self { engine, transport } = self;
+        let Self {
+            engine, transport, ..
+        } = self;
         synchronize_with_send(engine, now, |request| {
             transport.send(request).map_err(Error::from)
         })
@@ -220,8 +244,16 @@ impl Client {
     /// BPD-zero refresh and one fresh discovery attempt. A repeated omission fails
     /// explicitly and is never retried in a loop.
     pub fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
-        let Self { engine, transport } = self;
-        initialize_with_send(engine, now, |request| {
+        self.last_initialization_stage = Some(InitializationStage::InitialDiscovery);
+        let Self {
+            engine,
+            transport,
+            last_initialization_stage,
+        } = self;
+        let stage = last_initialization_stage
+            .as_mut()
+            .expect("initialization stage was set");
+        initialize_with_send(engine, now, stage, |request| {
             transport.send(request).map_err(Error::from)
         })
     }
@@ -834,6 +866,7 @@ fn map_initialization(result: InitializationResult) -> Result<Initialization, Er
 fn initialize_with_send(
     engine: &mut Engine,
     now: NaiveDateTime,
+    stage: &mut InitializationStage,
     mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<Initialization, Error> {
     let result = request_initialization_with_send(engine, now, &mut send)?;
@@ -841,7 +874,8 @@ fn initialize_with_send(
         // PIN/TAN B.4.3.1 requires current anonymous BPD before function-999
         // discovery. Repair the missing prerequisite once, close that anonymous
         // dialog exactly once, and repeat discovery from a fresh dialog.
-        refresh_parameters_with_send(engine, now, &mut send)?;
+        refresh_parameters_with_send(engine, now, stage, &mut send)?;
+        *stage = InitializationStage::RepeatedDiscovery;
         let repeated = match request_initialization_with_send(engine, now, &mut send) {
             Err(Error::MissingValue {
                 field: "3920 TAN method response",
@@ -877,13 +911,16 @@ fn request_initialization_with_send(
 fn refresh_parameters_with_send(
     engine: &mut Engine,
     now: NaiveDateTime,
+    stage: &mut InitializationStage,
     mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<(), Error> {
+    *stage = InitializationStage::AnonymousBpdRefresh;
     let request = engine.anonymous_initialization_request()?;
     let response = send(&request).inspect_err(|_error| {
         engine.abort_dialog();
     })?;
     engine.accept_anonymous_initialization(&response)?;
+    *stage = InitializationStage::AnonymousTermination;
     let request = engine.termination_request(now.date(), now.time())?;
     let response = send(&request).inspect_err(|_error| {
         engine.abort_dialog();
@@ -1014,6 +1051,7 @@ mod tests {
             )
             .unwrap(),
             transport: Transport::fixture(responses),
+            last_initialization_stage: None,
         }
     }
 
@@ -1125,6 +1163,10 @@ mod tests {
             client.initialize(now()).unwrap(),
             Initialization::ChooseTanMethod
         ));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::RepeatedDiscovery)
+        );
         assert_eq!(client.state().bpd_version(), 58);
         assert_eq!(client.tan_methods().len(), 1);
         assert_eq!(client.tan_methods()[0].security_function(), "942");
@@ -1188,6 +1230,10 @@ mod tests {
         let mut client = fresh_client(responses);
 
         let error = initialization_error(client.initialize(now()));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::RepeatedDiscovery)
+        );
         assert!(matches!(
             error,
             Error::MissingValue {
@@ -1207,6 +1253,29 @@ mod tests {
         );
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("fictional"));
+        assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
+    }
+
+    #[test]
+    fn initialization_stage_identifies_anonymous_refresh_failure() {
+        let mut client = fresh_client([
+            global_missing_3920_response(),
+            global_missing_3920_response(),
+        ]);
+
+        let error = initialization_error(client.initialize(now()));
+
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::AnonymousBpdRefresh)
+        );
+        assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
+        assert_eq!(client.transport.fixture_requests().len(), 2);
+        assert_eq!(
+            format!("{:?}", client.last_initialization_stage()),
+            "Some(AnonymousBpdRefresh)"
+        );
+        assert!(!format!("{error:?}").contains("fictional"));
         assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
     }
 
@@ -1256,6 +1325,10 @@ mod tests {
         );
         let mut client = fresh_client([fatal]);
         let error = initialization_error(client.initialize(now()));
+        assert_eq!(
+            client.last_initialization_stage(),
+            Some(InitializationStage::InitialDiscovery)
+        );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(client.transport.fixture_requests().len(), 1);
         assert!(!format!("{error:?}").contains("fictional"));
@@ -1264,8 +1337,13 @@ mod tests {
         let mut selected = Client {
             engine: synchronization_engine(),
             transport: Transport::fixture([global_missing_3920_response()]),
+            last_initialization_stage: None,
         };
         let error = initialization_error(selected.initialize(now()));
+        assert_eq!(
+            selected.last_initialization_stage(),
+            Some(InitializationStage::InitialDiscovery)
+        );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         let requests = selected.transport.fixture_requests();
         assert_eq!(requests.len(), 1);

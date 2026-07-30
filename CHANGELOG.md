@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Exposed the last initialization request stage as a typed, process-memory-only diagnostic for owner-run compatibility checks.
+  The four fixed stage values contain no credentials, identifiers, response values, or wire data; fictional tests cover initial, anonymous-refresh, and rediscovery failures.
+
 - **2026-07-29** — Added one bounded anonymous-BPD repair for the exact global 9050/9800/unpublished-9952 function-999 termination without mandatory 3920.
   The client closes only the anonymous refresh dialog, retries discovery once, and keeps repeated omission or any published authentication error fatal.
   Added fictional end-to-end transport sequencing, method-intersection, placement, retry-bound, and redaction regressions.

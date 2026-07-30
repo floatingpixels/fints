@@ -17,8 +17,8 @@ pub use client::{
     BalanceContinuation, BalanceRequest, BookedTransactionContinuation, BookedTransactionRequest,
     Client, ContinuationKind, CreditCardBalanceContinuation, CreditCardBalanceRequest,
     CreditCardTransactionContinuation, CreditCardTransactionRequest, DepotPositionContinuation,
-    DepotPositionRequest, Initialization, InitializationContinuation, PollingMode,
-    SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
+    DepotPositionRequest, Initialization, InitializationContinuation, InitializationStage,
+    PollingMode, SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
     SynchronizationContinuation,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
