@@ -152,6 +152,10 @@ pub struct TanMethod {
     pub(crate) next_poll_delay_seconds: Option<u16>,
     pub(crate) manual_polling_allowed: bool,
     pub(crate) automatic_polling_allowed: bool,
+    #[cfg(feature = "development-diagnostics")]
+    #[serde(skip)]
+    pub(crate) development_medium_requirement:
+        Option<crate::development_diagnostics::HitansMediumRequirementFact>,
 }
 
 impl TanMethod {
@@ -233,6 +237,10 @@ pub struct TanMedium {
     pub(crate) security_function: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) masked_phone: Option<String>,
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) development_card_number_present: bool,
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) development_card_sequence_present: bool,
 }
 
 impl TanMedium {

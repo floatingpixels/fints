@@ -182,6 +182,8 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
                 .map(|version| version.to_string())
                 .unwrap_or_else(|| "none".to_owned())
         );
+        #[cfg(feature = "development-diagnostics")]
+        print_tan_media_discovery_facts(client);
         discovery?;
         print_tan_media(client);
         let names = client
@@ -461,6 +463,59 @@ fn print_tan_media(client: &Client) {
             medium.security_function().unwrap_or("none"),
             medium.name().is_some(),
             medium.masked_phone().is_some()
+        );
+    }
+}
+
+#[cfg(feature = "development-diagnostics")]
+fn print_tan_media_discovery_facts(client: &Client) {
+    let Some(facts) = client.development_tan_media_discovery() else {
+        println!("tan_media_diagnostics available=false");
+        return;
+    };
+    if let Some(requirement) = facts.hitans_requirement() {
+        println!(
+            "tan_media_hitans hktan={} requirement_code={} requirement_field={} requirement_index={} active_count={} active_count_field={} active_count_index={} medium_name_required={}",
+            requirement.hktan_version(),
+            requirement.requirement_code(),
+            requirement.requirement_field_number(),
+            requirement.requirement_component_index(),
+            requirement
+                .active_media_count()
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            requirement.active_media_count_field_number(),
+            requirement.active_media_count_component_index(),
+            requirement.medium_name_required(),
+        );
+    }
+    if let Some(request) = facts.hktab_request() {
+        println!(
+            "tan_media_hktab version={} medium_type={} medium_class={} medium_name_field_present={}",
+            request.version(),
+            request.medium_type(),
+            request
+                .medium_class()
+                .map(|class| format!("{class:?}"))
+                .unwrap_or_else(|| "none".to_owned()),
+            request.medium_name_field_present(),
+        );
+    }
+    println!(
+        "tan_media_initialization hktan_medium_name_supplied={}",
+        facts
+            .initialization_hktan_medium_name_supplied()
+            .map(|supplied| supplied.to_string())
+            .unwrap_or_else(|| "unknown".to_owned())
+    );
+    for (index, medium) in facts.returned_media().iter().enumerate() {
+        println!(
+            "tan_media_hitab index={index} class={:?} status={:?} name_present={} card_number_present={} card_sequence_present={}",
+            medium.class(),
+            medium.status(),
+            medium.name_present(),
+            medium.card_number_present(),
+            medium.card_sequence_present(),
         );
     }
 }

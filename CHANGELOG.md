@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added opt-in structural diagnostics for HITANS 6/7
+  medium requirements, emitted HKTAB selectors, and identifier-free HITAB
+  occupancy facts. TAN-medium protocol behavior is unchanged.
+
 - **2026-07-30** — Applied current BPD after TAN-media initialization when
   deciding HKTAN 6/7 name occupancy. Unnamed HITAB 4 generators remain valid
   only when the method needs no designation; no selector is fabricated.

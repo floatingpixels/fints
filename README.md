@@ -299,10 +299,11 @@ paste its output into an issue or agent conversation, or enable it in normal con
 ### Temporary development diagnostics
 
 The non-default `development-diagnostics` feature exposes initialization decision
-booleans plus TAN-medium-discovery segment code/version and response-code/request-
-segment-reference facts for bounded, owner-attended interoperability work. It never
-exposes segment contents, response text or parameters, or medium names. Normal consumers
-must leave it disabled; the public API and its storage fields are absent without the
-feature.
+booleans plus TAN-medium-discovery segment/response facts, the HITANS requirement
+code and active-medium count with their field positions, the emitted HKTAB selector
+shape, and returned-medium classification/occupancy booleans for bounded,
+owner-attended interoperability work. It never exposes segment contents, response
+text or parameters, medium names, or generator-card values. Normal consumers must
+leave it disabled; the public API and its storage fields are absent without the feature.
 Remove the feature, `src/development_diagnostics.rs`, and its explicitly marked call
 sites together once live verification of the three target banks is complete.

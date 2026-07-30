@@ -1861,6 +1861,8 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         next_poll_delay_seconds: None,
         manual_polling_allowed: false,
         automatic_polling_allowed: false,
+        #[cfg(feature = "development-diagnostics")]
+        development_medium_requirement: None,
     });
 
     let unchanged = message(

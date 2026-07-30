@@ -221,18 +221,23 @@ access date for each source below is 2026-07-28.
   and calls for the highest common version. F.2 separates dialog
   initialization from subsequent order messages, authorizing a same-dialog
   versioned HKTAB order when the process-4 initialization response has not
-  already supplied HITAB. The HKTAN 6 and 7
-  entries place the optional medium name at DE 12. Their shared method-parameter
-  DD places `Bezeichnung des TAN-Mediums erforderlich` at field 19 and `Anzahl
-  unterstützter aktiver TAN-Medien` at optional field 21; DE 12 is mandatory
-  only when field 19 is `2` and field 21 is greater than one. The count describes
-  the method's supported active media; no rule replaces it with the number of
-  records returned for one user by HITAB. In TAN-Medium-Liste 4, component 10 is
-  the only `Bezeichnung des TAN-Mediums`; it is mandatory for class `M` and
-  optional for class `G`. Class-G card number and card sequence do not become
-  HKTAN DE 12 selectors, and neither E.2.1.4 nor the Data Dictionary defines an
-  implicit selection for a sole unnamed record. Correction T17 introduced
-  HKTAB/HITAB 4 and is incorporated in Release 2020's archived E.2.1.4;
+  already supplied HITAB. The HKTAN 6 and 7 entries place the optional medium
+  name at DE 12. Their shared method-parameter DD defines a 21-component
+  version-6 method block and a 26-component version-7 block. Both put
+  `Bezeichnung des TAN-Mediums erforderlich` at field 19 (zero-based parser
+  index 18) and `Anzahl unterstützter aktiver TAN-Medien` at optional field 21
+  (index 20); DE 12 is mandatory only when field 19 is `2` and field 21 is
+  greater than one. The count belongs to that repeated method's BPD block and
+  describes the method's supported active media; it is not scoped by access or
+  medium class, and no rule replaces it with the number of records returned for
+  one user by HITAB. Archived E.2.1.4 and the DD define HKTAB 4
+  `TAN-Medium-Art=0` as all media and `TAN-Medium-Klasse=A` as all classes, so
+  `+0+A` requests the complete relevant set. In TAN-Medium-Liste 4, component
+  10 is the only `Bezeichnung des TAN-Mediums`; it is mandatory for class `M`
+  and optional for class `G`. Class-G card number and card sequence do not
+  become HKTAN DE 12 selectors, and neither E.2.1.4 nor the Data Dictionary
+  defines an implicit selection for a sole unnamed record. Correction T17
+  introduced HKTAB/HITAB 4 and is incorporated in Release 2020's archived E.2.1.4;
   correction T33 permits `Segmentkennung` during process 4 for both HKTAN
   versions. The
   corresponding HITAN 6 and 7 entries

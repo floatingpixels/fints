@@ -92,6 +92,8 @@ fn tan_method(process: TanProcess) -> TanMethod {
         next_poll_delay_seconds: Some(3),
         manual_polling_allowed: process == TanProcess::Decoupled,
         automatic_polling_allowed: process == TanProcess::Decoupled,
+        #[cfg(feature = "development-diagnostics")]
+        development_medium_requirement: None,
     }
 }
 

@@ -32,7 +32,8 @@ pub use client::{
 };
 #[cfg(feature = "development-diagnostics")]
 pub use development_diagnostics::{
-    InitializationRecoveryFacts, ReceivedResponseFact, ReceivedSegmentFact, TanMediaDiscoveryFacts,
+    HitansMediumRequirementFact, HktabRequestFact, InitializationRecoveryFacts,
+    ReceivedResponseFact, ReceivedSegmentFact, ReturnedTanMediumFact, TanMediaDiscoveryFacts,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};
 pub use model::{

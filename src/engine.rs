@@ -43,6 +43,8 @@ pub(crate) struct Engine {
     development_initialization_recovery: Option<InitializationRecoveryFacts>,
     #[cfg(feature = "development-diagnostics")]
     development_tan_media_discovery: Option<TanMediaDiscoveryFacts>,
+    #[cfg(feature = "development-diagnostics")]
+    development_tan_media_initialization_name_supplied: Option<bool>,
     requested_balance: Option<crate::model::Account>,
     transaction: Option<TransactionState>,
     products: products::ProductStates,
@@ -159,6 +161,8 @@ impl Engine {
             development_initialization_recovery: None,
             #[cfg(feature = "development-diagnostics")]
             development_tan_media_discovery: None,
+            #[cfg(feature = "development-diagnostics")]
+            development_tan_media_initialization_name_supplied: None,
             requested_balance: None,
             transaction: None,
             products: products::ProductStates::default(),

@@ -73,6 +73,7 @@ impl Engine {
         #[cfg(feature = "development-diagnostics")]
         {
             self.development_tan_media_discovery = None;
+            self.development_tan_media_initialization_name_supplied = None;
         }
         let method = self.selected_method()?.clone();
         validate_supported_method(&method)?;
@@ -90,14 +91,20 @@ impl Engine {
             date,
             time,
         };
-        segments::initialization(
+        let medium_name = self.state.selected_tan_medium.as_deref().or(Some("noref"));
+        let request = segments::initialization(
             &context,
             &self.product,
             &self.state,
             Some(&method),
             "HKTAB",
-            self.state.selected_tan_medium.as_deref().or(Some("noref")),
-        )
+            medium_name,
+        )?;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_tan_media_initialization_name_supplied = Some(medium_name.is_some());
+        }
+        Ok(request)
     }
 
     pub(crate) fn accept_tan_media_initialization(
@@ -139,12 +146,18 @@ impl Engine {
         self.selected_tan_media_version = Some(media_version);
         #[cfg(feature = "development-diagnostics")]
         {
+            let hitans_requirement = self
+                .selected_method()
+                .ok()
+                .and_then(|method| method.development_medium_requirement);
             self.development_tan_media_discovery =
                 Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
                     response.development_segment_facts(),
                     response.development_response_facts(),
                     self.advertised_tan_media_versions(),
                     media_version,
+                    hitans_requirement,
+                    self.development_tan_media_initialization_name_supplied,
                 ));
         }
         if let Some(tan_response) = response.tan(method.hktan_version)? {
@@ -163,7 +176,7 @@ impl Engine {
             self.development_tan_media_discovery
                 .as_mut()
                 .expect("TAN-media diagnostics were initialized")
-                .set_discovered_medium_count(media.len());
+                .set_discovered_media(media);
         }
         let Some(tan_media) = tan_media? else {
             return Ok(TanMediaInitializationResult::OrderRequired);
@@ -187,8 +200,17 @@ impl Engine {
         let version = self
             .selected_tan_media_version
             .ok_or(Error::InconsistentState)?;
-        let context = self.context(date, time)?;
-        segments::tan_media_request(&context, version)
+        let request = {
+            let context = self.context(date, time)?;
+            segments::tan_media_request(&context, version)?
+        };
+        #[cfg(feature = "development-diagnostics")]
+        if let Some(facts) = self.development_tan_media_discovery.as_mut() {
+            facts.set_hktab_request(crate::development_diagnostics::HktabRequestFact::all_media(
+                version,
+            ));
+        }
+        Ok(request)
     }
 
     pub(crate) fn accept_tan_media_response(&mut self, input: &[u8]) -> Result<(), Error> {
@@ -229,7 +251,7 @@ impl Engine {
         self.development_tan_media_discovery
             .as_mut()
             .expect("TAN-media diagnostics were initialized")
-            .set_discovered_medium_count(tan_media.len());
+            .set_discovered_media(&tan_media);
         let current_method = self.selected_method()?.clone();
         self.store_tan_media(tan_media, &current_method)
     }

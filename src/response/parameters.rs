@@ -385,16 +385,28 @@ pub(super) fn tan_media(
             name: 9,
             masked_phone: None,
             security_function: None,
+            #[cfg(feature = "development-diagnostics")]
+            card_number: 2,
+            #[cfg(feature = "development-diagnostics")]
+            card_sequence: 3,
         },
         4 => TanMediumLayout {
             name: 9,
             masked_phone: Some(10),
             security_function: None,
+            #[cfg(feature = "development-diagnostics")]
+            card_number: 2,
+            #[cfg(feature = "development-diagnostics")]
+            card_sequence: 3,
         },
         5 => TanMediumLayout {
             name: 10,
             masked_phone: Some(11),
             security_function: Some(2),
+            #[cfg(feature = "development-diagnostics")]
+            card_number: 3,
+            #[cfg(feature = "development-diagnostics")]
+            card_sequence: 4,
         },
         _ => unreachable!("supported HITAB versions were matched"),
     };
@@ -442,6 +454,12 @@ pub(super) fn tan_media(
             masked_phone: layout
                 .masked_phone
                 .and_then(|index| optional_component(components, index)),
+            #[cfg(feature = "development-diagnostics")]
+            development_card_number_present: optional_component(components, layout.card_number)
+                .is_some(),
+            #[cfg(feature = "development-diagnostics")]
+            development_card_sequence_present: optional_component(components, layout.card_sequence)
+                .is_some(),
         });
     }
     Ok(Some(media))
@@ -451,6 +469,10 @@ struct TanMediumLayout {
     name: usize,
     masked_phone: Option<usize>,
     security_function: Option<usize>,
+    #[cfg(feature = "development-diagnostics")]
+    card_number: usize,
+    #[cfg(feature = "development-diagnostics")]
+    card_sequence: usize,
 }
 
 fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {
@@ -727,16 +749,25 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
     // field 19 is the name-requirement code and optional field 21 is the
     // number of active media. HKTAN 6/7 DE 12 is mandatory only when the
     // former is 2 and the latter is greater than one.
-    let medium_name_required = match component(components, 18, "TAN medium requirement")?.as_str() {
-        "0" | "1" => false,
-        "2" => optional_component(components, 20)
-            .filter(|value| value.len() == 1 && value.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|value| value.parse::<u8>().ok())
-            .is_some_and(|count| count > 1),
+    let medium_requirement_code =
+        match component(components, 18, "TAN medium requirement")?.as_str() {
+            "0" => 0,
+            "1" => 1,
+            "2" => 2,
+            _ => {
+                return Err(Error::InvalidValue {
+                    field: "TAN medium requirement",
+                });
+            }
+        };
+    let active_media_count = optional_component(components, 20)
+        .filter(|value| value.len() == 1 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<u8>().ok());
+    let medium_name_required = match medium_requirement_code {
+        0 | 1 => false,
+        2 => active_media_count.is_some_and(|count| count > 1),
         _ => {
-            return Err(Error::InvalidValue {
-                field: "TAN medium requirement",
-            });
+            unreachable!("validated TAN medium requirement code")
         }
     };
 
@@ -772,6 +803,15 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
             .flatten(),
         manual_polling_allowed: version == 7 && optional_yes(components, 24)?,
         automatic_polling_allowed: version == 7 && optional_yes(components, 25)?,
+        #[cfg(feature = "development-diagnostics")]
+        development_medium_requirement: Some(
+            crate::development_diagnostics::HitansMediumRequirementFact::new(
+                version,
+                medium_requirement_code,
+                active_media_count,
+                medium_name_required,
+            ),
+        ),
     })
 }
 

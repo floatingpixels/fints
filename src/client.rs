@@ -256,8 +256,9 @@ impl Client {
     /// This survives the internal HKEND exchange that replaces [`Self::last_responses`]
     /// with the termination response. It contains only ordered segment codes/versions,
     /// advertised/selected media-discovery versions, response codes/request-segment
-    /// references, and a parsed medium count; it never contains medium names, response
-    /// text/parameters, or segment contents.
+    /// references, the safe HITANS/HKTAB decision fields, and returned-medium
+    /// classification/occupancy booleans. It never contains medium identifiers,
+    /// response text/parameters, or segment contents.
     #[cfg(feature = "development-diagnostics")]
     pub fn development_tan_media_discovery(&self) -> Option<&crate::TanMediaDiscoveryFacts> {
         self.engine.development_tan_media_discovery()
@@ -1170,6 +1171,8 @@ mod tests {
             next_poll_delay_seconds: None,
             manual_polling_allowed: false,
             automatic_polling_allowed: false,
+            #[cfg(feature = "development-diagnostics")]
+            development_medium_requirement: None,
         });
         state.selected_tan_method = Some("942".to_owned());
         Engine::new(
@@ -1211,6 +1214,8 @@ mod tests {
             next_poll_delay_seconds: (process == TanProcess::Decoupled).then_some(3),
             manual_polling_allowed: process == TanProcess::Decoupled,
             automatic_polling_allowed: process == TanProcess::Decoupled,
+            #[cfg(feature = "development-diagnostics")]
+            development_medium_requirement: None,
         });
         state
             .advertised_parameter_segments
@@ -1278,6 +1283,14 @@ mod tests {
         hitan_version: u16,
         active_media_count: u8,
     ) -> Vec<u8> {
+        process_four_hitan_without_hitab_with_requirement(hitan_version, 2, active_media_count)
+    }
+
+    fn process_four_hitan_without_hitab_with_requirement(
+        hitan_version: u16,
+        requirement_code: u8,
+        active_media_count: u8,
+    ) -> Vec<u8> {
         // Independently assembled from PIN/TAN B.4.3.1.3, B.5.1/B.5.2,
         // C.3.1.1, and correction T33. The parameter segments intentionally
         // mirror a broad fictional BPD response; none is derived from live
@@ -1289,11 +1302,11 @@ mod tests {
         };
         let method_six = format!(
             "{function_six}:2:fictional-medium-method::1.0:Fictional medium approval:\
-             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:{active_media_count}"
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:{requirement_code}:N:{active_media_count}"
         );
         let method_seven = format!(
             "{function_seven}:2:fictional-push:Decoupled:1.0:Fictional push approval:\
-             6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:{active_media_count}:5:2:3:J:J"
+             6:1:Approval:2048:N:1:N:0:0:N:N:00:{requirement_code}:N:{active_media_count}:5:2:3:J:J"
         );
         let segments = vec![
             concat!(
@@ -1541,6 +1554,20 @@ mod tests {
                     assert_eq!(facts.advertised_versions(), [media_version]);
                     assert_eq!(facts.selected_version(), media_version);
                     assert_eq!(facts.discovered_medium_count(), Some(1));
+                    let request = facts.hktab_request().unwrap();
+                    assert_eq!(request.version(), media_version);
+                    assert_eq!(request.medium_type(), 0);
+                    assert_eq!(
+                        request.medium_class(),
+                        (media_version >= 4).then_some(crate::TanMediumClass::All)
+                    );
+                    assert!(!request.medium_name_field_present());
+                    assert_eq!(
+                        facts.initialization_hktan_medium_name_supplied(),
+                        Some(true)
+                    );
+                    assert_eq!(facts.returned_media().len(), 1);
+                    assert!(facts.returned_media()[0].name_present());
                     let rendered = format!("{facts:?}");
                     assert!(!rendered.contains("Fictional phone"));
                     assert!(!rendered.contains("fictional accepted"));
@@ -1562,18 +1589,29 @@ mod tests {
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
         ] {
-            for (active_media_count, medium, expected_name, selectable) in [
-                (2, "G:1::::::::", None, false),
+            for (
+                requirement_code,
+                active_media_count,
+                medium,
+                expected_name,
+                _card_group_present,
+                selectable,
+            ) in [
+                (2, 2, "G:1::::::::", None, false, false),
                 (
                     2,
-                    "G:1::::::::Fictional Generator",
+                    2,
+                    "G:1:Fictional-card:7::::::Fictional Generator",
                     Some("Fictional Generator"),
                     true,
+                    true,
                 ),
-                (1, "G:1::::::::", None, true),
+                (2, 1, "G:1::::::::", None, false, true),
+                (1, 2, "G:1::::::::", None, false, true),
             ] {
-                let initialization = process_four_hitan_without_hitab_with_active_count(
+                let initialization = process_four_hitan_without_hitab_with_requirement(
                     hitan_version,
+                    requirement_code,
                     active_media_count,
                 );
                 let operation = tan_media_operation_response(4, Some(medium));
@@ -1608,6 +1646,46 @@ mod tests {
                 assert_eq!(client.selected_tan_media_version(), Some(4));
                 assert_eq!(client.transport.fixture_requests().len(), 3);
                 assert_eq!(client.last_responses()[0].code(), 100);
+
+                #[cfg(feature = "development-diagnostics")]
+                {
+                    let facts = client.development_tan_media_discovery().unwrap();
+                    let requirement = facts.hitans_requirement().unwrap();
+                    assert_eq!(requirement.hktan_version(), hitan_version);
+                    assert_eq!(requirement.requirement_code(), requirement_code);
+                    assert_eq!(requirement.requirement_field_number(), 19);
+                    assert_eq!(requirement.requirement_component_index(), 18);
+                    assert_eq!(requirement.active_media_count(), Some(active_media_count));
+                    assert_eq!(requirement.active_media_count_field_number(), 21);
+                    assert_eq!(requirement.active_media_count_component_index(), 20);
+                    assert_eq!(
+                        requirement.medium_name_required(),
+                        requirement_code == 2 && active_media_count > 1
+                    );
+
+                    let request = facts.hktab_request().unwrap();
+                    assert_eq!(request.version(), 4);
+                    assert_eq!(request.medium_type(), 0);
+                    assert_eq!(request.medium_class(), Some(crate::TanMediumClass::All));
+                    assert!(!request.medium_name_field_present());
+                    assert_eq!(
+                        facts.initialization_hktan_medium_name_supplied(),
+                        Some(true)
+                    );
+
+                    assert_eq!(facts.returned_media().len(), 1);
+                    let returned = facts.returned_media()[0];
+                    assert_eq!(returned.class(), crate::TanMediumClass::Generator);
+                    assert_eq!(returned.status(), crate::TanMediumStatus::Active);
+                    assert_eq!(returned.name_present(), expected_name.is_some());
+                    assert_eq!(returned.card_number_present(), _card_group_present);
+                    assert_eq!(returned.card_sequence_present(), _card_group_present);
+
+                    let rendered = format!("{facts:?}");
+                    assert!(!rendered.contains("Fictional-card"));
+                    assert!(!rendered.contains("Fictional Generator"));
+                    assert!(!rendered.contains("fictional-system"));
+                }
             }
         }
     }
