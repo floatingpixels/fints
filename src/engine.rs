@@ -45,6 +45,8 @@ pub(crate) struct Engine {
     development_tan_media_discovery: Option<TanMediaDiscoveryFacts>,
     #[cfg(feature = "development-diagnostics")]
     development_tan_media_initialization_name_supplied: Option<bool>,
+    #[cfg(feature = "development-diagnostics")]
+    development_depot_response: Option<crate::DepotResponseFacts>,
     requested_balance: Option<crate::model::Account>,
     transaction: Option<TransactionState>,
     products: products::ProductStates,
@@ -163,6 +165,8 @@ impl Engine {
             development_tan_media_discovery: None,
             #[cfg(feature = "development-diagnostics")]
             development_tan_media_initialization_name_supplied: None,
+            #[cfg(feature = "development-diagnostics")]
+            development_depot_response: None,
             requested_balance: None,
             transaction: None,
             products: products::ProductStates::default(),
@@ -223,6 +227,11 @@ impl Engine {
     #[cfg(feature = "development-diagnostics")]
     pub(crate) fn development_tan_media_discovery(&self) -> Option<&TanMediaDiscoveryFacts> {
         self.development_tan_media_discovery.as_ref()
+    }
+
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {
+        self.development_depot_response.as_ref()
     }
 
     pub(crate) fn choose_tan_method(&mut self, security_function: &str) -> Result<(), Error> {

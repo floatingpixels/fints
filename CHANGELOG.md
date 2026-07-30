@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Added value-free MT535/MT536 block and field-presence
+  diagnostics, safe depot probe result counts, and static block/tag parser
+  contexts without changing protocol acceptance.
+
 - **2026-07-30** — Completed the DD-to-wire mapping audit for Gate 1-4
   component-indexed response parsers and recorded every nested-group
   derivation at its parser; no additional incorrect offsets were found.

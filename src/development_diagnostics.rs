@@ -7,6 +7,263 @@
 
 use crate::{TanMedium, TanMediumClass, TanMediumStatus};
 
+/// The SWIFT document carried by the latest depot response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotDocumentKind {
+    Mt535,
+    Mt536,
+}
+
+/// A redacted MT535/MT536 block name.
+///
+/// Unknown block names are collapsed to `Other`; no received block text is retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotBlockKind {
+    General,
+    FinancialInstrument,
+    SubBalance,
+    AdditionalInformation,
+    Transaction,
+    Link,
+    TransactionDetails,
+    Other,
+}
+
+impl DepotBlockKind {
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::General => 0,
+            Self::FinancialInstrument => 1,
+            Self::SubBalance => 2,
+            Self::AdditionalInformation => 3,
+            Self::Transaction => 4,
+            Self::Link => 5,
+            Self::TransactionDetails => 6,
+            Self::Other => 7,
+        }
+    }
+}
+
+/// One block opening in document order, without received values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepotBlockFact {
+    kind: DepotBlockKind,
+    depth: usize,
+    occurrence: usize,
+}
+
+impl DepotBlockFact {
+    pub(crate) fn new(kind: DepotBlockKind, depth: usize, occurrence: usize) -> Self {
+        Self {
+            kind,
+            depth,
+            occurrence,
+        }
+    }
+
+    pub fn kind(self) -> DepotBlockKind {
+        self.kind
+    }
+
+    pub fn depth(self) -> usize {
+        self.depth
+    }
+
+    /// One-based occurrence count for this block kind in document order.
+    pub fn occurrence(self) -> usize {
+        self.occurrence
+    }
+}
+
+/// Value-free occupancy facts for one parsed MT535 position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepotPositionPresenceFact {
+    isin: bool,
+    wkn: bool,
+    name: bool,
+    quantity: bool,
+    price: bool,
+    market_value: bool,
+    cost_basis: bool,
+}
+
+impl DepotPositionPresenceFact {
+    pub(crate) fn from_position(position: &crate::DepotPosition) -> Self {
+        Self {
+            isin: position.instrument().isin().is_some(),
+            wkn: position.instrument().wkn().is_some(),
+            name: !position.instrument().name().is_empty(),
+            quantity: true,
+            price: position.price().is_some(),
+            market_value: !position.market_values().is_empty(),
+            cost_basis: position.cost_basis().is_some(),
+        }
+    }
+
+    pub fn isin_present(self) -> bool {
+        self.isin
+    }
+    pub fn wkn_present(self) -> bool {
+        self.wkn
+    }
+    pub fn name_present(self) -> bool {
+        self.name
+    }
+    pub fn quantity_present(self) -> bool {
+        self.quantity
+    }
+    pub fn price_present(self) -> bool {
+        self.price
+    }
+    pub fn market_value_present(self) -> bool {
+        self.market_value
+    }
+    pub fn cost_basis_present(self) -> bool {
+        self.cost_basis
+    }
+}
+
+/// Value-free occupancy facts for one parsed MT536 transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SecuritiesTransactionPresenceFact {
+    isin: bool,
+    wkn: bool,
+    name: bool,
+    reference: bool,
+    quantity: bool,
+    price: bool,
+    amount: bool,
+    accrued_interest: bool,
+    transaction_kind: bool,
+    movement: bool,
+    effective_date: bool,
+    value_date: bool,
+    reversal: bool,
+    free_text: bool,
+}
+
+impl SecuritiesTransactionPresenceFact {
+    pub(crate) fn from_transaction(entry: &crate::SecuritiesTransaction) -> Self {
+        Self {
+            isin: entry.instrument().isin().is_some(),
+            wkn: entry.instrument().wkn().is_some(),
+            name: !entry.instrument().name().is_empty(),
+            reference: entry.reference().is_some(),
+            quantity: entry.quantity().is_some(),
+            price: entry.price().is_some(),
+            amount: entry.amount().is_some(),
+            accrued_interest: entry.accrued_interest().is_some(),
+            transaction_kind: entry.transaction_kind().is_some(),
+            movement: entry.direction().is_some(),
+            effective_date: entry.effective_date().is_some(),
+            value_date: entry.value_date().is_some(),
+            reversal: entry.is_reversal().is_some(),
+            free_text: !entry.free_text().is_empty(),
+        }
+    }
+
+    pub fn isin_present(self) -> bool {
+        self.isin
+    }
+    pub fn wkn_present(self) -> bool {
+        self.wkn
+    }
+    pub fn name_present(self) -> bool {
+        self.name
+    }
+    pub fn reference_present(self) -> bool {
+        self.reference
+    }
+    pub fn quantity_present(self) -> bool {
+        self.quantity
+    }
+    pub fn price_present(self) -> bool {
+        self.price
+    }
+    pub fn amount_present(self) -> bool {
+        self.amount
+    }
+    pub fn accrued_interest_present(self) -> bool {
+        self.accrued_interest
+    }
+    pub fn transaction_kind_present(self) -> bool {
+        self.transaction_kind
+    }
+    pub fn movement_present(self) -> bool {
+        self.movement
+    }
+    pub fn effective_date_present(self) -> bool {
+        self.effective_date
+    }
+    pub fn value_date_present(self) -> bool {
+        self.value_date
+    }
+    pub fn reversal_present(self) -> bool {
+        self.reversal
+    }
+    pub fn free_text_present(self) -> bool {
+        self.free_text
+    }
+}
+
+/// Redacted structure of the most recently parsed MT535 or MT536 response page.
+///
+/// The inventory contains only recognized block kinds, nesting depth, and occurrence
+/// counts. Entry facts contain booleans only. This type never contains securities
+/// identifiers, amounts, references, dates, free text, or raw wire data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DepotResponseFacts {
+    document_kind: DepotDocumentKind,
+    block_inventory: Vec<DepotBlockFact>,
+    positions: Vec<DepotPositionPresenceFact>,
+    transactions: Vec<SecuritiesTransactionPresenceFact>,
+}
+
+impl DepotResponseFacts {
+    pub(crate) fn for_positions(
+        block_inventory: Vec<DepotBlockFact>,
+        positions: &[crate::DepotPosition],
+    ) -> Self {
+        Self {
+            document_kind: DepotDocumentKind::Mt535,
+            block_inventory,
+            positions: positions
+                .iter()
+                .map(DepotPositionPresenceFact::from_position)
+                .collect(),
+            transactions: Vec::new(),
+        }
+    }
+
+    pub(crate) fn for_transactions(
+        block_inventory: Vec<DepotBlockFact>,
+        transactions: &[crate::SecuritiesTransaction],
+    ) -> Self {
+        Self {
+            document_kind: DepotDocumentKind::Mt536,
+            block_inventory,
+            positions: Vec::new(),
+            transactions: transactions
+                .iter()
+                .map(SecuritiesTransactionPresenceFact::from_transaction)
+                .collect(),
+        }
+    }
+
+    pub fn document_kind(&self) -> DepotDocumentKind {
+        self.document_kind
+    }
+    pub fn block_inventory(&self) -> &[DepotBlockFact] {
+        &self.block_inventory
+    }
+    pub fn positions(&self) -> &[DepotPositionPresenceFact] {
+        &self.positions
+    }
+    pub fn transactions(&self) -> &[SecuritiesTransactionPresenceFact] {
+        &self.transactions
+    }
+}
+
 /// Redacted HITANS fields governing HKTAN's TAN-medium-name occupancy.
 ///
 /// The field numbers are one-based Data Dictionary positions; the component

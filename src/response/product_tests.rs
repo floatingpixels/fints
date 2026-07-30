@@ -85,6 +85,35 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     assert_eq!(position.market_values[0].amount().coefficient(), 123_450);
     assert_eq!(position.cost_basis.as_ref().unwrap().coefficient(), 12_000);
     assert_eq!(page.total_values[0].amount().coefficient(), 123_450);
+    #[cfg(feature = "development-diagnostics")]
+    {
+        use crate::DepotBlockKind;
+
+        let facts = &page.development_facts;
+        assert_eq!(facts.positions().len(), 1);
+        assert!(facts.positions()[0].isin_present());
+        assert!(facts.positions()[0].wkn_present());
+        assert!(facts.positions()[0].price_present());
+        assert!(facts.positions()[0].market_value_present());
+        assert!(facts.positions()[0].cost_basis_present());
+        assert_eq!(
+            facts
+                .block_inventory()
+                .iter()
+                .map(|fact| (fact.kind(), fact.depth(), fact.occurrence()))
+                .collect::<Vec<_>>(),
+            [
+                (DepotBlockKind::General, 1, 1),
+                (DepotBlockKind::FinancialInstrument, 1, 1),
+                (DepotBlockKind::SubBalance, 2, 1),
+                (DepotBlockKind::AdditionalInformation, 1, 1),
+            ]
+        );
+        let rendered = format!("{facts:?}");
+        assert!(!rendered.contains("DE000FINTS05"));
+        assert!(!rendered.contains("FICT01"));
+        assert!(!rendered.contains("1234,50"));
+    }
 }
 
 // DK Anlage 3 v3.9, 4.3: AGGR can be negative, INDC can carry a
@@ -192,6 +221,39 @@ fn mt536_transaction_fixture_preserves_reference_amounts_and_dates() {
         Some(NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
     );
     assert_eq!(entry.free_text(), &["Fictional purchase"]);
+    #[cfg(feature = "development-diagnostics")]
+    {
+        use crate::DepotBlockKind;
+
+        let facts = &page.development_facts;
+        assert_eq!(facts.transactions().len(), 1);
+        let presence = facts.transactions()[0];
+        assert!(presence.isin_present());
+        assert!(presence.reference_present());
+        assert!(presence.quantity_present());
+        assert!(presence.price_present());
+        assert!(presence.amount_present());
+        assert!(presence.accrued_interest_present());
+        assert!(presence.transaction_kind_present());
+        assert!(presence.movement_present());
+        assert!(presence.effective_date_present());
+        assert!(presence.value_date_present());
+        assert!(presence.free_text_present());
+        assert_eq!(
+            facts
+                .block_inventory()
+                .iter()
+                .map(|fact| (fact.kind(), fact.depth(), fact.occurrence()))
+                .collect::<Vec<_>>(),
+            [
+                (DepotBlockKind::General, 1, 1),
+                (DepotBlockKind::FinancialInstrument, 1, 1),
+                (DepotBlockKind::Transaction, 2, 1),
+                (DepotBlockKind::Link, 3, 1),
+                (DepotBlockKind::TransactionDetails, 3, 1),
+            ]
+        );
+    }
 }
 
 // DK Anlage 3 v3.9, 4.4: LINK/RELA is mandatory but NONREF means that no
@@ -352,7 +414,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
         Err(Error::MalformedSecuritiesData { site }) => site,
         _ => panic!("expected malformed MT535 block"),
     };
-    assert!(mismatched_site.starts_with("fints::response::securities:"));
+    assert!(mismatched_site.contains("document/16R:16S/mismatch"));
 
     let missing_quantity = concat!(
         "\r\n",
@@ -377,7 +439,7 @@ fn malformed_securities_documents_fail_without_partial_results() {
         Err(Error::MalformedSecuritiesData { site }) => site,
         _ => panic!("expected malformed MT535 position"),
     };
-    assert!(missing_quantity_site.starts_with("fints::response::securities:"));
+    assert!(missing_quantity_site.contains("MT535/FIN/93B:AGGR"));
     assert_ne!(mismatched_site, missing_quantity_site);
 
     let inactive_with_position = concat!(

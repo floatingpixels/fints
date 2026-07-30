@@ -272,9 +272,15 @@ fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
 fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()> {
     let result = client.depot_positions(account, now());
     print_bank_responses(client, "depot_positions");
+    #[cfg(feature = "development-diagnostics")]
+    print_depot_response_facts(client);
     match result? {
-        DepotPositionRequest::Complete(_) => {
-            println!("probe operation=depot_positions status=complete")
+        DepotPositionRequest::Complete(result) => {
+            println!(
+                "probe operation=depot_positions status=complete positions={} page_totals={}",
+                result.positions().len(),
+                result.total_values().len()
+            )
         }
         DepotPositionRequest::Challenge(continuation) => {
             print_challenge(
@@ -285,9 +291,15 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
             let tan = require_tan(continuation.kind())?;
             let submitted = client.submit_depot_position_tan(*continuation, &tan, now());
             print_bank_responses(client, "submit_depot_position_tan");
+            #[cfg(feature = "development-diagnostics")]
+            print_depot_response_facts(client);
             match submitted? {
-                DepotPositionRequest::Complete(_) => {
-                    println!("probe operation=depot_positions status=complete")
+                DepotPositionRequest::Complete(result) => {
+                    println!(
+                        "probe operation=depot_positions status=complete positions={} page_totals={}",
+                        result.positions().len(),
+                        result.total_values().len()
+                    )
                 }
                 DepotPositionRequest::Challenge(_) => {
                     return Err(input_error(
@@ -303,9 +315,14 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
 fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
     let result = client.securities_transactions(account, None, None, now());
     print_bank_responses(client, "depot_transactions");
+    #[cfg(feature = "development-diagnostics")]
+    print_depot_response_facts(client);
     match result? {
-        SecuritiesTransactionRequest::Complete(_) => {
-            println!("probe operation=depot_transactions status=complete")
+        SecuritiesTransactionRequest::Complete(result) => {
+            println!(
+                "probe operation=depot_transactions status=complete entries={}",
+                result.entries().len()
+            )
         }
         SecuritiesTransactionRequest::Challenge(continuation) => {
             print_challenge(
@@ -316,9 +333,14 @@ fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<
             let tan = require_tan(continuation.kind())?;
             let submitted = client.submit_securities_transaction_tan(*continuation, &tan, now());
             print_bank_responses(client, "submit_securities_transaction_tan");
+            #[cfg(feature = "development-diagnostics")]
+            print_depot_response_facts(client);
             match submitted? {
-                SecuritiesTransactionRequest::Complete(_) => {
-                    println!("probe operation=depot_transactions status=complete")
+                SecuritiesTransactionRequest::Complete(result) => {
+                    println!(
+                        "probe operation=depot_transactions status=complete entries={}",
+                        result.entries().len()
+                    )
                 }
                 SecuritiesTransactionRequest::Challenge(_) => {
                     return Err(input_error(
@@ -543,6 +565,54 @@ fn print_tan_media_discovery_facts(client: &Client) {
             "tan_media_hitab_shape index={index} component_count={} occupied_components={:?}",
             shape.component_count(),
             shape.occupied_components()
+        );
+    }
+}
+
+#[cfg(feature = "development-diagnostics")]
+fn print_depot_response_facts(client: &Client) {
+    let Some(facts) = client.development_depot_response() else {
+        println!("depot_diagnostics available=false");
+        return;
+    };
+    println!("depot_document kind={:?}", facts.document_kind());
+    for (index, block) in facts.block_inventory().iter().enumerate() {
+        println!(
+            "depot_block index={index} kind={:?} depth={} occurrence={}",
+            block.kind(),
+            block.depth(),
+            block.occurrence()
+        );
+    }
+    for (index, position) in facts.positions().iter().enumerate() {
+        println!(
+            "depot_position index={index} isin_present={} wkn_present={} name_present={} quantity_present={} price_present={} market_value_present={} cost_basis_present={}",
+            position.isin_present(),
+            position.wkn_present(),
+            position.name_present(),
+            position.quantity_present(),
+            position.price_present(),
+            position.market_value_present(),
+            position.cost_basis_present()
+        );
+    }
+    for (index, entry) in facts.transactions().iter().enumerate() {
+        println!(
+            "depot_transaction index={index} isin_present={} wkn_present={} name_present={} reference_present={} quantity_present={} price_present={} amount_present={} accrued_interest_present={} transaction_kind_present={} movement_present={} effective_date_present={} value_date_present={} reversal_present={} free_text_present={}",
+            entry.isin_present(),
+            entry.wkn_present(),
+            entry.name_present(),
+            entry.reference_present(),
+            entry.quantity_present(),
+            entry.price_present(),
+            entry.amount_present(),
+            entry.accrued_interest_present(),
+            entry.transaction_kind_present(),
+            entry.movement_present(),
+            entry.effective_date_present(),
+            entry.value_date_present(),
+            entry.reversal_present(),
+            entry.free_text_present()
         );
     }
 }

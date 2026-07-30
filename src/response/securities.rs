@@ -19,6 +19,8 @@ pub(crate) struct DepotPositionPage {
     pub(crate) account_number: String,
     pub(crate) positions: Vec<DepotPosition>,
     pub(crate) total_values: Vec<SecuritiesAmount>,
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) development_facts: crate::DepotResponseFacts,
 }
 
 pub(crate) struct SecuritiesTransactionPage {
@@ -26,6 +28,8 @@ pub(crate) struct SecuritiesTransactionPage {
     pub(crate) institute_code: String,
     pub(crate) account_number: String,
     pub(crate) entries: Vec<SecuritiesTransaction>,
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) development_facts: crate::DepotResponseFacts,
 }
 
 pub(super) fn positions(segments: &[Segment]) -> Result<Option<DepotPositionPage>, Error> {
@@ -106,7 +110,7 @@ fn document(input: &[u8]) -> Result<Block, Error> {
     let body = text
         .strip_prefix("\r\n")
         .and_then(|value| value.strip_suffix("\r\n-"))
-        .ok_or(malformed_securities_data!())?;
+        .ok_or(malformed_securities_data!("document/framing"))?;
     let mut logical = Vec::<Field>::new();
     for line in body.split("\r\n") {
         if let Some(rest) = line.strip_prefix(':')
@@ -120,7 +124,7 @@ fn document(input: &[u8]) -> Result<Block, Error> {
                     .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
             {
                 if logical.len() >= MAX_FIELDS {
-                    return Err(malformed_securities_data!());
+                    return Err(malformed_securities_data!("document/field-limit"));
                 }
                 logical.push(Field {
                     tag: tag.to_owned(),
@@ -129,7 +133,9 @@ fn document(input: &[u8]) -> Result<Block, Error> {
                 continue;
             }
         }
-        let field = logical.last_mut().ok_or(malformed_securities_data!())?;
+        let field = logical
+            .last_mut()
+            .ok_or(malformed_securities_data!("document/continuation-line"))?;
         field.value.push('\n');
         field.value.push_str(line);
     }
@@ -141,12 +147,12 @@ fn document(input: &[u8]) -> Result<Block, Error> {
     let mut cursor = 0;
     while cursor < logical.len() {
         if logical[cursor].tag != "16R" {
-            return Err(malformed_securities_data!());
+            return Err(malformed_securities_data!("document/top-level/16R"));
         }
         root.children.push(parse_block(&logical, &mut cursor, 1)?);
     }
     if root.children.is_empty() {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("document/empty"));
     }
     Ok(root)
 }
@@ -158,11 +164,13 @@ pub(super) fn fuzz_document(input: &[u8]) -> bool {
 
 fn parse_block(fields: &[Field], cursor: &mut usize, depth: usize) -> Result<Block, Error> {
     if depth > MAX_BLOCK_DEPTH {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("document/16R/depth"));
     }
-    let start = fields.get(*cursor).ok_or(malformed_securities_data!())?;
+    let start = fields
+        .get(*cursor)
+        .ok_or(malformed_securities_data!("document/16R/start"))?;
     if start.tag != "16R" || start.value.is_empty() {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("document/16R/name"));
     }
     *cursor += 1;
     let mut block = Block {
@@ -171,12 +179,14 @@ fn parse_block(fields: &[Field], cursor: &mut usize, depth: usize) -> Result<Blo
         children: Vec::new(),
     };
     loop {
-        let field = fields.get(*cursor).ok_or(malformed_securities_data!())?;
+        let field = fields
+            .get(*cursor)
+            .ok_or(malformed_securities_data!("document/16R:16S/unterminated"))?;
         match field.tag.as_str() {
             "16R" => block.children.push(parse_block(fields, cursor, depth + 1)?),
             "16S" => {
                 if field.value != block.name {
-                    return Err(malformed_securities_data!());
+                    return Err(malformed_securities_data!("document/16R:16S/mismatch"));
                 }
                 *cursor += 1;
                 return Ok(block);
@@ -191,19 +201,25 @@ fn parse_block(fields: &[Field], cursor: &mut usize, depth: usize) -> Result<Blo
 
 fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     let root = document(input)?;
-    validate_root(&root)?;
-    let general = unique_child(&root, "GENL")?;
-    let active = validate_general(general)?;
-    let more = page_more(required_field(general, "28E")?)?;
-    let (institute_code, account_number) = safe_identity(general)?;
+    validate_root(&root).map_err(|_| malformed_securities_data!("MT535/ROOT/GENL"))?;
+    let general =
+        unique_child(&root, "GENL").map_err(|_| malformed_securities_data!("MT535/GENL"))?;
+    let active =
+        validate_general(general).map_err(|_| malformed_securities_data!("MT535/GENL/17B:ACTI"))?;
+    let more = page_more(
+        required_field(general, "28E").map_err(|_| malformed_securities_data!("MT535/GENL/28E"))?,
+    )
+    .map_err(|_| malformed_securities_data!("MT535/GENL/28E"))?;
+    let (institute_code, account_number) =
+        safe_identity(general).map_err(|_| malformed_securities_data!("MT535/GENL/97A:SAFE"))?;
     let positions = children(&root, "FIN")
         .map(parse_position)
         .collect::<Result<Vec<_>, _>>()?;
     if positions.len() > MAX_PAGE_ENTRIES {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("MT535/page/entry-limit"));
     }
     if !active && !positions.is_empty() {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("MT535/GENL/17B:ACTI"));
     }
     let total_values = root
         .children
@@ -212,50 +228,111 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         .map(|block| {
             fields(block, "19A")
                 .filter(|field| field.value.starts_with(":HOLP//"))
-                .map(|field| parse_signed_amount(&field.value, ":HOLP//"))
+                .map(|field| {
+                    parse_signed_amount(&field.value, ":HOLP//")
+                        .map_err(|_| malformed_securities_data!("MT535/ADDINFO/19A:HOLP"))
+                })
                 .collect()
         })
         .transpose()?
         .unwrap_or_default();
+    #[cfg(feature = "development-diagnostics")]
+    let development_facts =
+        crate::DepotResponseFacts::for_positions(block_inventory(&root), &positions);
     Ok(DepotPositionPage {
         more,
         institute_code,
         account_number,
         positions,
         total_values,
+        #[cfg(feature = "development-diagnostics")]
+        development_facts,
     })
 }
 
 fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> {
     let root = document(input)?;
-    validate_root(&root)?;
-    let general = unique_child(&root, "GENL")?;
-    let active = validate_general(general)?;
-    let more = page_more(required_field(general, "28E")?)?;
-    let (institute_code, account_number) = safe_identity(general)?;
+    validate_root(&root).map_err(|_| malformed_securities_data!("MT536/ROOT/GENL"))?;
+    let general =
+        unique_child(&root, "GENL").map_err(|_| malformed_securities_data!("MT536/GENL"))?;
+    let active =
+        validate_general(general).map_err(|_| malformed_securities_data!("MT536/GENL/17B:ACTI"))?;
+    let more = page_more(
+        required_field(general, "28E").map_err(|_| malformed_securities_data!("MT536/GENL/28E"))?,
+    )
+    .map_err(|_| malformed_securities_data!("MT536/GENL/28E"))?;
+    let (institute_code, account_number) =
+        safe_identity(general).map_err(|_| malformed_securities_data!("MT536/GENL/97A:SAFE"))?;
     let mut entries = Vec::new();
     for financial in children(&root, "FIN") {
-        let instrument = parse_instrument(required_field(financial, "35B")?)?;
+        let instrument = parse_instrument(
+            required_field(financial, "35B")
+                .map_err(|_| malformed_securities_data!("MT536/FIN/35B"))?,
+        )
+        .map_err(|_| malformed_securities_data!("MT536/FIN/35B"))?;
         let price = optional_field(financial, "90A")
             .or_else(|| optional_field(financial, "90B"))
             .map(|field| parse_price(&field.value, financial))
-            .transpose()?;
+            .transpose()
+            .map_err(|_| malformed_securities_data!("MT536/FIN/90A:90B"))?;
         for transaction in children(financial, "TRAN") {
             entries.push(parse_transaction(transaction, &instrument, price.as_ref())?);
             if entries.len() > MAX_PAGE_ENTRIES {
-                return Err(malformed_securities_data!());
+                return Err(malformed_securities_data!("MT536/page/entry-limit"));
             }
         }
     }
     if !active && !entries.is_empty() {
-        return Err(malformed_securities_data!());
+        return Err(malformed_securities_data!("MT536/GENL/17B:ACTI"));
     }
+    #[cfg(feature = "development-diagnostics")]
+    let development_facts =
+        crate::DepotResponseFacts::for_transactions(block_inventory(&root), &entries);
     Ok(SecuritiesTransactionPage {
         more,
         institute_code,
         account_number,
         entries,
+        #[cfg(feature = "development-diagnostics")]
+        development_facts,
     })
+}
+
+#[cfg(feature = "development-diagnostics")]
+fn block_inventory(root: &Block) -> Vec<crate::DepotBlockFact> {
+    fn visit(
+        block: &Block,
+        depth: usize,
+        counts: &mut [usize; 8],
+        facts: &mut Vec<crate::DepotBlockFact>,
+    ) {
+        let kind = match block.name.as_str() {
+            "GENL" => crate::DepotBlockKind::General,
+            "FIN" => crate::DepotBlockKind::FinancialInstrument,
+            "SUBBAL" => crate::DepotBlockKind::SubBalance,
+            "ADDINFO" => crate::DepotBlockKind::AdditionalInformation,
+            "TRAN" => crate::DepotBlockKind::Transaction,
+            "LINK" => crate::DepotBlockKind::Link,
+            "TRANSDET" => crate::DepotBlockKind::TransactionDetails,
+            _ => crate::DepotBlockKind::Other,
+        };
+        counts[kind.index()] += 1;
+        facts.push(crate::DepotBlockFact::new(
+            kind,
+            depth,
+            counts[kind.index()],
+        ));
+        for child in &block.children {
+            visit(child, depth + 1, counts, facts);
+        }
+    }
+
+    let mut counts = [0; 8];
+    let mut facts = Vec::new();
+    for child in &root.children {
+        visit(child, 1, &mut counts, &mut facts);
+    }
+    facts
 }
 
 fn safe_identity(block: &Block) -> Result<(String, String), Error> {
@@ -295,19 +372,29 @@ fn validate_general(block: &Block) -> Result<bool, Error> {
 }
 
 fn parse_position(block: &Block) -> Result<DepotPosition, Error> {
-    let instrument = parse_instrument(required_field(block, "35B")?)?;
+    let instrument = parse_instrument(
+        required_field(block, "35B").map_err(|_| malformed_securities_data!("MT535/FIN/35B"))?,
+    )
+    .map_err(|_| malformed_securities_data!("MT535/FIN/35B"))?;
     let quantity = parse_quantity(
-        &required_qualified(block, "93B", ":AGGR//")?.value,
+        &required_qualified(block, "93B", ":AGGR//")
+            .map_err(|_| malformed_securities_data!("MT535/FIN/93B:AGGR"))?
+            .value,
         ":AGGR//",
         true,
-    )?;
+    )
+    .map_err(|_| malformed_securities_data!("MT535/FIN/93B:AGGR"))?;
     let price = optional_field(block, "90A")
         .or_else(|| optional_field(block, "90B"))
         .map(|field| parse_price(&field.value, block))
-        .transpose()?;
+        .transpose()
+        .map_err(|_| malformed_securities_data!("MT535/FIN/90A:90B"))?;
     let market_values = fields(block, "19A")
         .filter(|field| field.value.starts_with(":HOLD//"))
-        .map(|field| parse_signed_amount(&field.value, ":HOLD//"))
+        .map(|field| {
+            parse_signed_amount(&field.value, ":HOLD//")
+                .map_err(|_| malformed_securities_data!("MT535/FIN/19A:HOLD"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let cost_basis = optional_qualified(block, "70E", ":HOLD//")
         .and_then(|field| parse_cost_basis(&field.value).ok().flatten());
@@ -325,17 +412,23 @@ fn parse_transaction(
     instrument: &SecurityInstrument,
     price: Option<&SecurityPrice>,
 ) -> Result<SecuritiesTransaction, Error> {
-    let link = unique_child(block, "LINK")?;
-    let reference = match required_qualified(link, "20C", ":RELA//")?
+    let link =
+        unique_child(block, "LINK").map_err(|_| malformed_securities_data!("MT536/TRAN/LINK"))?;
+    let reference = match required_qualified(link, "20C", ":RELA//")
+        .map_err(|_| malformed_securities_data!("MT536/TRAN/LINK/20C:RELA"))?
         .value
         .strip_prefix(":RELA//")
     {
         Some("NONREF") => None,
         Some(value) if !value.is_empty() => Some(value.to_owned()),
-        _ => return Err(malformed_securities_data!()),
+        _ => return Err(malformed_securities_data!("MT536/TRAN/LINK/20C:RELA")),
     };
-    let mut parsed = optional_unique_child(block, "TRANSDET")?
-        .map(parse_transaction_details)
+    let mut parsed = optional_unique_child(block, "TRANSDET")
+        .map_err(|_| malformed_securities_data!("MT536/TRAN/TRANSDET"))?
+        .map(|details| {
+            parse_transaction_details(details)
+                .map_err(|_| malformed_securities_data!("MT536/TRAN/TRANSDET"))
+        })
         .transpose()?;
     Ok(SecuritiesTransaction {
         instrument: instrument.clone(),
@@ -371,41 +464,53 @@ struct TransactionDetails {
 
 fn parse_transaction_details(details: &Block) -> Result<TransactionDetails, Error> {
     let quantity = parse_quantity(
-        &required_qualified(details, "36B", ":PSTA//")?.value,
+        &required_qualified(details, "36B", ":PSTA//")
+            .map_err(|_| malformed_securities_data!("MT536/TRANSDET/36B:PSTA"))?
+            .value,
         ":PSTA//",
         false,
-    )?;
-    let movement = match required_qualified(details, "22H", ":REDE//")?
+    )
+    .map_err(|_| malformed_securities_data!("MT536/TRANSDET/36B:PSTA"))?;
+    let movement = match required_qualified(details, "22H", ":REDE//")
+        .map_err(|_| malformed_securities_data!("MT536/TRANSDET/22H:REDE"))?
         .value
         .strip_prefix(":REDE//")
     {
         Some("DELI") => SecuritiesMovement::Delivery,
         Some("RECE") => SecuritiesMovement::Receipt,
-        _ => return Err(malformed_securities_data!()),
+        _ => return Err(malformed_securities_data!("MT536/TRANSDET/22H:REDE")),
     };
     // Anlage 3 v3.9 4.4 prescribes the PAYM value, but Gate 4 does not consume
     // it. Presence is sufficient under the repository acceptance-space policy.
-    required_qualified(details, "22H", ":PAYM//")?;
-    let transaction_kind = required_qualified(details, "22F", ":TRAN//")?
+    required_qualified(details, "22H", ":PAYM//")
+        .map_err(|_| malformed_securities_data!("MT536/TRANSDET/22H:PAYM"))?;
+    let transaction_kind = required_qualified(details, "22F", ":TRAN//")
+        .map_err(|_| malformed_securities_data!("MT536/TRANSDET/22F:TRAN"))?
         .value
         .strip_prefix(":TRAN//")
         .map(str::to_owned);
-    let effective_date =
-        parse_qualified_date(required_qualified_any(details, &["98A", "98C"], ":ESET//")?)?;
+    let effective_date = parse_qualified_date(
+        required_qualified_any(details, &["98A", "98C"], ":ESET//")
+            .map_err(|_| malformed_securities_data!("MT536/TRANSDET/98A:98C:ESET"))?,
+    )
+    .map_err(|_| malformed_securities_data!("MT536/TRANSDET/98A:98C:ESET"))?;
     Ok(TransactionDetails {
         quantity,
         amount: optional_qualified(details, "19A", ":PSTA//")
             .map(|field| parse_signed_amount(&field.value, ":PSTA//"))
-            .transpose()?,
+            .transpose()
+            .map_err(|_| malformed_securities_data!("MT536/TRANSDET/19A:PSTA"))?,
         accrued_interest: optional_qualified(details, "19A", ":ACRU//")
             .map(|field| parse_signed_amount(&field.value, ":ACRU//"))
-            .transpose()?,
+            .transpose()
+            .map_err(|_| malformed_securities_data!("MT536/TRANSDET/19A:ACRU"))?,
         transaction_kind,
         movement,
         effective_date,
         value_date: optional_qualified_any(details, &["98A", "98C"], ":SETT//")
             .map(parse_qualified_date)
-            .transpose()?,
+            .transpose()
+            .map_err(|_| malformed_securities_data!("MT536/TRANSDET/98A:98C:SETT"))?,
         reversal: optional_qualified(details, "25D", ":MOVE//")
             .map(|field| field.value == ":MOVE//REVE"),
         free_text: optional_qualified(details, "70E", ":TRDE//")

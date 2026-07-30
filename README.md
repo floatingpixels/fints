@@ -287,9 +287,10 @@ terminal may echo it.
 The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
 `FINTS_PROBE_DEPOT_POSITIONS_ACCOUNT`, `FINTS_PROBE_DEPOT_TRANSACTIONS_ACCOUNT`,
 `FINTS_PROBE_CARD_BALANCE_ACCOUNT`, and `FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT`
-enable the corresponding read without printing its private result. The probe prints
-all caller-visible bank response texts, which may reference the owner's accounts or
-orders.
+enable the corresponding read. Financial values and identifiers are never printed;
+depot probes report only result counts and, with development diagnostics, value-free
+block and field-presence facts. The probe prints all caller-visible bank response
+texts, which may reference the owner's accounts or orders.
 
 `FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
 credential-bearing request and response payloads to stdout as hexadecimal and escaped
@@ -299,11 +300,10 @@ paste its output into an issue or agent conversation, or enable it in normal con
 ### Gated development diagnostics
 
 The non-default `development-diagnostics` feature exposes initialization decision
-booleans plus TAN-medium-discovery segment/response facts, the HITANS requirement
-code and active-medium count with their field positions, the emitted HKTAB selector
-shape, HITAB TAN usage option, and returned-medium classification/occupancy booleans
-for owner-attended interoperability work. This is a supported, gated capability that is
-off by default. It never exposes inspected field values, segment contents, response text
-or parameters, medium names, or generator-card values. Default builds carry no
+booleans, TAN-medium-discovery structure, and MT535/MT536 block inventories and
+field-presence booleans for owner-attended interoperability work. This is a supported,
+gated capability that is off by default. It never exposes inspected field values,
+segment contents, response text or parameters, medium names, generator-card values,
+securities identifiers, amounts, references, or dates. Default builds carry no
 diagnostic code or storage; the public API and its storage fields exist only when the
 feature is explicitly enabled.

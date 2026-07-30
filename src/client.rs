@@ -264,6 +264,16 @@ impl Client {
         self.engine.development_tan_media_discovery()
     }
 
+    /// Opt-in value-free structure of the latest parsed MT535 or MT536 response page.
+    ///
+    /// Block facts contain only enum classifications, nesting, and counts. Position
+    /// and transaction facts contain field-presence booleans only; no identifiers,
+    /// amounts, references, dates, free text, or wire data are retained.
+    #[cfg(feature = "development-diagnostics")]
+    pub fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {
+        self.engine.development_depot_response()
+    }
+
     pub fn select_tan_method(&mut self, security_function: &str) -> Result<(), Error> {
         self.engine.choose_tan_method(security_function)
     }

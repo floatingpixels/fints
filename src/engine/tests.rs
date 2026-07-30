@@ -2047,6 +2047,24 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
         engine.accept_depot_positions(&first, now()).unwrap(),
         DepotPositionsResult::Continue
     ));
+    #[cfg(feature = "development-diagnostics")]
+    {
+        let facts = engine.development_depot_response().unwrap();
+        assert_eq!(facts.document_kind(), crate::DepotDocumentKind::Mt535);
+        assert_eq!(facts.positions().len(), 1);
+        assert_eq!(
+            facts
+                .block_inventory()
+                .iter()
+                .map(|fact| fact.kind())
+                .collect::<Vec<_>>(),
+            [
+                crate::DepotBlockKind::General,
+                crate::DepotBlockKind::FinancialInstrument,
+                crate::DepotBlockKind::SubBalance,
+            ]
+        );
+    }
     engine
         .next_depot_positions_page_request(now().date(), now().time())
         .unwrap();

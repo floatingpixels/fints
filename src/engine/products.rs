@@ -110,6 +110,10 @@ impl Engine {
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_product_idle()?;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_depot_response = None;
+        }
         let account = self.product_account(
             account_index,
             "HKWPD",
@@ -264,6 +268,10 @@ impl Engine {
             }
             Err(error) => return self.fail_positions(error),
         };
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_depot_response = Some(page.development_facts.clone());
+        }
         let point = match response.continuation_point(3) {
             Ok(point) => point.map(str::to_owned),
             Err(error) => return self.fail_positions(error),
@@ -336,6 +344,10 @@ impl Engine {
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_product_idle()?;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_depot_response = None;
+        }
         validate_range(from, to)?;
         let account = self.product_account(
             account_index,
@@ -507,6 +519,10 @@ impl Engine {
             }
             Err(error) => return self.fail_securities(error),
         };
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_depot_response = Some(page.development_facts.clone());
+        }
         let point = match response.continuation_point(3) {
             Ok(point) => point.map(str::to_owned),
             Err(error) => return self.fail_securities(error),

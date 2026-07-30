@@ -298,6 +298,11 @@ macro_rules! malformed_securities_data {
             site: concat!(module_path!(), ":", line!()),
         }
     };
+    ($context:literal) => {
+        $crate::error::Error::MalformedSecuritiesData {
+            site: concat!(module_path!(), ":", line!(), ":", $context),
+        }
+    };
 }
 
 pub(crate) use {malformed_securities_data, malformed_transaction_data};
