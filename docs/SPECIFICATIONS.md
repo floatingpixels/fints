@@ -334,7 +334,15 @@ access date for each source below is 2026-07-28.
   differing meanings), B.2 (class-1 notice codes, explicitly marked FinTS
   4-only by this joint register), and B.4 (the complete published 99xx
   error-code set).
-  Absence from that set does not authorize assigning an unpublished code a
+  B.2 defines 1040 as notice that the prior BPD is outdated and the current
+  version is included; it does not prescribe another dialog or refresh after
+  the included HIBPA and parameter segments are applied. Code 0940 is within
+  A's historical exception range but is absent from the register even though A
+  says meanings observed in those ranges are listed, so it has no
+  specification-defined control-flow meaning. B.2 marks 1040 as FinTS 4-only
+  and message-level; its segment-referenced FinTS 3 use remains only a bounded,
+  non-fatal interoperability tolerance. Absence from the published entries for
+  an exception range does not authorize assigning an unpublished code a
   semantic meaning; it only permits retaining it as a redacted generic fact.
   The B.2 class shape and non-error meaning also bound an owner-approved
   FinTS 3 interoperability tolerance after a conforming four-digit 1xxx code
@@ -352,7 +360,10 @@ access date for each source below is 2026-07-28.
   date and must be checked for later changes before implementation.
 - **Authorizes:** typed Gate 1 through Gate 3 success, notice, warning, error,
   pagination, SCA, synchronization, parameter-refresh, and unsupported-version
-  outcomes. It also defines the bounded notice shape used by the narrow FinTS 3
+  outcomes. In TAN-media discovery, 1040 authorizes applying the included BPD
+  but neither it nor unpublished 0940 authorizes substituting HITAN for HITAB,
+  retrying discovery, or starting another initialization. It also defines the
+  bounded notice shape used by the narrow FinTS 3
   compatibility tolerance. Bank text remains reachable only through explicit
   caller accessors and absent from crate-owned formatting.
 - **Access/redistribution:** accessed 2026-07-30; the same implementation

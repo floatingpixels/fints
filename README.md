@@ -47,7 +47,9 @@ A new connection follows this bounded sequence:
    an empty or non-selectable required list returns
    `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
    closed exactly once. A process-4 HITAN may acknowledge the embedded HKTAN but
-   does not replace HITAB or create another media-discovery continuation.
+   does not replace HITAB or create another media-discovery continuation. A
+   gateway that omits HITAB cannot complete required-medium selection under the
+   current official contract.
 4. Call `initialize` again. Once it returns `Connected`, call only an advertised
    operation authorized for an account discovered through `accounts()`, then call
    `terminate`.
@@ -81,7 +83,9 @@ The most recently parsed bank response codes are available through
 class, and bounded recovery category, they retain the bank-authored free text,
 data-element reference, and parameters through explicit accessors. The caller owns
 display and logging policy for that diagnostic text; crate error messages and `Debug`
-output omit it. Raw authenticated messages are not retained.
+output omit it. `last_tan_media_discovery_responses()` separately preserves the
+discovery operation's responses across its internal HKEND cleanup without changing
+`last_responses()` semantics. Raw authenticated messages are not retained.
 
 `Client::new_with_trace` optionally accepts a per-client `TraceSink`. It receives raw
 outgoing and Base64-decoded incoming FinTS payloads with a monotonically increasing

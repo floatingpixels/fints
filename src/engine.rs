@@ -35,6 +35,7 @@ pub(crate) struct Engine {
     tan_media: Vec<TanMedium>,
     transient_accounts: Option<Vec<crate::model::Account>>,
     last_responses: Vec<BankResponse>,
+    tan_media_discovery_responses: Vec<BankResponse>,
     #[cfg(feature = "development-diagnostics")]
     development_initialization_recovery: Option<InitializationRecoveryFacts>,
     #[cfg(feature = "development-diagnostics")]
@@ -149,6 +150,7 @@ impl Engine {
             tan_media: Vec::new(),
             transient_accounts: None,
             last_responses: Vec::new(),
+            tan_media_discovery_responses: Vec::new(),
             #[cfg(feature = "development-diagnostics")]
             development_initialization_recovery: None,
             #[cfg(feature = "development-diagnostics")]
@@ -189,6 +191,10 @@ impl Engine {
 
     pub(crate) fn last_responses(&self) -> &[BankResponse] {
         &self.last_responses
+    }
+
+    pub(crate) fn last_tan_media_discovery_responses(&self) -> &[BankResponse] {
+        &self.tan_media_discovery_responses
     }
 
     #[cfg(feature = "development-diagnostics")]

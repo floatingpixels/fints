@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Preserved TAN-media discovery bank responses across internal
+  HKEND while retaining strict missing-HITAB handling; documented 1040 and
+  unpublished 0940 without assigning either a new control-flow meaning.
+
 - **2026-07-30** — Retained redacted ordered TAN-media response codes/references
   across HKEND and validated process-4 HITAN acknowledgements without treating
   them as substitutes for mandatory HITAB or as continuations.

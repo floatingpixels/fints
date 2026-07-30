@@ -63,6 +63,7 @@ impl Engine {
     ) -> Result<Vec<u8>, Error> {
         self.ensure_no_dialog()?;
         self.tan_media.clear();
+        self.tan_media_discovery_responses.clear();
         #[cfg(feature = "development-diagnostics")]
         {
             self.development_tan_media_discovery = None;
@@ -106,6 +107,8 @@ impl Engine {
                 ));
         }
         self.record_responses(&response);
+        self.tan_media_discovery_responses
+            .extend_from_slice(response.responses());
         self.apply_parameters(&response)?;
         if let Some(error) = response.first_error() {
             return Err(Error::Bank(error));

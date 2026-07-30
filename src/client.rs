@@ -214,6 +214,16 @@ impl Client {
         self.engine.last_responses()
     }
 
+    /// Bank responses from the most recent TAN-media discovery operation.
+    ///
+    /// These process-memory diagnostics preserve the discovery response across the
+    /// internal HKEND exchange without changing [`Self::last_responses`] semantics.
+    /// Explicit response-text accessors remain caller-owned display/logging data and
+    /// are omitted from crate error messages and `Debug` output.
+    pub fn last_tan_media_discovery_responses(&self) -> &[BankResponse] {
+        self.engine.last_tan_media_discovery_responses()
+    }
+
     /// Last initialization or parameter-refresh request stage reached in this process.
     pub fn last_initialization_stage(&self) -> Option<InitializationStage> {
         self.last_initialization_stage
@@ -1196,9 +1206,19 @@ mod tests {
              6:1:Approval:2048:N:1:N:0:0:N:N:00:2:N:1:5:2:3:J:J"
         );
         let segments = vec![
-            "HIRMG:2:2+0010::fictional accepted".to_owned(),
-            "HIRMS:3:2:4+0020::fictional product accepted:private-parameter".to_owned(),
-            "HIRMS:4:2:5+3076::fictional SCA not required".to_owned(),
+            concat!(
+                "HIRMG:2:2+0020::fictional accepted",
+                "+3076::fictional SCA not required",
+                "+3060::fictional parameters included"
+            )
+            .to_owned(),
+            "HIRMS:3:2:3+0020::fictional identity accepted:private-parameter".to_owned(),
+            concat!(
+                "HIRMS:4:2:4+1040::fictional current BPD included",
+                "+3920::fictional allowed methods:942",
+                "+0940::fictional unpublished success"
+            )
+            .to_owned(),
             "HIBPA:5:3:4+78+280:12345678+Fictional Bank+9+1+300".to_owned(),
             "HIKOM:6:4:4+3+fints.example.invalid:443".to_owned(),
             "HIPINS:7:1:4+1+1+0+4:6:6:::HKTAB:N:HKTAN:N".to_owned(),
@@ -1422,6 +1442,40 @@ mod tests {
             assert_eq!(client.transport.fixture_requests().len(), 2);
             assert_eq!(client.last_responses()[0].code(), 100);
             assert_eq!(client.state().bpd_version(), 78);
+            let operation_responses = client.last_tan_media_discovery_responses();
+            assert_eq!(
+                operation_responses
+                    .iter()
+                    .map(|response| (response.code(), response.segment_number()))
+                    .collect::<Vec<_>>(),
+                [
+                    (20, None),
+                    (3076, None),
+                    (3060, None),
+                    (20, Some(3)),
+                    (1040, Some(4)),
+                    (3920, Some(4)),
+                    (940, Some(4)),
+                ]
+            );
+            assert_eq!(
+                operation_responses
+                    .iter()
+                    .map(BankResponse::text)
+                    .collect::<Vec<_>>(),
+                [
+                    "fictional accepted",
+                    "fictional SCA not required",
+                    "fictional parameters included",
+                    "fictional identity accepted",
+                    "fictional current BPD included",
+                    "fictional allowed methods",
+                    "fictional unpublished success",
+                ]
+            );
+            let rendered = format!("{operation_responses:?}");
+            assert!(!rendered.contains("fictional"));
+            assert!(!rendered.contains("private-parameter"));
 
             #[cfg(feature = "development-diagnostics")]
             {
@@ -1460,7 +1514,15 @@ mod tests {
                         .iter()
                         .map(|response| (response.code(), response.segment_number()))
                         .collect::<Vec<_>>(),
-                    [(10, None), (20, Some(4)), (3076, Some(5))]
+                    [
+                        (20, None),
+                        (3076, None),
+                        (3060, None),
+                        (20, Some(3)),
+                        (1040, Some(4)),
+                        (3920, Some(4)),
+                        (940, Some(4)),
+                    ]
                 );
                 assert_eq!(facts.discovered_medium_count(), Some(0));
                 let rendered = format!("{facts:?}");
