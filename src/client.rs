@@ -1055,6 +1055,32 @@ mod tests {
             .and_time(NaiveTime::from_hms_opt(12, 0, 0).unwrap())
     }
 
+    #[test]
+    fn public_client_and_continuation_surface_is_send() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<Client>();
+        assert_send::<TraceSink>();
+
+        assert_send::<Initialization>();
+        assert_send::<Synchronization>();
+        assert_send::<BalanceRequest>();
+        assert_send::<BookedTransactionRequest>();
+        assert_send::<DepotPositionRequest>();
+        assert_send::<SecuritiesTransactionRequest>();
+        assert_send::<CreditCardTransactionRequest>();
+        assert_send::<CreditCardBalanceRequest>();
+
+        assert_send::<InitializationContinuation>();
+        assert_send::<SynchronizationContinuation>();
+        assert_send::<BalanceContinuation>();
+        assert_send::<BookedTransactionContinuation>();
+        assert_send::<DepotPositionContinuation>();
+        assert_send::<SecuritiesTransactionContinuation>();
+        assert_send::<CreditCardTransactionContinuation>();
+        assert_send::<CreditCardBalanceContinuation>();
+    }
+
     fn synchronization_engine() -> Engine {
         let mut state = ReusableState::new();
         state.tan_methods.push(TanMethod {

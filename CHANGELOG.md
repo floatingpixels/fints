@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Restored `Client: Send` by making opt-in trace sinks transferable
+  and covered every public operation result and continuation at compile time.
+
 - **2026-07-30** — Added static, redacted rejection-site context across transaction,
   securities, and generic response parsing plus isolated owner-run parser fuzz targets.
 

@@ -1,7 +1,11 @@
 use std::{cell::Cell, io::Read, time::Duration};
 
 #[cfg(test)]
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Url, blocking::Client, header::CONTENT_TYPE, redirect::Policy};
@@ -66,7 +70,10 @@ impl<'a> TraceEvent<'a> {
 }
 
 /// Opt-in callback for credential-bearing raw FinTS transport payloads.
-pub type TraceSink = Box<dyn for<'a> Fn(TraceEvent<'a>) + 'static>;
+///
+/// The sink moves with its owning client and is never invoked concurrently by the
+/// crate, so it must be `Send` but need not be `Sync`.
+pub type TraceSink = Box<dyn for<'a> Fn(TraceEvent<'a>) + Send + 'static>;
 
 /// Failures in the bounded HTTPS transport.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -342,12 +349,12 @@ mod tests {
             b"fictional response"
         );
 
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let captured = Rc::clone(&events);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
         let traced = Transport::fixture_with_trace(
             [b"first response".to_vec(), b"second response".to_vec()],
             Box::new(move |event| {
-                captured.borrow_mut().push((
+                captured.lock().unwrap().push((
                     event.exchange_index(),
                     event.direction(),
                     event.payload().to_vec(),
@@ -358,7 +365,7 @@ mod tests {
         traced.send(b"second request").unwrap();
 
         assert_eq!(
-            *events.borrow(),
+            *events.lock().unwrap(),
             [
                 (1, TraceDirection::Outgoing, b"first request".to_vec()),
                 (1, TraceDirection::Incoming, b"first response".to_vec()),
@@ -370,12 +377,12 @@ mod tests {
 
     #[test]
     fn trace_payloads_never_enter_transport_error_formatting() {
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let captured = Rc::clone(&events);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
         let transport = Transport::fixture_with_trace(
             std::iter::empty(),
             Box::new(move |event| {
-                captured.borrow_mut().push(event.payload().to_vec());
+                captured.lock().unwrap().push(event.payload().to_vec());
             }),
         );
 
@@ -383,7 +390,7 @@ mod tests {
             .send(b"fictional credential-bearing payload")
             .unwrap_err();
         assert_eq!(
-            *events.borrow(),
+            *events.lock().unwrap(),
             [b"fictional credential-bearing payload".to_vec()]
         );
         let rendered = format!("{error:?} {error}");
