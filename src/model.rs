@@ -458,8 +458,10 @@ pub struct ReusableState {
     pub(crate) legacy_transactions_require_tan: Option<bool>,
     #[serde(default)]
     pub(crate) depot_positions_advertised: bool,
-    #[serde(default)]
-    pub(crate) depot_positions_supported: bool,
+    // Deserialize the pre-gate-4.38 support flag only to migrate it into the
+    // explicit version list in Engine::new. New state never serializes both.
+    #[serde(default, rename = "depot_positions_supported", skip_serializing)]
+    pub(crate) legacy_depot_positions_supported: bool,
     #[serde(default)]
     pub(crate) depot_position_versions: Vec<u16>,
     #[serde(default)]
@@ -1400,6 +1402,7 @@ mod tests {
     use super::*;
 
     enum PreviousValue {
+        Bool(bool),
         U16(u16),
         None,
         EmptySequence,
@@ -1422,6 +1425,7 @@ mod tests {
             V: Visitor<'de>,
         {
             match self {
+                Self::Bool(value) => visitor.visit_bool(value),
                 Self::U16(value) => visitor.visit_u16(value),
                 Self::None => visitor.visit_none(),
                 Self::EmptySequence => {
@@ -1481,6 +1485,7 @@ mod tests {
             ("upd_version", PreviousValue::U16(1)),
             ("balance_versions", PreviousValue::EmptySequence),
             ("balance_requires_tan", PreviousValue::None),
+            ("depot_positions_supported", PreviousValue::Bool(true)),
             ("tan_methods", PreviousValue::EmptySequence),
             ("accounts", PreviousValue::EmptySequence),
             ("selected_tan_method", PreviousValue::None),
@@ -1507,12 +1512,12 @@ mod tests {
                 .descriptors()
                 .is_empty()
         );
-        assert!(
+        assert_eq!(
             state
                 .advertised_capabilities()
                 .depot_positions()
-                .advertised_versions()
-                .is_empty()
+                .advertised_versions(),
+            [6]
         );
         assert_eq!(
             state
@@ -1746,6 +1751,7 @@ mod tests {
                     | "balance_versions"
                     | "advertised_balance_versions"
                     | "advertised_tan_media_versions"
+                    | "depot_positions_supported"
                     | "depot_position_versions"
                     | "camt_storage_period_days"
                     | "securities_transactions_storage_period_days"
@@ -1966,7 +1972,6 @@ mod tests {
         original.advertised_balance_versions = vec![5];
         original.advertised_tan_media_versions = vec![4, 2];
         original.depot_position_versions = vec![6, 5];
-        original.depot_positions_supported = true;
         original.camt_storage_period_days = Some(90);
         original.securities_transactions_storage_period_days = Some(60);
         original.credit_card_transactions_storage_period_days = Some(30);
@@ -1979,6 +1984,11 @@ mod tests {
             !projected
                 .iter()
                 .any(|(field, _)| field == "advertised_parameter_segments")
+        );
+        assert!(
+            !projected
+                .iter()
+                .any(|(field, _)| field == "depot_positions_supported")
         );
         let mut fields = vec![
             ("system_id".to_owned(), PreviousValue::None),
@@ -2028,5 +2038,36 @@ mod tests {
             Some(30)
         );
         assert!(capabilities.parameter_segments().is_empty());
+    }
+
+    // Gate 4.38 briefly serialized both a support boolean and explicit
+    // versions. Raw caller-owned deserialization may observe that state before
+    // Engine::new; the version list is authoritative whenever it is present.
+    #[test]
+    fn raw_deserialized_depot_capability_is_derived_from_versions() {
+        let fields = [
+            ("system_id", PreviousValue::None),
+            ("bpd_version", PreviousValue::U16(57)),
+            ("upd_version", PreviousValue::U16(1)),
+            ("balance_versions", PreviousValue::EmptySequence),
+            ("balance_requires_tan", PreviousValue::None),
+            ("depot_positions_supported", PreviousValue::Bool(true)),
+            (
+                "depot_position_versions",
+                PreviousValue::Sequence(vec![PreviousValue::U16(5)]),
+            ),
+            ("tan_methods", PreviousValue::EmptySequence),
+            ("accounts", PreviousValue::EmptySequence),
+            ("selected_tan_method", PreviousValue::None),
+            ("selected_tan_medium", PreviousValue::None),
+        ];
+        let state =
+            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
+                .unwrap();
+        let capability = state.advertised_capabilities().depot_positions().clone();
+
+        assert_eq!(capability.advertised_versions(), [5]);
+        assert!(capability.supports_version(5));
+        assert!(!capability.supports_version(6));
     }
 }

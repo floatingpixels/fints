@@ -238,6 +238,10 @@ pub enum Error {
     /// Invalid response structure at a static, non-secret parser site.
     #[error("FinTS response has an invalid {structure} structure")]
     InvalidResponse { structure: &'static str },
+    /// An unsupported version actually received in a response segment.
+    ///
+    /// Unsupported requested or advertised operation versions use the
+    /// corresponding [`Limitation`] instead.
     #[error("FinTS response uses unsupported segment {code} version {version}")]
     UnsupportedSegment { code: &'static str, version: u16 },
     /// A numeric response code whose first digit is not a supported response class.

@@ -35,6 +35,11 @@ A new connection follows this bounded sequence:
    the required function-999 synchronization dialog, sends HKSYN, retains the HISYN
    system ID, obtains response code 3920, and closes any open dialog. It returns
    `Initialization::ChooseTanMethod` when matching BPD method descriptions are usable.
+   If that response supplies usable BPD and method parameters but omits mandatory
+   HISYN, initialization returns `MissingValue("assigned system ID")` while retaining
+   those parameters. The caller may select from the retained allowed-method
+   intersection; the client then performs the required fresh synchronization when no
+   system ID exists, or ordinary initialization when one is already retained.
 2. If it instead returns `Initialization::RefreshParameters`, call
    `refresh_parameters` once. Then offer only `tan_methods()` whose identifiers also
    occur in `allowed_tan_methods()`; never construct a method from a 3920 identifier.

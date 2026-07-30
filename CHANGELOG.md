@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Accepted the two official unnumbered `70E::HOLD`
+  examples without fabricating ambiguous cost basis, derived depot-position
+  support from versions, and clarified missing-HISYN recovery diagnostics.
+
 - **2026-07-30** — Added officially archived HKWPD/HIWPD/HIWPDS 5
   negotiation, exact national-account requests, and version-bound MT535
   parsing with deterministic 5/6 selection and persisted capability state.

@@ -1394,7 +1394,6 @@ fn depot_position_parameter_versions_five_and_six_are_negotiated() {
         .unwrap();
 
     assert_eq!(state.depot_position_versions, [6, 5]);
-    assert!(state.depot_positions_supported);
     assert_eq!(state.depot_positions_requires_tan, Some(false));
     let capability = state.advertised_capabilities().depot_positions().clone();
     assert_eq!(capability.advertised_versions(), [6, 5, 4]);
@@ -1893,7 +1892,7 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
     state.camt_requires_tan = Some(false);
     state.legacy_transactions_require_tan = Some(true);
     state.depot_positions_advertised = true;
-    state.depot_positions_supported = true;
+    state.depot_position_versions = vec![6];
     state.depot_positions_requires_tan = Some(false);
     state.securities_transactions_advertised = true;
     state.securities_transactions_supported = true;
@@ -1953,7 +1952,7 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
     );
     assert_eq!(state.legacy_transaction_versions, [7]);
-    assert!(state.depot_positions_supported);
+    assert_eq!(state.depot_position_versions, [6]);
     assert!(state.securities_transactions_supported);
     assert!(state.credit_card_transactions.is_some());
     assert_eq!(state.credit_card_balance_account_required, Some(true));
@@ -1974,7 +1973,7 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         .unwrap();
     assert_eq!(state.bpd_version(), 56);
     assert_eq!(state.balance_versions, [6]);
-    assert!(!state.depot_positions_supported);
+    assert!(state.depot_position_versions.is_empty());
 
     let malformed_new = message(
         &[

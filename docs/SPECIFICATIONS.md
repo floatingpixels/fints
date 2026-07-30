@@ -112,7 +112,11 @@ access date for each source below is 2026-07-28.
   HIWPDS 5 predates the generic security-class element, so its three-field
   operation parameter DEG is segment element 3 rather than HIWPDS 6 element
   4. The MT535 `:97A::SAFE//` identity remains institute code followed by
-  depot account number.
+  depot account number. The IX.2.4 full-message example prints
+  `:70E::HOLD//STK+511+00081+DE+19990815` followed by `68,5+EUR`, without
+  the line-number digits required by the structured-field table and shown in
+  its later structured example. This internally inconsistent but unambiguous
+  two-line shape authorizes preserving the explicit line-two cost basis.
 - **Retained-BPD sections:** III.3.2.2 (BPD are returned when the supplied
   version differs and, when returned, must be complete) and IV.1-IV.2
   (changed BPD become immediately active and receive a new BPD version).
@@ -555,10 +559,16 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
 - **Gate 4 acceptance note:** the document's `:22H::PAYM//FREE`,
   `:22F::TRAN//` value set, GENL constants, SUBBAL occupancy, and structured
   `70E::HOLD` line-number rules remain the recorded normative findings. The
-  crate does not branch on the PAYM/GENL/SUBBAL values or expose SUBBAL, and it
-  exposes `TRAN` only as an opaque institution value. Under the acceptance-space
-  policy those values are therefore read past; malformed optional HOLD content
-  yields an absent cost basis rather than discarding otherwise typed positions.
+  chapter 4.3 full-message example nevertheless prints
+  `:70E::HOLD//STK+511+00081+DE+19990815` followed by `68,5+EUR` without
+  those digits, matching the independent HBCI 2.2 IX.2.4 example. The crate
+  accepts either numbered structured content or this structurally
+  unambiguous two-line form; ambiguous or free-text content produces no cost
+  basis. The crate does not branch on the PAYM/GENL/SUBBAL values or expose
+  SUBBAL, and it exposes `TRAN` only as an opaque institution value. Under the
+  acceptance-space policy those values are therefore read past; malformed
+  optional HOLD content yields an absent cost basis rather than discarding
+  otherwise typed positions.
   Block pairing, safe identity, instrument, quantity, amount, direction, date,
   reference, pagination-indicator, and response-size checks remain enforced.
 - **Gate 4 authorizes:** bounded SWIFT MT535 parsing for explicitly supplied

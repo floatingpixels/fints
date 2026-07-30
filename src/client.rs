@@ -2242,7 +2242,7 @@ mod tests {
     // successful-looking 3920/BPD response cannot silently complete first
     // contact without the assigned system ID.
     #[test]
-    fn first_contact_rejects_missing_hisyn_without_persisting_state() {
+    fn first_contact_missing_hisyn_retains_parameters_but_not_system_id() {
         let response = function_999_response(
             "missing-hisyn",
             concat!(
@@ -2265,6 +2265,10 @@ mod tests {
             })
         ));
         assert!(client.state().system_id().is_none());
+        assert_eq!(client.state().bpd_version(), 58);
+        assert_eq!(client.tan_methods().len(), 1);
+        assert_eq!(client.tan_methods()[0].security_function(), "942");
+        assert_eq!(client.allowed_tan_methods(), ["942"]);
         assert_eq!(client.transport.fixture_requests().len(), 1);
     }
 

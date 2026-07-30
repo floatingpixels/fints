@@ -248,7 +248,7 @@ fn legacy_depot_position_state_migrates_to_six_and_invalid_versions_fail() {
     let institute = InstituteId::new("280", "12345678").unwrap();
     let product = ProductIdentity::new("PROD123", "1.0").unwrap();
     let mut legacy = ReusableState::new();
-    legacy.depot_positions_supported = true;
+    legacy.legacy_depot_positions_supported = true;
 
     let engine = Engine::new(
         institute.clone(),
@@ -1540,7 +1540,6 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
 
     let mut depot = engine_with_method(TanProcess::ProcessVariantTwo);
     depot.state.depot_positions_advertised = true;
-    depot.state.depot_positions_supported = true;
     depot.state.depot_position_versions = vec![6];
     depot.state.depot_positions_requires_tan = Some(false);
     depot.state.accounts.push(account(30, true));
@@ -1562,7 +1561,6 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
         });
         denied.state.camt_requires_tan = Some(false);
         denied.state.depot_positions_advertised = true;
-        denied.state.depot_positions_supported = true;
         denied.state.depot_position_versions = vec![6];
         denied.state.depot_positions_requires_tan = Some(false);
         denied
@@ -2049,7 +2047,6 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
     engine.state.accounts = vec![account];
     engine.state.depot_positions_advertised = true;
-    engine.state.depot_positions_supported = true;
     engine.state.depot_position_versions = vec![6];
     engine.state.depot_positions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
@@ -2132,7 +2129,6 @@ fn depot_positions_version_five_is_selected_and_paginated_tan_free() {
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
     engine.state.accounts = vec![account];
     engine.state.depot_positions_advertised = true;
-    engine.state.depot_positions_supported = true;
     engine.state.depot_position_versions = vec![5];
     engine.state.depot_positions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
@@ -2210,7 +2206,6 @@ fn depot_positions_version_five_rejects_wrong_version_and_identity() {
         let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
         engine.state.accounts = vec![account];
         engine.state.depot_positions_advertised = true;
-        engine.state.depot_positions_supported = true;
         engine.state.depot_position_versions = vec![5];
         engine.state.depot_positions_requires_tan = Some(false);
         let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
@@ -2268,7 +2263,6 @@ fn terminal_empty_depot_page_preserves_collected_positions() {
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
     engine.state.accounts = vec![account];
     engine.state.depot_positions_advertised = true;
-    engine.state.depot_positions_supported = true;
     engine.state.depot_position_versions = vec![6];
     engine.state.depot_positions_requires_tan = Some(false);
     let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);

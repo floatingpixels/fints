@@ -169,7 +169,7 @@ impl ReusableState {
             "HIWPDS",
             if !self.depot_position_versions.is_empty() {
                 &self.depot_position_versions
-            } else if self.depot_positions_supported {
+            } else if self.legacy_depot_positions_supported {
                 &[6]
             } else {
                 &[]
@@ -234,7 +234,7 @@ impl ReusableState {
                 if !self.depot_position_versions.is_empty() {
                     self.depot_position_versions.clone()
                 } else {
-                    self.depot_positions_supported
+                    self.legacy_depot_positions_supported
                         .then_some(6)
                         .into_iter()
                         .collect()

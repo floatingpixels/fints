@@ -40,7 +40,6 @@ pub(super) fn apply(
     let mut camt_requires_tan = None;
     let mut legacy_transactions_require_tan = None;
     let mut depot_positions_advertised = false;
-    let mut depot_positions_supported = false;
     let mut received_depot_position_versions = Vec::new();
     let mut depot_positions_requires_tan = None;
     let mut securities_transactions_advertised = false;
@@ -151,7 +150,6 @@ pub(super) fn apply(
                         });
                     }
                     received_depot_position_versions.push(header.version);
-                    depot_positions_supported = true;
                 }
             }
             b"HIWDUS" if replace_bpd => {
@@ -267,7 +265,7 @@ pub(super) fn apply(
         state.camt_requires_tan = camt_requires_tan;
         state.legacy_transactions_require_tan = legacy_transactions_require_tan;
         state.depot_positions_advertised = depot_positions_advertised;
-        state.depot_positions_supported = depot_positions_supported;
+        state.legacy_depot_positions_supported = false;
         received_depot_position_versions.sort_unstable_by(|a, b| b.cmp(a));
         state.depot_position_versions = received_depot_position_versions;
         state.depot_positions_requires_tan = depot_positions_requires_tan;

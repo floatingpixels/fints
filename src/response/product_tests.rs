@@ -1,5 +1,5 @@
 use super::*;
-use crate::{CreditDebit, QuantityUnit};
+use crate::{CreditDebit, Limitation, QuantityUnit};
 use chrono::NaiveDate;
 
 fn message_with_binary(code: &str, version: u16, payload: &[u8]) -> Vec<u8> {
@@ -169,10 +169,7 @@ fn hiwpd_five_parses_its_official_mt535_payload_and_requires_version_match() {
     ));
     assert!(matches!(
         response.depot_positions(4),
-        Err(Error::UnsupportedSegment {
-            code: "HIWPD",
-            version: 4
-        })
+        Err(Error::Unsupported(Limitation::DepotPositionsVersion))
     ));
 
     let malformed = concat!(
@@ -240,6 +237,45 @@ fn mt535_variants_preserve_sign_quality_and_percentage_cost_basis() {
     assert!(cost.is_percentage());
     assert_eq!(cost.currency(), None);
     assert_eq!(cost.coefficient(), 10_025);
+}
+
+// DK Anlage 3 v3.9 4.3 full-message example and HBCI 2.2 IX.2.4
+// independently print `70E::HOLD` without the line-number digits required by
+// their structured-field tables. The fictional first position keeps that
+// unambiguous two-line shape, so its line-two amount is explicit and preserved.
+// The second position proves that an omitted optional HOLD remains `None`.
+#[test]
+fn mt535_unnumbered_official_cost_basis_shape_and_absence_are_accepted() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS16\r\n",
+        "Fictional Unnumbered Holding\r\n",
+        ":93B::AGGR//UNIT/2,\r\n",
+        ":70E::HOLD//STK+511+00081+DE+20260730\r\n",
+        "12,50+EUR\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS17\r\n",
+        "Fictional Holding Without Cost\r\n",
+        ":93B::AGGR//UNIT/3,\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
+
+    assert_eq!(page.positions.len(), 2);
+    let explicit = page.positions[0].cost_basis().unwrap();
+    assert_eq!(explicit.coefficient(), 1_250);
+    assert_eq!(explicit.currency(), Some("EUR"));
+    assert!(page.positions[1].cost_basis().is_none());
 }
 
 // DK Anlage 3 v3.9, 4.4 MT536; FinTS Messages 2022 C.4.3.2 HIWDU 5.
@@ -1022,7 +1058,7 @@ fn gate4_capabilities_are_negotiated_only_from_exact_parameter_versions() {
     let mut state = ReusableState::new();
     response.apply_parameters(&mut state).unwrap();
 
-    assert!(state.depot_positions_supported);
+    assert_eq!(state.depot_position_versions, [6]);
     assert!(state.securities_transactions_supported);
     assert_eq!(state.depot_positions_requires_tan, Some(false));
     assert_eq!(state.securities_transactions_requires_tan, Some(true));

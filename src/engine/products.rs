@@ -121,7 +121,7 @@ impl Engine {
             Limitation::DepotPositionsNotAuthorized,
         )?;
         let parameters = self.parameters();
-        if !parameters.depot_positions_supported {
+        if parameters.depot_position_versions.is_empty() {
             return Err(if parameters.depot_positions_advertised {
                 Limitation::DepotPositionsVersion
             } else {

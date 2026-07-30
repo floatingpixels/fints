@@ -1,6 +1,7 @@
 use chrono::{NaiveDate, NaiveTime};
 
 use crate::{
+    Limitation,
     error::{Error, malformed_securities_data},
     model::{
         Amount, DepotPosition, PriceQuality, QuantityUnit, SecuritiesAmount, SecuritiesMovement,
@@ -40,10 +41,7 @@ pub(super) fn positions(
     // retains the same SRG-1998 MT535 payload for HIWPD 6. Version 4 carries
     // MT571 and is deliberately unsupported.
     if !(5..=6).contains(&version) {
-        return Err(Error::UnsupportedSegment {
-            code: "HIWPD",
-            version,
-        });
+        return Err(Limitation::DepotPositionsVersion.into());
     }
     let payload = response_binary(segments, b"HIWPD", "HIWPD", version)?;
     payload.map(parse_positions).transpose()
@@ -654,25 +652,29 @@ fn parse_signed_amount(value: &str, prefix: &str) -> Result<SecuritiesAmount, Er
 }
 
 fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
-    // Anlage 3 v3.9 4.3 places the explicitly reported acquisition amount and
-    // currency on line two of the structured HOLD field.
-    // Anlage 3 v3.9 4.3 mandates the structured 70E::HOLD line-number digits.
-    // The caller sees only a successfully parsed cost basis, so malformed
-    // structured content is treated exactly like an absent optional value.
+    // Anlage 3 v3.9 4.3 and HBCI 2.2 IX.2.4 place the explicitly reported
+    // acquisition amount and currency on structured HOLD line two. Their field
+    // tables require the `1`/`2` line-number digits, but both full-message
+    // examples omit them while retaining the same two-line structure. Accept
+    // that independently printed shape only when line one is structurally
+    // recognizable; arbitrary or ambiguous optional content remains absent.
     let body = value
         .strip_prefix(":HOLD//")
         .ok_or(malformed_securities_data!())?;
-    if !body
-        .split('\n')
-        .next()
-        .is_some_and(|line| line.starts_with('1'))
-    {
-        return Err(malformed_securities_data!());
-    }
-    let Some(line) = body.split('\n').nth(1) else {
+    let mut lines = body.split('\n');
+    let first = lines.next().ok_or(malformed_securities_data!())?;
+    let Some(second) = lines.next() else {
         return Ok(None);
     };
-    let line = line.strip_prefix('2').ok_or(malformed_securities_data!())?;
+    let line = if first.starts_with('1') {
+        second
+            .strip_prefix('2')
+            .ok_or(malformed_securities_data!())?
+    } else if unnumbered_cost_basis_header(first) {
+        second
+    } else {
+        return Err(malformed_securities_data!());
+    };
     let mut fields = line.split('+');
     let Some(number) = fields.next().filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -691,6 +693,28 @@ fn parse_cost_basis(value: &str) -> Result<Option<SecurityPrice>, Error> {
         None,
         None,
     )))
+}
+
+fn unnumbered_cost_basis_header(value: &str) -> bool {
+    let mut fields = value.split('+');
+    let unit = fields.next();
+    let transaction_type = fields.next();
+    let depository = fields.next();
+    let country = fields.next();
+    let date = fields.next();
+    unit.is_some_and(|field| {
+        field.len() == 3 && field.bytes().all(|byte| byte.is_ascii_uppercase())
+    }) && transaction_type
+        .is_some_and(|field| field.len() == 3 && field.bytes().all(|byte| byte.is_ascii_digit()))
+        && depository.is_some_and(|field| {
+            field.len() == 5 && field.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && country.is_some_and(|field| {
+            field.len() == 2 && field.bytes().all(|byte| byte.is_ascii_uppercase())
+        })
+        && date.is_some_and(|field| {
+            field.len() == 8 && field.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 fn decimal(value: &str) -> Result<(u128, u8), Error> {
