@@ -968,7 +968,23 @@ fn populated_hitab_preserves_ordered_bank_responses_and_redaction() {
     engine
         .tan_media_initialization_request(now().date(), now().time())
         .unwrap();
-    let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
+    let medium = [
+        "M",
+        "1",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "Fictional phone",
+    ]
+    .join(":");
     let hitab = format!("HITAB:3:5:5+1+{medium}");
     let response = response(
         &[

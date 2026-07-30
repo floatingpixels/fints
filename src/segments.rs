@@ -169,11 +169,11 @@ pub(crate) fn tan_media_request(
     context: &SecurityContext<'_>,
     version: u16,
 ) -> Result<Vec<u8>, Error> {
-    // PIN/TAN 2020 C.3.1.1 and archived E.2.1.2/E.2.1.4: v2 has only
+    // PIN/TAN 2020 C.3.1.1 and archived E.2.1.2-E.2.1.4: v2/v3 have only
     // TAN-Medium-Art, while v4/v5 additionally require TAN-Medium-Klasse.
     // Request every available medium of every class.
     let elements = match version {
-        2 => vec![text("0")?],
+        2 | 3 => vec![text("0")?],
         4 | 5 => vec![text("0")?, text("A")?],
         _ => return Err(Limitation::TanMediumVersion.into()),
     };

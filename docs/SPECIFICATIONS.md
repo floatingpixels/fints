@@ -208,18 +208,24 @@ access date for each source below is 2026-07-28.
   require UPD acquisition or an ordinary selected-method initialization first;
   the filler exception applies only to this HKTAB initialization.
   C.3.1.1 defines HKTAB/HITAB 5 and permits an empty repeated medium list only
-  when no medium is available. Archived E.2.1.2 and E.2.1.4 define matching
-  HITABS/HKTAB/HITAB version triples for legacy versions 2 and 4: HKTAB 2
-  carries only `TAN-Medium-Art`, while versions 4 and 5 also carry
-  `TAN-Medium-Klasse`; their HITAB responses use TAN-Medium-Liste element
-  versions 2, 4, and 5 respectively. E.2.1.4 and the TAN-Medium-Liste 4 Data
-  Dictionary place class, status, card number, and card sequence first and mark
-  both card fields conditionally mandatory for class `G` and prohibited
-  otherwise; versions 2 and 5 use the same conditional pair at their
-  version-specific positions. Because the crate neither exposes nor consumes
-  these two identifiers, the acceptance-space policy reads their occupancy
-  past for every medium class. Missing identifiers remain missing, received
-  identifiers are not retained, and no placeholder value is fabricated.
+  when no medium is available. Archived E.2.1.2-E.2.1.4 define matching
+  HITABS/HKTAB/HITAB triples for legacy versions 2-4: HKTAB 2/3 carry only
+  `TAN-Medium-Art`, while versions 4/5 also carry `TAN-Medium-Klasse`; their
+  responses use the same-numbered TAN-Medium-Liste element version.
+  TAN-Medium-Liste 2-4 fields 1-5 occupy flat components 1-5, nested field 6
+  `ktv` occupies components 6-9, fields 7-9 occupy components 10-12, and field
+  10 `Bezeichnung des TAN-Mediums` is therefore component 13. Version 3 adds
+  the masked phone at component 14; version 4 adds masked/plain phones at
+  components 14/15. Version 5 inserts the security function before the card
+  fields and moves nested `ktv` to field 7/components 7-10, list number to
+  component 13, designation to component 14, and masked/plain phones to
+  components 15/16. The later nested `kti` occupies six flat components in
+  every version. Card number and sequence precede `ktv` (components 3/4 in
+  versions 2-4 and 4/5 in version 5), so their existing mapping is unchanged.
+  Status is always component 2. Because the crate neither exposes nor consumes
+  card number, card sequence, list number, unmasked phone, `ktv`, or `kti`, the
+  acceptance-space policy reads their occupancy past; received identifiers are
+  not retained and no placeholder is fabricated.
   Formals C.10 makes a BPD
   parameter-segment version the advertisement of that same operation version
   and calls for the highest common version. F.2 separates dialog
@@ -236,11 +242,12 @@ access date for each source below is 2026-07-28.
   medium class, and no rule replaces it with the number of records returned for
   one user by HITAB. Archived E.2.1.4 and the DD define HKTAB 4
   `TAN-Medium-Art=0` as all media and `TAN-Medium-Klasse=A` as all classes, so
-  `+0+A` requests the complete relevant set. In both TAN-Medium-Liste 2 and 4,
-  component 10 is the only `Bezeichnung des TAN-Mediums`; it is mandatory for
-  class `M` and optional for class `G`. Class-G card number and card sequence do not
-  become HKTAN DE 12 selectors, and neither E.2.1.4 nor the Data Dictionary
-  defines an implicit selection for a sole unnamed record. Correction T17
+  `+0+A` requests the complete relevant set. In TAN-Medium-Liste 4, field 10
+  `Bezeichnung des TAN-Mediums` is component 13 after flattening nested `ktv`;
+  it is mandatory for class `M` and optional for class `G`. Class-G card number
+  and card sequence do not become HKTAN DE 12 selectors, and neither E.2.1.4 nor
+  the Data Dictionary defines an implicit selection for a sole unnamed record.
+  Correction T17
   introduced HKTAB/HITAB 4 and is incorporated in Release 2020's archived E.2.1.4;
   correction T33 permits `Segmentkennung` during process 4 for both HKTAN
   versions. The
@@ -251,17 +258,18 @@ access date for each source below is 2026-07-28.
   result or defines a parameter-refresh continuation; B.4.3.1.3 still requires
   HITAB before the client closes the dialog. The HITAB 4 response additionally
   carries mandatory `TAN-Einsatzoption` (`0`, `1`, or `2`), which describes
-  parallel-use policy but does not waive HKTAN DE 12. Consequently, a method
-  advertising field 21 greater than one plus requirement code `2`, together
-  with an all/all HITAB result containing only unnamed media, defines no
-  standards-backed ordinary HKTAN selector. Testing omitted or explicitly
-  empty DE 12 values is therefore registered only as an opt-in owner-attended
-  interoperability experiment, not as behavior authorized by this source.
+  parallel-use policy but does not waive HKTAN DE 12. The owner-attended
+  response with occupied components 1, 2, and 13 therefore contained a valid
+  class-G designation. The earlier `TanMediumUnavailable` result came from
+  treating DD field 10 as flat component 10 and was an implementation defect,
+  not a contradictory institute parameter set. The selector omission/empty
+  experiment based on that premise has been removed without adding either wire
+  shape to supported behavior.
 - **Apply alongside:** T34, T33, T31, T21, T8, and T2 from the correction
   register. T32 is incorporated by this Release 2020 PDF.
 - **Authorizes:** the Gate 1 PIN/TAN profile, supported-method selection,
   HKTAN/HITAN 6 and 7 flows, typed TAN and decoupled approval continuations,
-  HIPINS/HITANS interpretation, and HKTAB/HITAB 2, 4, and 5 media discovery. The
+  HIPINS/HITANS interpretation, and HKTAB/HITAB 2-5 media discovery. The
   medium-discovery sections authorize requiring HITAB after an accepted request
   and returning a typed limitation when an advertised required name is not
   selectable. One unnamed class-G record remains usable when the method does not
@@ -273,7 +281,7 @@ access date for each source below is 2026-07-28.
   or acquiring UPD before first-access HKTAB discovery.
   A process-4 HITAN is validated as the response to the embedded HKTAN. If the
   same response omits HITAB, the archived/current operation definitions
-  authorize sending the highest common advertised HKTAB 2/4/5 order in that
+  authorize sending the highest common advertised HKTAB 2-5 order in that
   open dialog; the matching HITAB remains mandatory. B.4.3.1 and
   F.2.5 additionally authorize closing an open function-999 discovery with a
   profile-1, security-function-999 HKEND using the active dialog state. It also

@@ -2047,25 +2047,52 @@ fn gate3_upd_skips_non_account_records_and_applies_iban_length_correction() {
     );
 }
 
+fn fictional_tan_medium(
+    version: u16,
+    class: &str,
+    name: Option<&str>,
+    masked_phone: Option<&str>,
+    ktv: bool,
+) -> String {
+    // This fixture construction is independent of the parser. PIN/TAN 2020 DD
+    // TAN-Medium-Liste 2-5: ktv occupies four flat components. Versions 2-4
+    // therefore place field 10 at component 13, while v5 places field 11 at
+    // component 14 after its additional security-function field.
+    let (component_count, ktv_start, name_index, masked_phone_index) = match version {
+        2 => (13, 5, 12, None),
+        3 | 4 => (14, 5, 12, Some(13)),
+        5 => (15, 6, 13, Some(14)),
+        _ => panic!("fixture supports TAN-Medium-Liste 2-5"),
+    };
+    let mut components = vec![""; component_count];
+    components[0] = class;
+    components[1] = "1";
+    if ktv {
+        components[ktv_start] = "654321";
+        components[ktv_start + 1] = "01";
+        components[ktv_start + 2] = "280";
+        components[ktv_start + 3] = "12345678";
+    }
+    if let Some(name) = name {
+        components[name_index] = name;
+    }
+    if let (Some(index), Some(masked_phone)) = (masked_phone_index, masked_phone) {
+        components[index] = masked_phone;
+    }
+    components.join(":")
+}
+
 // FinTS 3.0 PIN/TAN 2020-07-10, C.3.1.1 and Data Dictionary
 // "TAN-Medium-Liste" 5.
 #[test]
 fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
-    let medium = ["M", "1", "", "", "", "", "", "", "", "", "Fictional phone"].join(":");
-    let bilateral = [
-        "B",
-        "1",
-        "free-form",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "Fictional bilateral",
-    ]
-    .join(":");
+    let medium = fictional_tan_medium(5, "M", Some("Fictional phone"), Some("?+49***123"), false);
+    let mut bilateral = vec![""; 14];
+    bilateral[0] = "B";
+    bilateral[1] = "1";
+    bilateral[2] = "free-form";
+    bilateral[13] = "Fictional bilateral";
+    let bilateral = bilateral.join(":");
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
@@ -2085,15 +2112,16 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     assert_eq!(media[0].class(), crate::TanMediumClass::Mobile);
     assert_eq!(media[0].status(), crate::TanMediumStatus::Active);
     assert_eq!(media[0].name(), Some("Fictional phone"));
-    assert_eq!(media[0].masked_phone(), None);
+    assert_eq!(media[0].masked_phone(), Some("+49***123"));
     assert_eq!(media[1].class(), crate::TanMediumClass::Bilateral);
     assert_eq!(media[1].security_function(), Some("free-form"));
 
-    let missing_name = ["M", "1", "", "", "", "", "", "", "", "", "", "?+49***123"].join(":");
+    let missing_name = fictional_tan_medium(5, "M", None, Some("?+49***123"), false);
+    let generator = fictional_tan_medium(5, "G", Some("Fictional generator"), None, false);
     let fixture = message(
         &[
             "HIRMG:2:2+0010::accepted".into(),
-            format!("HITAB:3:5:4+1+{missing_name}+G:1:::::::::Fictional generator"),
+            format!("HITAB:3:5:4+1+{missing_name}+{generator}"),
         ],
         "dialog2",
         1,
@@ -2107,84 +2135,100 @@ fn hitab_five_preserves_only_the_safe_medium_identity_fields() {
     assert_eq!(media[0].class(), crate::TanMediumClass::Generator);
 }
 
-// PIN/TAN 2020 archived E.2.1.2/E.2.1.4 and DD
-// TAN-Medium-Liste 2/4 define distinct legacy component positions.
+// PIN/TAN 2020 archived E.2.1.2-E.2.1.4 and DD TAN-Medium-Liste 2-4
+// define the legacy request versions and flat component positions.
 #[test]
-fn legacy_hitab_two_and_four_use_their_independent_media_layouts() {
-    let medium_two = ["M", "1", "", "", "", "", "", "", "", "Fictional SMS"].join(":");
-    let fixture_two = message(
-        &[
-            "HIRMG:2:2+0010::accepted".into(),
-            format!("HITAB:3:2:4+1+{medium_two}"),
-        ],
-        "dialog-two",
-        1,
-    );
-    let media_two = Response::parse(&fixture_two)
-        .unwrap()
-        .tan_media(2, None)
-        .unwrap()
-        .unwrap();
-    assert_eq!(media_two[0].name(), Some("Fictional SMS"));
-    assert_eq!(media_two[0].masked_phone(), None);
-    assert_eq!(media_two[0].security_function(), None);
+fn legacy_hitab_versions_use_their_independent_media_layouts() {
+    for (version, name, masked_phone) in [
+        (2, "Fictional list", None),
+        (3, "Fictional SMS", Some("?+49***345")),
+        (4, "Fictional Push", Some("?+49***456")),
+    ] {
+        let medium = fictional_tan_medium(version, "M", Some(name), masked_phone, false);
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "legacy-media",
+            1,
+        );
+        let media = Response::parse(&fixture)
+            .unwrap()
+            .tan_media(version, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(media[0].name(), Some(name));
+        assert_eq!(
+            media[0].masked_phone(),
+            masked_phone.map(|value| value.trim_start_matches('?'))
+        );
+        assert_eq!(media[0].security_function(), None);
+    }
+}
 
-    let medium_four = [
-        "M",
-        "1",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "Fictional Push",
-        "?+49***456",
-    ]
-    .join(":");
-    let fixture_four = message(
-        &[
-            "HIRMG:2:2+0010::accepted".into(),
-            format!("HITAB:3:4:4+1+{medium_four}"),
-        ],
-        "dialog-four",
-        1,
-    );
-    let media_four = Response::parse(&fixture_four)
-        .unwrap()
-        .tan_media(4, None)
-        .unwrap()
-        .unwrap();
-    assert_eq!(media_four[0].name(), Some("Fictional Push"));
-    assert_eq!(media_four[0].masked_phone(), Some("+49***456"));
-    assert_eq!(media_four[0].security_function(), None);
+// The populated national account DEG proves the component offset rather than
+// relying on a run of empty placeholders. The account values are not retained.
+#[test]
+fn hitab_four_and_five_names_follow_the_flattened_ktv_group() {
+    for version in [4, 5] {
+        let medium = fictional_tan_medium(version, "G", Some("Fictional Generator"), None, true);
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "flattened-account-group",
+            1,
+        );
+        let media = Response::parse(&fixture)
+            .unwrap()
+            .tan_media(version, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(media[0].name(), Some("Fictional Generator"));
+    }
+}
+
+// Values immediately following the nested ktv are validity dates, not medium
+// designations. A mobile entry with only that old, incorrect parser position
+// occupied remains unusable instead of leaking the date into HKTAN DE 12.
+#[test]
+fn hitab_valid_from_is_not_misread_as_the_medium_name() {
+    for (version, valid_from_index) in [(4, 9), (5, 10)] {
+        let mut components = fictional_tan_medium(version, "M", None, None, false)
+            .split(':')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        components[valid_from_index] = "20260730".to_owned();
+        let medium = components.join(":");
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                format!("HITAB:3:{version}:4+1+{medium}"),
+            ],
+            "valid-from-is-not-name",
+            1,
+        );
+        assert!(
+            Response::parse(&fixture)
+                .unwrap()
+                .tan_media(version, None)
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 // PIN/TAN 2020 archived E.2.1.2/E.2.1.4 and DD TAN-Medium-Liste
-// 2/4/5: card number and sequence form one conditional class-G group. The
+// 2/3/4/5: card number and sequence form one conditional class-G group. The
 // crate does not expose or consume either meaning-neutral identifier.
 #[test]
 fn hitab_generator_accepts_a_completely_absent_discarded_card_group() {
-    let fixtures = [
-        (
-            2,
-            "G:1::::::::Fictional Generator 2",
-            "Fictional Generator 2",
-        ),
-        (
-            4,
-            "G:1::::::::Fictional Generator 4",
-            "Fictional Generator 4",
-        ),
-        (
-            5,
-            "G:1:::::::::Fictional Generator 5",
-            "Fictional Generator 5",
-        ),
-    ];
-
-    for (version, medium, expected_name) in fixtures {
+    for version in 2..=5 {
+        let expected_name = format!("Fictional Generator {version}");
+        let medium = fictional_tan_medium(version, "G", Some(&expected_name), None, false);
         let fixture = message(
             &[
                 "HIRMG:2:2+0010::accepted".into(),
@@ -2200,7 +2244,7 @@ fn hitab_generator_accepts_a_completely_absent_discarded_card_group() {
             .unwrap();
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].class(), crate::TanMediumClass::Generator);
-        assert_eq!(media[0].name(), Some(expected_name));
+        assert_eq!(media[0].name(), Some(expected_name.as_str()));
     }
 }
 
@@ -2208,23 +2252,40 @@ fn hitab_generator_accepts_a_completely_absent_discarded_card_group() {
 // and card fields on other classes are read past without retaining identifiers.
 #[test]
 fn hitab_discarded_card_fields_never_reject_the_medium_list() {
-    for (version, medium, expected_class) in [
+    for (version, card_number, card_sequence, expected_class) in [
         (
             2,
-            "G:1:fictional-card-2:::::::Fictional Generator 2",
+            Some("fictional-card-2"),
+            None,
             crate::TanMediumClass::Generator,
         ),
-        (
-            4,
-            "G:1::4::::::Fictional Generator 4",
-            crate::TanMediumClass::Generator,
-        ),
+        (3, None, Some("3"), crate::TanMediumClass::Generator),
+        (4, None, Some("4"), crate::TanMediumClass::Generator),
         (
             5,
-            "M:1::discarded-card-5:5::::::Fictional SMS 5",
+            Some("discarded-card-5"),
+            Some("5"),
             crate::TanMediumClass::Mobile,
         ),
     ] {
+        let class = if expected_class == crate::TanMediumClass::Mobile {
+            "M"
+        } else {
+            "G"
+        };
+        let name = format!("Fictional medium {version}");
+        let mut medium = fictional_tan_medium(version, class, Some(&name), None, false)
+            .split(':')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let card_index = if version == 5 { 3 } else { 2 };
+        if let Some(card_number) = card_number {
+            medium[card_index] = card_number.to_owned();
+        }
+        if let Some(card_sequence) = card_sequence {
+            medium[card_index + 1] = card_sequence.to_owned();
+        }
+        let medium = medium.join(":");
         let fixture = message(
             &[
                 "HIRMG:2:2+0010::accepted".into(),
@@ -2253,8 +2314,9 @@ fn hitabs_versions_are_retained_as_ordered_media_discovery_capabilities() {
             "HIBPA:3:3:4+81+280:12345678+Fictional Bank+9+1+300".into(),
             "HITABS:4:2:4+1+1+0".into(),
             "HITABS:5:5:4+1+1+0".into(),
-            "HITABS:6:4:4+1+1+0".into(),
-            "HITABS:7:2:4+1+1+0".into(),
+            "HITABS:6:3:4+1+1+0".into(),
+            "HITABS:7:4:4+1+1+0".into(),
+            "HITABS:8:2:4+1+1+0".into(),
         ],
         "media-bpd",
         1,
@@ -2264,7 +2326,7 @@ fn hitabs_versions_are_retained_as_ordered_media_discovery_capabilities() {
         .unwrap()
         .apply_parameters(&mut state)
         .unwrap();
-    assert_eq!(state.advertised_tan_media_versions(), [5, 4, 2]);
+    assert_eq!(state.advertised_tan_media_versions(), [5, 4, 3, 2]);
 }
 
 // Entry-local discarded fields and unknown records never hide usable siblings.
@@ -2276,7 +2338,7 @@ fn legacy_hitab_skips_unusable_entries_but_rejects_envelope_mismatch() {
             "HIRMG:2:2+0010::accepted".into(),
             concat!(
                 "HITAB:3:4:4+unexpected+X:1",
-                "+L:1+M:1::::::::Fictional Push"
+                "+L:1+M:1:::::::::::Fictional Push"
             )
             .into(),
         ],

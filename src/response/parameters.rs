@@ -364,7 +364,7 @@ pub(super) fn tan_media(
         });
     }
     let header = segment.header().expect("header checked");
-    if !matches!(header.version, 2 | 4 | 5) {
+    if !matches!(header.version, 2..=5) {
         return Err(Error::UnsupportedSegment {
             code: "HITAB",
             version: header.version,
@@ -381,33 +381,9 @@ pub(super) fn tan_media(
         });
     }
     let layout = match header.version {
-        2 => TanMediumLayout {
-            name: 9,
-            masked_phone: None,
-            security_function: None,
-            #[cfg(feature = "development-diagnostics")]
-            card_number: 2,
-            #[cfg(feature = "development-diagnostics")]
-            card_sequence: 3,
-        },
-        4 => TanMediumLayout {
-            name: 9,
-            masked_phone: Some(10),
-            security_function: None,
-            #[cfg(feature = "development-diagnostics")]
-            card_number: 2,
-            #[cfg(feature = "development-diagnostics")]
-            card_sequence: 3,
-        },
-        5 => TanMediumLayout {
-            name: 10,
-            masked_phone: Some(11),
-            security_function: Some(2),
-            #[cfg(feature = "development-diagnostics")]
-            card_number: 3,
-            #[cfg(feature = "development-diagnostics")]
-            card_sequence: 4,
-        },
+        2 => TanMediumLayout::legacy(false),
+        3 | 4 => TanMediumLayout::legacy(true),
+        5 => TanMediumLayout::current(),
         _ => unreachable!("supported HITAB versions were matched"),
     };
     let mut media = Vec::new();
@@ -533,6 +509,44 @@ struct TanMediumLayout {
     card_number: usize,
     #[cfg(feature = "development-diagnostics")]
     card_sequence: usize,
+}
+
+impl TanMediumLayout {
+    const KTV_COMPONENTS: usize = 4;
+
+    fn legacy(has_masked_phone: bool) -> Self {
+        // PIN/TAN 2020 DD, TAN-Medium-Liste 2/3/4:
+        // fields 1-5 occupy components 1-5; field 6 is nested ktv and
+        // therefore occupies components 6-9; fields 7-9 then occupy
+        // components 10-12, making field 10 (the designation) component 13.
+        let name = 5 + Self::KTV_COMPONENTS + 3;
+        Self {
+            name,
+            masked_phone: has_masked_phone.then_some(name + 1),
+            security_function: None,
+            #[cfg(feature = "development-diagnostics")]
+            card_number: 2,
+            #[cfg(feature = "development-diagnostics")]
+            card_sequence: 3,
+        }
+    }
+
+    fn current() -> Self {
+        // TAN-Medium-Liste 5 inserts the security function before the card
+        // group: fields 1-6 occupy components 1-6; field 7 is the four-slot
+        // ktv at components 7-10; fields 8-10 occupy components 11-13.
+        // Field 11 (the designation) is consequently component 14.
+        let name = 6 + Self::KTV_COMPONENTS + 3;
+        Self {
+            name,
+            masked_phone: Some(name + 1),
+            security_function: Some(2),
+            #[cfg(feature = "development-diagnostics")]
+            card_number: 3,
+            #[cfg(feature = "development-diagnostics")]
+            card_sequence: 4,
+        }
+    }
 }
 
 fn parse_account(segment: &Segment) -> Result<Option<Account>, Error> {

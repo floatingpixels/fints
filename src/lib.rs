@@ -30,11 +30,6 @@ pub use client::{
     PollingMode, SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
     SynchronizationContinuation,
 };
-#[cfg(feature = "tan-medium-selector-experiment")]
-pub use client::{
-    TanMediumSelectorExperimentResponse, TanMediumSelectorExperimentResult,
-    TanMediumSelectorExperimentVariant,
-};
 #[cfg(feature = "development-diagnostics")]
 pub use development_diagnostics::{
     HitansMediumRequirementFact, HktabRequestFact, InitializationRecoveryFacts,

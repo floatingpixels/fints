@@ -79,7 +79,7 @@ impl HitansMediumRequirementFact {
 /// Redacted shape of the same-dialog HKTAB request actually emitted.
 ///
 /// `medium_name_field_present` records only the HKTAB segment shape. HKTAB
-/// 2/4/5 has no TAN-medium designation field, so valid requests report `false`.
+/// 2-5 has no TAN-medium designation field, so valid requests report `false`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HktabRequestFact {
     version: u16,
@@ -161,9 +161,9 @@ impl ReturnedTanMediumFact {
 
 /// Redacted component occupancy of one repeated TAN-medium DEG.
 ///
-/// Component positions are one-based Data Dictionary positions. Only the
-/// component count and occupied positions are retained; no values or
-/// identifiers are exposed.
+/// Positions are one-based flat wire-component positions after nested DEGs are
+/// expanded, not Data Dictionary field numbers. Only the component count and
+/// occupied positions are retained; no values or identifiers are exposed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TanMediumElementShapeFact {
     component_count: usize,

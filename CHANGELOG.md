@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-07-30** — Corrected TAN-Medium-Liste 2-5 flat component mappings
+  across nested account groups, added version-3 negotiation, and removed the
+  selector experiment whose premise was invalidated.
+
 - **2026-07-30** — Applied BPD/UPD returned with an experimental HKTAN rejection,
   added redacted HITAB component-shape facts, and added an opt-in version-2
   comparison without changing production negotiation.

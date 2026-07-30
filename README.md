@@ -50,7 +50,7 @@ A new connection follows this bounded sequence:
    closed exactly once. A process-4 HITAN acknowledges the embedded HKTAN; when
    that initialization response does not already contain HITAB, the client sends
    the separate HKTAB order in the same dialog using the highest mutually
-   supported advertised version (2, 4, or 5). No common version returns
+   supported advertised version (2, 3, 4, or 5). No common version returns
    `Limitation::TanMediumVersion` before network I/O.
    A sole unnamed generator record is not an implicit selection: when HKTAN
    requires DE 12, only the HITAB medium designation supplies that value, so an
@@ -109,7 +109,7 @@ has no trace path, and the crate never logs or stores traced payloads itself.
   decoupled approval; process variant 1 and required HHD responses are typed
   limitations.
 - BPD/UPD, system-ID synchronization, TAN-method selection, and negotiated
-  `HKTAB`/`HITAB` 2, 4, or 5 medium discovery.
+  `HKTAB`/`HITAB` 2-5 medium discovery.
 - Advertised `HKSAL`/`HISAL` versions 5-8 for one UPD-authorized cash account.
   Version 5 uses its archived HBCI-defined national-account and legacy response
   layout. The client obeys `HIPINS` instead of assuming that balance retrieval is
@@ -308,38 +308,3 @@ must leave it disabled; the public API and its storage fields are absent without
 feature. Remove the feature, `src/development_diagnostics.rs`, and its explicitly
 marked call sites together once live verification of the three target banks is
 complete.
-
-The still narrower `tan-medium-selector-experiment` feature enables one explicitly
-owner-authorized interoperability experiment after normal discovery returns
-`TanMediumUnavailable`. It does not change `initialize`, medium discovery, or any
-supported operation. Run variant A first in a fresh probe process:
-
-```sh
-FINTS_LIVE_PROBE=1 \
-FINTS_TAN_MEDIUM_EXPERIMENT=omitted \
-cargo run --features tan-medium-selector-experiment --example live_probe
-```
-
-Only if variant A fails, repeat in another fresh process with
-`FINTS_TAN_MEDIUM_EXPERIMENT=empty`. Each invocation sends one selected-method
-personalized initialization, no business order, TAN, retry, or continuation, and one
-HKEND only when the initialization opened. Output includes the initialization's
-caller-visible bank texts and therefore remains owner-controlled diagnostic data. A
-successful experiment is deployment evidence only and does not enable that wire shape
-in production.
-
-Before attempting variant B, `FINTS_TAN_MEDIUM_RESEARCH=1` performs the bounded
-source-backed recheck: one anonymous BPD-zero refresh, normal highest-version
-discovery, then—only if that still returns `TanMediumUnavailable`—one explicitly
-advertised HITAB-2 discovery. It does not alter production version selection:
-
-```sh
-FINTS_LIVE_PROBE=1 \
-FINTS_TAN_MEDIUM_RESEARCH=1 \
-cargo run --features tan-medium-selector-experiment --example live_probe
-```
-
-The diagnostic output reports refreshed HITANS requirement/count facts for every
-method and HITAB component occupancy only. Version 2 and 4 both read the medium
-designation from one-based component 10; no component values or identifiers are
-retained. Each discovery dialog is closed exactly once.

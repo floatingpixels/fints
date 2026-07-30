@@ -61,128 +61,18 @@ impl Engine {
         )
     }
 
-    #[cfg(feature = "tan-medium-selector-experiment")]
-    pub(crate) fn tan_medium_selector_experiment_request(
-        &mut self,
-        variant: crate::client::TanMediumSelectorExperimentVariant,
-        date: NaiveDate,
-        time: NaiveTime,
-    ) -> Result<Vec<u8>, Error> {
-        self.ensure_no_dialog()?;
-        if self.continuation_active {
-            return Err(Error::InconsistentState);
-        }
-        let method = self.selected_method()?.clone();
-        validate_supported_method(&method)?;
-        if !method.medium_name_required
-            || self.state.selected_tan_medium.is_some()
-            || self.tan_media.is_empty()
-            || self.tan_media.iter().any(|medium| medium.name().is_some())
-        {
-            return Err(Error::InconsistentState);
-        }
-        let context = SecurityContext {
-            institute: &self.institute,
-            credentials: &self.credentials,
-            system_id: self.state.system_id.as_deref().unwrap_or("0"),
-            security_function: &method.security_function,
-            profile_version: "2",
-            dialog_id: "0",
-            message_number: 1,
-            date,
-            time,
-        };
-        let medium_name = match variant {
-            crate::client::TanMediumSelectorExperimentVariant::Omitted => None,
-            crate::client::TanMediumSelectorExperimentVariant::Empty => Some(""),
-        };
-        segments::initialization(
-            &context,
-            &self.product,
-            &self.state,
-            Some(&method),
-            "HKIDN",
-            medium_name,
-        )
-    }
-
-    #[cfg(feature = "tan-medium-selector-experiment")]
-    pub(crate) fn accept_tan_medium_selector_experiment_initialization(
-        &mut self,
-        input: &[u8],
-    ) -> Result<bool, Error> {
-        let method = self.selected_method()?.clone();
-        let response = Response::parse(input)?;
-        self.record_responses(&response);
-        // Formals C.3.2.2 makes a complete BPD delivered during initialization
-        // immediately active. Apply it before classifying an experimental HKTAN
-        // rejection so the next discovery never reasons from superseded HITANS.
-        self.apply_parameters(&response)?;
-        let hktan_only_rejection = response.responses().iter().any(|response| {
-            response.class() == crate::ResponseClass::Error && response.segment_number() == Some(5)
-        }) && response.responses().iter().all(|response| {
-            response.class() != crate::ResponseClass::Error || response.segment_number() == Some(5)
-        }) && response.responses().iter().any(|response| {
-            response.class() == crate::ResponseClass::Success && response.segment_number().is_none()
-        });
-        if response.is_dialog_abort() || (response.first_error().is_some() && !hktan_only_rejection)
-        {
-            self.abort_dialog();
-            return Ok(false);
-        }
-        // Formals B.7.5.2 rejects only the referenced syntactic unit. A class-9
-        // HIRMS for the experimental HKTAN therefore leaves an otherwise
-        // successful initialization dialog open; only 9800 ends it bank-side.
-        let next_message_number = response
-            .message_number()
-            .checked_add(1)
-            .ok_or(Error::InconsistentState)?;
-        self.dialog = Some(DialogState {
-            id: response.dialog_id().to_owned(),
-            next_message_number,
-            security_function: method.security_function.clone(),
-            profile_version: "2",
-            system_id: self
-                .state
-                .system_id
-                .clone()
-                .unwrap_or_else(|| "0".to_owned()),
-            method: Some(method),
-            anonymous: false,
-        });
-        self.continuation_active = false;
-        Ok(true)
-    }
-
     pub(crate) fn tan_media_initialization_request(
         &mut self,
         date: NaiveDate,
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
-        self.tan_media_initialization_request_for_version(date, time, None)
+        self.build_tan_media_initialization_request(date, time)
     }
 
-    #[cfg(feature = "tan-medium-selector-experiment")]
-    pub(crate) fn tan_media_initialization_request_version_two(
+    fn build_tan_media_initialization_request(
         &mut self,
         date: NaiveDate,
         time: NaiveTime,
-    ) -> Result<Vec<u8>, Error> {
-        let method = self.selected_method()?;
-        if !method.medium_name_required
-            || self.tan_media.is_empty()
-            || self.tan_media.iter().any(|medium| medium.name().is_some())
-        {
-            return Err(Error::InconsistentState);
-        }
-        self.tan_media_initialization_request_for_version(date, time, Some(2))
-    }
-
-    fn tan_media_initialization_request_for_version(
-        &mut self,
-        date: NaiveDate,
-        time: NaiveTime,
-        forced_version: Option<u16>,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_no_dialog()?;
         self.tan_media.clear();
@@ -195,7 +85,7 @@ impl Engine {
         }
         let method = self.selected_method()?.clone();
         validate_supported_method(&method)?;
-        let version = self.tan_media_version(forced_version)?;
+        let version = self.negotiated_tan_media_version()?;
         self.selected_tan_media_version = Some(version);
         let system_id = self.state.system_id.as_deref().unwrap_or("0");
         let context = SecurityContext {
@@ -229,21 +119,12 @@ impl Engine {
         &mut self,
         input: &[u8],
     ) -> Result<TanMediaInitializationResult, Error> {
-        self.accept_tan_media_initialization_for_version(input, None)
+        self.accept_tan_media_initialization_response(input)
     }
 
-    #[cfg(feature = "tan-medium-selector-experiment")]
-    pub(crate) fn accept_tan_media_initialization_version_two(
+    fn accept_tan_media_initialization_response(
         &mut self,
         input: &[u8],
-    ) -> Result<TanMediaInitializationResult, Error> {
-        self.accept_tan_media_initialization_for_version(input, Some(2))
-    }
-
-    fn accept_tan_media_initialization_for_version(
-        &mut self,
-        input: &[u8],
-        forced_version: Option<u16>,
     ) -> Result<TanMediaInitializationResult, Error> {
         let method = self.selected_method()?.clone();
         let response = Response::parse(input)?;
@@ -276,7 +157,7 @@ impl Engine {
         // accepted dialog is already recorded so a local version limitation
         // still closes it exactly once.
         self.selected_tan_media_version = None;
-        let media_version = self.tan_media_version(forced_version)?;
+        let media_version = self.negotiated_tan_media_version()?;
         self.selected_tan_media_version = Some(media_version);
         #[cfg(feature = "development-diagnostics")]
         {
@@ -421,21 +302,8 @@ impl Engine {
     fn negotiated_tan_media_version(&self) -> Result<u16, Error> {
         self.advertised_tan_media_versions()
             .into_iter()
-            .find(|version| matches!(version, 2 | 4 | 5))
+            .find(|version| matches!(version, 2..=5))
             .ok_or_else(|| Limitation::TanMediumVersion.into())
-    }
-
-    fn tan_media_version(&self, forced_version: Option<u16>) -> Result<u16, Error> {
-        match forced_version {
-            Some(version)
-                if matches!(version, 2 | 4 | 5)
-                    && self.advertised_tan_media_versions().contains(&version) =>
-            {
-                Ok(version)
-            }
-            Some(_) => Err(Limitation::TanMediumVersion.into()),
-            None => self.negotiated_tan_media_version(),
-        }
     }
 
     pub(crate) fn accept_initialization(
