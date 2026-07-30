@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-30** — Made explicit per-account UPD operation permission decisive
+  for depot and credit-card reads; descriptive account type no longer vetoes it.
+
 - **2026-07-30** — Accepted the two official unnumbered `70E::HOLD`
   examples without fabricating ambiguous cost basis, derived depot-position
   support from versions, and clarified missing-HISYN recovery diagnostics.

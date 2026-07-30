@@ -33,8 +33,10 @@ access date for each source below is 2026-07-28.
   correction).
 - **Gate 4 sections:** B.6 (opaque pagination); E.3 and the HIUPD 6 Data
   Dictionary entries for account type and account/depot number. Account types
-  30-39 identify securities depots and 50-59 identify credit-card accounts;
-  advertised allowed operations still authorize each concrete request.
+  30-39 classify securities depots and 50-59 classify credit-card accounts.
+  The `Erlaubte Geschäftsvorfälle` group separately defines whether the user may
+  execute an operation and its required signature count; `UPD-Verwendung`
+  governs operations omitted from that list.
 - **Gate 4 live-interoperability sections:** B.7.1 (an institute response places
   optional HNSHK 4 before its mandatory HIRMG 2 and optional HNSHA 2 before
   HNHBS); B.8 (HNVSK follows HNHBK and HNVSD contains the complete logical
@@ -483,8 +485,9 @@ because it is publicly accessible.
 Gate 1 applies these entries:
 
 - **Formals/protocol:** P26 (2025-01-02, BPD version changes and client-only
-  version zero), P24 (2021-11-12, HIUPD account type mandatory for payment
-  accounts), P23 (2021-07-07, code 9997), P22 (2019-07-22, code 3081), P21
+  version zero), P24 (2021-11-12, HIUPD account type occupancy for unambiguous
+  PSD2 payment-account identification, without assigning authorization
+  semantics), P23 (2021-07-07, code 9997), P22 (2019-07-22, code 3081), P21
   (2018-09-26, product/security warnings and errors), P20 (2018-02-23,
   indeterminate code 9000), P18 (2016-09-20, UPD extension and FinTS
   processes, incorporated by Formals 2017), P17 (2016-06-29, code 9185), P16

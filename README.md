@@ -193,25 +193,28 @@ the crate reports the typed protocol or transport evidence it can verify.
 
 ## Supported Gate 4 products
 
-- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 5-6
-  for account types 30-39. Its bounded MT535 parser preserves supplied
+- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 5-6.
+  Its bounded MT535 parser preserves supplied
   instrument identifiers, quantities and signs, market or indicative prices,
   currencies, dates, market values, and amount- or percentage-denominated cost
   basis.
 - `securities_transactions` uses only advertised and UPD-authorized
-  `HKWDU`/`HIWDU` 5 for account types 30-39. Its bounded MT536 parser preserves
+  `HKWDU`/`HIWDU` 5. Its bounded MT536 parser preserves
   supplied references, instruments, quantities, prices, amounts, accrued
   interest, movement types, dates, reversal status, and free text. The protocol
   sentinel `NONREF` and an omitted optional transaction-detail block remain
   missing values. MT536 has no typed fee field, so free text is never interpreted
   as a fee or transaction identity.
 - `credit_card_transactions` and `credit_card_balance` use G112
-  `HKKKU`/`HIKKU`/`HIKKUS` 1 and `HKKKS`/`HIKKS`/`HIKKSS` 1 only for account
-  types 50-59. The conditional international account binding and optional date
-  range come exclusively from BPD; UPD must independently authorize the
-  operation. Institution-defined card-number masking is preserved as returned,
-  and current-balance dates and optional times are preserved exactly. A card
-  balance is neither derived from nor reconciled to returned entries.
+  `HKKKU`/`HIKKU`/`HIKKUS` 1 and `HKKKS`/`HIKKS`/`HIKKSS` 1. The conditional
+  international account binding and optional date range come exclusively from
+  BPD; UPD must independently authorize the operation. Institution-defined
+  card-number masking is preserved as returned, and current-balance dates and
+  optional times are preserved exactly. A card balance is neither derived from
+  nor reconciled to returned entries.
+- UPD `Kontoart` remains optional descriptive metadata for caller-side routing.
+  It never vetoes an operation that the account's allowed-operation list
+  explicitly authorizes; `UPD-Verwendung` still governs unlisted operations.
 - FinTS continuation points are exhausted in the active dialog with the same
   repeated-point, 100-page, and 10,000-entry bounds as Gate 2. `HIPINS` decides
   whether each operation requires TAN handling.

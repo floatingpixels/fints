@@ -990,19 +990,11 @@ impl Engine {
         unauthorized: Limitation,
     ) -> Result<Account, Error> {
         let account = self.accounts().get(index).ok_or(unauthorized)?.clone();
+        // Formals E.2/E.3: "Erlaubte Geschäftsvorfälle" and UPD-Verwendung
+        // determine whether an operation is authorized for an account. Kontoart
+        // is descriptive classification; correction P24 changes its occupancy
+        // for payment-account identification, not its authorization semantics.
         let permission = account.required_signatures(operation).ok_or(unauthorized)?;
-        let account_type_matches = match operation {
-            "HKWPD" | "HKWDU" => account
-                .account_type
-                .is_some_and(|value| (30..=39).contains(&value)),
-            "HKKKU" | "HKKKS" => account
-                .account_type
-                .is_some_and(|value| (50..=59).contains(&value)),
-            _ => false,
-        };
-        if !account_type_matches {
-            return Err(unauthorized.into());
-        }
         if permission > 1 {
             return Err(Limitation::MultipleSigners.into());
         }

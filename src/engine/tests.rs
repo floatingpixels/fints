@@ -1578,6 +1578,142 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
     }
 }
 
+// Formals E.2/E.3 and DD "Erlaubte Geschäftsvorfälle": the per-account
+// operation entry authorizes the request. DD "Kontoart" only classifies an
+// account; correction P24 changes occupancy for PSD2 identification, not
+// authorization. Explicit permission therefore wins when the type is absent or
+// contradicts that descriptive classification.
+#[test]
+fn product_operations_use_upd_permission_not_descriptive_account_type() {
+    let connect = |mut engine: Engine| {
+        let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine
+                .accept_initialization(&initialization, now())
+                .unwrap(),
+            InitializationResult::Connected
+        ));
+        engine
+    };
+    let has_segment = |wire: &[u8], code: &[u8]| {
+        crate::wire::Message::parse(wire)
+            .unwrap()
+            .payload_segments()
+            .unwrap()
+            .iter()
+            .any(|segment| segment.header().unwrap().code == code)
+    };
+
+    for account_type in [None, Some(30)] {
+        let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+        account.account_type = account_type;
+        let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+        engine.state.accounts = vec![account];
+        engine.state.depot_positions_advertised = true;
+        engine.state.depot_position_versions = vec![5];
+        engine.state.depot_positions_requires_tan = Some(false);
+        let mut engine = connect(engine);
+        let wire = engine
+            .depot_positions_request(0, now().date(), now().time())
+            .unwrap();
+        assert!(has_segment(&wire, b"HKWPD"));
+    }
+
+    let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWDU", 1)]);
+    account.account_type = Some(50);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.securities_transactions_advertised = true;
+    engine.state.securities_transactions_supported = true;
+    engine.state.securities_transactions_requires_tan = Some(false);
+    let mut engine = connect(engine);
+    let wire = engine
+        .securities_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    assert!(has_segment(&wire, b"HKWDU"));
+
+    let mut account = transaction_account(
+        "DE40123456780000123456",
+        "444433******1111",
+        &[("HKKKU", 1)],
+    );
+    account.account_type = None;
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.credit_card_transactions_advertised = true;
+    engine.state.credit_card_transactions = Some(crate::model::CreditCardCapability {
+        account_required: false,
+        date_range_allowed: true,
+    });
+    engine.state.credit_card_transactions_requires_tan = Some(false);
+    let mut engine = connect(engine);
+    let wire = engine
+        .credit_card_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    assert!(has_segment(&wire, b"HKKKU"));
+
+    let mut account = transaction_account(
+        "DE40123456780000123456",
+        "444433******1111",
+        &[("HKKKS", 1)],
+    );
+    account.account_type = Some(30);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.credit_card_balance_advertised = true;
+    engine.state.credit_card_balance_account_required = Some(false);
+    engine.state.credit_card_balance_requires_tan = Some(false);
+    let mut engine = connect(engine);
+    let wire = engine
+        .credit_card_balance_request(0, now().date(), now().time())
+        .unwrap();
+    assert!(has_segment(&wire, b"HKKKS"));
+}
+
+#[test]
+fn product_operations_without_upd_permission_remain_unauthorized() {
+    let connect = |mut engine: Engine| {
+        let initialization = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+        assert!(matches!(
+            engine
+                .accept_initialization(&initialization, now())
+                .unwrap(),
+            InitializationResult::Connected
+        ));
+        engine
+    };
+    let account = |account_type| {
+        let mut account = transaction_account("DE40123456780000123456", "300001", &[]);
+        account.account_type = account_type;
+        account
+    };
+
+    let mut depot = engine_with_method(TanProcess::ProcessVariantTwo);
+    depot.state.accounts = vec![account(Some(30))];
+    depot.state.depot_positions_advertised = true;
+    depot.state.depot_position_versions = vec![5];
+    depot.state.depot_positions_requires_tan = Some(false);
+    assert!(matches!(
+        connect(depot).depot_positions_request(0, now().date(), now().time()),
+        Err(Error::Unsupported(Limitation::DepotPositionsNotAuthorized))
+    ));
+
+    let mut card = engine_with_method(TanProcess::ProcessVariantTwo);
+    card.state.accounts = vec![account(Some(50))];
+    card.state.credit_card_transactions_advertised = true;
+    card.state.credit_card_transactions = Some(crate::model::CreditCardCapability {
+        account_required: false,
+        date_range_allowed: true,
+    });
+    card.state.credit_card_transactions_requires_tan = Some(false);
+    assert!(matches!(
+        connect(card).credit_card_transactions_request(0, None, None, now().date(), now().time()),
+        Err(Error::Unsupported(
+            Limitation::CreditCardTransactionsNotAuthorized
+        ))
+    ));
+}
+
 // FinTS Messages 2022 C.2.1.2.1-C.2.1.2.3: every implemented HISALS
 // advertisement has a corresponding HKSAL request version and cannot degrade
 // into the unsupported-version limitation.
