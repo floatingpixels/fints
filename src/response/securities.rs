@@ -47,11 +47,46 @@ pub(super) fn positions(
     payload.map(parse_positions).transpose()
 }
 
+#[cfg(feature = "development-diagnostics")]
+pub(super) fn position_structure(
+    segments: &[Segment],
+    version: u16,
+) -> Result<Option<crate::DepotResponseFacts>, Error> {
+    let payload = response_binary(segments, b"HIWPD", "HIWPD", version)?;
+    payload
+        .map(|input| {
+            let root = document(input)?;
+            Ok(crate::DepotResponseFacts::for_position_structure(
+                block_inventory(&root),
+                tag_inventory(&root),
+                price_shapes(&root),
+            ))
+        })
+        .transpose()
+}
+
 pub(super) fn transactions(
     segments: &[Segment],
 ) -> Result<Option<SecuritiesTransactionPage>, Error> {
     let payload = response_binary(segments, b"HIWDU", "HIWDU", 5)?;
     payload.map(parse_transactions).transpose()
+}
+
+#[cfg(feature = "development-diagnostics")]
+pub(super) fn transaction_structure(
+    segments: &[Segment],
+) -> Result<Option<crate::DepotResponseFacts>, Error> {
+    let payload = response_binary(segments, b"HIWDU", "HIWDU", 5)?;
+    payload
+        .map(|input| {
+            let root = document(input)?;
+            Ok(crate::DepotResponseFacts::for_transaction_structure(
+                block_inventory(&root),
+                tag_inventory(&root),
+                price_shapes(&root),
+            ))
+        })
+        .transpose()
 }
 
 fn response_binary<'a>(
@@ -247,8 +282,12 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         .transpose()?
         .unwrap_or_default();
     #[cfg(feature = "development-diagnostics")]
-    let development_facts =
-        crate::DepotResponseFacts::for_positions(block_inventory(&root), &positions);
+    let development_facts = crate::DepotResponseFacts::for_positions(
+        block_inventory(&root),
+        tag_inventory(&root),
+        price_shapes(&root),
+        &positions,
+    );
     Ok(DepotPositionPage {
         more,
         institute_code,
@@ -282,7 +321,7 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
         .map_err(|_| malformed_securities_data!("MT536/FIN/35B"))?;
         let price = optional_field(financial, "90A")
             .or_else(|| optional_field(financial, "90B"))
-            .map(|field| parse_price(&field.value, financial))
+            .map(|field| parse_price(field, financial, false))
             .transpose()
             .map_err(|_| malformed_securities_data!("MT536/FIN/90A:90B"))?;
         for transaction in children(financial, "TRAN") {
@@ -296,8 +335,12 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
         return Err(malformed_securities_data!("MT536/GENL/17B:ACTI"));
     }
     #[cfg(feature = "development-diagnostics")]
-    let development_facts =
-        crate::DepotResponseFacts::for_transactions(block_inventory(&root), &entries);
+    let development_facts = crate::DepotResponseFacts::for_transactions(
+        block_inventory(&root),
+        tag_inventory(&root),
+        price_shapes(&root),
+        &entries,
+    );
     Ok(SecuritiesTransactionPage {
         more,
         institute_code,
@@ -343,6 +386,111 @@ fn block_inventory(root: &Block) -> Vec<crate::DepotBlockFact> {
         visit(child, 1, &mut counts, &mut facts);
     }
     facts
+}
+
+#[cfg(feature = "development-diagnostics")]
+fn tag_inventory(root: &Block) -> Vec<crate::DepotTagFact> {
+    fn kind(tag: &str) -> crate::DepotTagKind {
+        match tag {
+            "13A" => crate::DepotTagKind::StatementNumber13A,
+            "17B" => crate::DepotTagKind::Activity17B,
+            "19A" => crate::DepotTagKind::Amount19A,
+            "20C" => crate::DepotTagKind::Reference20C,
+            "22F" => crate::DepotTagKind::Indicator22F,
+            "22H" => crate::DepotTagKind::Movement22H,
+            "25D" => crate::DepotTagKind::Status25D,
+            "28E" => crate::DepotTagKind::Page28E,
+            "35B" => crate::DepotTagKind::Instrument35B,
+            "36B" => crate::DepotTagKind::TransactionQuantity36B,
+            "69A" | "69B" => crate::DepotTagKind::DateRange69,
+            "70C" | "70E" => crate::DepotTagKind::FreeText70,
+            "90A" => crate::DepotTagKind::PercentagePrice90A,
+            "90B" => crate::DepotTagKind::AmountPrice90B,
+            "92B" => crate::DepotTagKind::ExchangeRate92B,
+            "93B" => crate::DepotTagKind::Quantity93B,
+            "93C" => crate::DepotTagKind::SubBalance93C,
+            "94B" | "94C" => crate::DepotTagKind::Location94,
+            "97A" => crate::DepotTagKind::Account97A,
+            "98A" | "98C" => crate::DepotTagKind::DateTime98,
+            "99A" => crate::DepotTagKind::Days99A,
+            _ => crate::DepotTagKind::Other,
+        }
+    }
+
+    fn visit(
+        block: &Block,
+        depth: usize,
+        counts: &mut [usize; 22],
+        facts: &mut Vec<crate::DepotTagFact>,
+    ) {
+        for field in &block.fields {
+            let kind = kind(&field.tag);
+            counts[kind.index()] += 1;
+            facts.push(crate::DepotTagFact::new(kind, depth, counts[kind.index()]));
+        }
+        for child in &block.children {
+            visit(child, depth + 1, counts, facts);
+        }
+    }
+
+    let mut counts = [0; 22];
+    let mut facts = Vec::new();
+    for child in &root.children {
+        visit(child, 1, &mut counts, &mut facts);
+    }
+    facts
+}
+
+#[cfg(feature = "development-diagnostics")]
+fn price_shapes(root: &Block) -> Vec<crate::DepotPriceShapeFact> {
+    use crate::{
+        DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,
+    };
+
+    children(root, "FIN")
+        .flat_map(|financial| {
+            financial.fields.iter().filter_map(|field| {
+                let tag = match field.tag.as_str() {
+                    "90A" => DepotPriceTagKind::Percentage90A,
+                    "90B" => DepotPriceTagKind::Amount90B,
+                    _ => return None,
+                };
+                let (qualifier, rest) = field
+                    .value
+                    .strip_prefix(':')
+                    .and_then(|value| value.split_once("//"))
+                    .unwrap_or(("", ""));
+                let (unit, payload) = rest.split_once('/').unwrap_or(("", ""));
+                let qualifier_kind = match qualifier {
+                    "MRKT" => DepotPriceQualifierKind::Market,
+                    "INDC" => DepotPriceQualifierKind::Indicative,
+                    _ => DepotPriceQualifierKind::Unknown,
+                };
+                let unit_kind = match unit {
+                    "PRCT" => DepotPriceUnitKind::Percentage,
+                    "ACTU" => DepotPriceUnitKind::ActualAmount,
+                    _ => DepotPriceUnitKind::Unknown,
+                };
+                let (currency_present, price_present) = match unit_kind {
+                    DepotPriceUnitKind::Percentage => (false, !payload.is_empty()),
+                    DepotPriceUnitKind::ActualAmount => (payload.len() >= 3, payload.len() > 3),
+                    DepotPriceUnitKind::Unknown => match tag {
+                        DepotPriceTagKind::Percentage90A => (false, !payload.is_empty()),
+                        DepotPriceTagKind::Amount90B => (payload.len() >= 3, payload.len() > 3),
+                    },
+                };
+                Some(DepotPriceShapeFact::new(
+                    tag,
+                    qualifier_kind,
+                    unit_kind,
+                    !qualifier.is_empty(),
+                    !unit.is_empty(),
+                    currency_present,
+                    price_present,
+                ))
+            })
+        })
+        .collect()
 }
 
 fn safe_identity(block: &Block) -> Result<(String, String), Error> {
@@ -396,7 +544,7 @@ fn parse_position(block: &Block) -> Result<DepotPosition, Error> {
     .map_err(|_| malformed_securities_data!("MT535/FIN/93B:AGGR"))?;
     let price = optional_field(block, "90A")
         .or_else(|| optional_field(block, "90B"))
-        .map(|field| parse_price(&field.value, block))
+        .map(|field| parse_price(field, block, true))
         .transpose()
         .map_err(|_| malformed_securities_data!("MT535/FIN/90A:90B"))?;
     let market_values = fields(block, "19A")
@@ -563,20 +711,37 @@ fn parse_instrument(field: &Field) -> Result<SecurityInstrument, Error> {
     Ok(SecurityInstrument { isin, wkn, name })
 }
 
-fn parse_price(value: &str, block: &Block) -> Result<SecurityPrice, Error> {
-    let (quality, rest) = if let Some(rest) = value.strip_prefix(":MRKT//") {
+fn parse_price(
+    field: &Field,
+    block: &Block,
+    require_mt535_tag_unit_pair: bool,
+) -> Result<SecurityPrice, Error> {
+    let (quality, rest) = if let Some(rest) = field.value.strip_prefix(":MRKT//") {
         (PriceQuality::Market, rest)
-    } else if let Some(rest) = value.strip_prefix(":INDC//") {
+    } else if let Some(rest) = field.value.strip_prefix(":INDC//") {
         (PriceQuality::Indicative, rest)
     } else {
         return Err(malformed_securities_data!());
     };
-    let (percentage, rest) = if let Some(rest) = rest.strip_prefix("PRCT/") {
-        (true, rest)
-    } else if let Some(rest) = rest.strip_prefix("ACTU/") {
-        (false, rest)
-    } else {
-        return Err(malformed_securities_data!());
+    // DK Anlage 3 v3.9 4.3 and HBCI 2.2 IX.2.4 define MT535 Option A as
+    // 90A + PRCT and Option B as 90B + ACTU. For MT536, the v3.9 chapter
+    // 4.4 full example itself prints 90B + PRCT despite its table; preserve
+    // the existing unit-driven acceptance there rather than changing another
+    // format while closing this MT535 finding.
+    let (percentage, rest) = match (require_mt535_tag_unit_pair, field.tag.as_str()) {
+        (true, "90A") => (
+            true,
+            rest.strip_prefix("PRCT/")
+                .ok_or(malformed_securities_data!())?,
+        ),
+        (true, "90B") => (
+            false,
+            rest.strip_prefix("ACTU/")
+                .ok_or(malformed_securities_data!())?,
+        ),
+        (false, "90A" | "90B") if rest.starts_with("PRCT/") => (true, &rest[5..]),
+        (false, "90A" | "90B") if rest.starts_with("ACTU/") => (false, &rest[5..]),
+        _ => return Err(malformed_securities_data!()),
     };
     let (currency, number) = if percentage {
         (None, rest)

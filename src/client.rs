@@ -266,9 +266,11 @@ impl Client {
 
     /// Opt-in value-free structure of the latest parsed MT535 or MT536 response page.
     ///
-    /// Block facts contain only enum classifications, nesting, and counts. Position
-    /// and transaction facts contain field-presence booleans only; no identifiers,
-    /// amounts, references, dates, free text, or wire data are retained.
+    /// Block and tag facts contain only enum classifications, nesting, and counts.
+    /// Position and transaction facts contain field-presence booleans only; no
+    /// identifiers, amounts, references, dates, free text, or wire data are retained.
+    /// Once the document block tree is valid, its inventories and redacted price shapes
+    /// remain available even when a later field parser rejects the page.
     #[cfg(feature = "development-diagnostics")]
     pub fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {
         self.engine.development_depot_response()

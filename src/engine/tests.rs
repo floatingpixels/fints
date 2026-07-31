@@ -2390,6 +2390,99 @@ fn depot_positions_version_five_rejects_wrong_version_and_identity() {
     assert!(!rendered.contains("12345678"));
 }
 
+// DK Anlage 3 v3.9 4.3: once the bounded 16R/16S tree is available, later
+// field failures must preserve only its value-free structure. The fictional
+// price deliberately uses unknown qualifier/unit categories so an attended
+// run can distinguish that shape without retaining the price or currency.
+#[cfg(feature = "development-diagnostics")]
+#[test]
+fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
+    let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+    account.account_type = None;
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.depot_positions_advertised = true;
+    engine.state.depot_position_versions = vec![5];
+    engine.state.depot_positions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    engine
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS25\r\n",
+        "Fictional Diagnostic Security\r\n",
+        ":90B::FICT//ODD1/EUR12,\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16R:SUBBAL\r\n",
+        ":93C::TAVI//UNIT/AVAI/1,\r\n",
+        ":16S:SUBBAL\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    );
+    let malformed = binary_response(
+        "HIWPD:3:5:3+@",
+        payload.as_bytes(),
+        "'HNHBS:4:1+2'",
+        "dialog1",
+        2,
+    );
+    let error = match engine.accept_depot_positions(&malformed, now()) {
+        Err(error) => error,
+        Ok(_) => panic!("expected a malformed fictional MT535 price"),
+    };
+    assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
+    let formatted = format!("{error:?} {error}");
+    for private_value in ["FICT", "ODD1", "EUR", "12,"] {
+        assert!(!formatted.contains(private_value));
+    }
+
+    let facts = engine.development_depot_response().unwrap();
+    assert_eq!(facts.document_kind(), crate::DepotDocumentKind::Mt535);
+    assert_eq!(
+        facts
+            .block_inventory()
+            .iter()
+            .map(|fact| (fact.kind(), fact.depth(), fact.occurrence()))
+            .collect::<Vec<_>>(),
+        [
+            (crate::DepotBlockKind::General, 1, 1),
+            (crate::DepotBlockKind::FinancialInstrument, 1, 1),
+            (crate::DepotBlockKind::SubBalance, 2, 1),
+        ]
+    );
+    assert!(facts.tag_inventory().iter().any(|fact| {
+        fact.kind() == crate::DepotTagKind::AmountPrice90B
+            && fact.depth() == 1
+            && fact.occurrence() == 1
+    }));
+    assert!(facts.tag_inventory().iter().any(|fact| {
+        fact.kind() == crate::DepotTagKind::SubBalance93C
+            && fact.depth() == 2
+            && fact.occurrence() == 1
+    }));
+    assert!(facts.positions().is_empty());
+    let shape = facts.price_shapes()[0];
+    assert_eq!(shape.tag(), crate::DepotPriceTagKind::Amount90B);
+    assert_eq!(shape.qualifier(), crate::DepotPriceQualifierKind::Unknown);
+    assert_eq!(shape.unit(), crate::DepotPriceUnitKind::Unknown);
+    assert!(shape.qualifier_present());
+    assert!(shape.unit_present());
+    assert!(shape.currency_present());
+    assert!(shape.price_present());
+}
+
 // FinTS Messages 2022 C.4.3.1 and return codes 3040/3010: a terminal
 // no-entry page completes exhaustive pagination without erasing earlier pages.
 #[test]

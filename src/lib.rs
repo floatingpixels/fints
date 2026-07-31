@@ -33,8 +33,9 @@ pub use client::{
 #[cfg(feature = "development-diagnostics")]
 pub use development_diagnostics::{
     DepotBlockFact, DepotBlockKind, DepotDocumentKind, DepotPositionPresenceFact,
-    DepotResponseFacts, HitansMediumRequirementFact, HktabRequestFact, InitializationRecoveryFacts,
-    ReceivedResponseFact, ReceivedSegmentFact, ReturnedTanMediumFact,
+    DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,
+    DepotResponseFacts, DepotTagFact, DepotTagKind, HitansMediumRequirementFact, HktabRequestFact,
+    InitializationRecoveryFacts, ReceivedResponseFact, ReceivedSegmentFact, ReturnedTanMediumFact,
     SecuritiesTransactionPresenceFact, TanMediaDiscoveryFacts, TanMediumElementShapeFact,
 };
 pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseClass};

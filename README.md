@@ -297,8 +297,10 @@ The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
 `FINTS_PROBE_CARD_BALANCE_ACCOUNT`, and `FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT`
 enable the corresponding read. Financial values and identifiers are never printed;
 depot probes report only result counts and, with development diagnostics, value-free
-block and field-presence facts. The probe prints all caller-visible bank response
-texts, which may reference the owner's accounts or orders.
+block and field-presence facts. A successfully parsed block tree remains available
+after a later field error; optional 90A/90B price diagnostics report only tag and
+known/unknown shape categories plus presence booleans. The probe prints all
+caller-visible bank response texts, which may reference the owner's accounts or orders.
 
 `FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
 credential-bearing request and response payloads to stdout as hexadecimal and escaped

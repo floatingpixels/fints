@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Preserved value-free depot block inventories across field
+  errors and added redacted 90A/90B shape facts with exact official choice checks.
+
 - **2026-07-30** — Made explicit per-account UPD operation permission decisive
   for depot and credit-card reads; descriptive account type no longer vetoes it.
 

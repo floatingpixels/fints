@@ -239,6 +239,102 @@ fn mt535_variants_preserve_sign_quality_and_percentage_cost_basis() {
     assert_eq!(cost.coefficient(), 10_025);
 }
 
+// DK Anlage 3 v3.9 4.3 pages 405-406 and HBCI 2.2 IX.2.4 pages 89-90
+// independently define the complete MT535 price choice: both MRKT and INDC
+// qualifiers are permitted with 90A/PRCT percentages and 90B/ACTU currency
+// amounts. This fictional wire is derived from that option table.
+#[test]
+fn mt535_price_options_accept_the_complete_official_matrix() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS20\r\n",
+        "Fictional Market Percentage\r\n",
+        ":90A::MRKT//PRCT/100,\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS21\r\n",
+        "Fictional Indicative Percentage\r\n",
+        ":90A::INDC//PRCT/101,5\r\n",
+        ":93B::AGGR//UNIT/2,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS22\r\n",
+        "Fictional Market Amount\r\n",
+        ":90B::MRKT//ACTU/EUR12,\r\n",
+        ":93B::AGGR//UNIT/3,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS23\r\n",
+        "Fictional Indicative Amount\r\n",
+        ":90B::INDC//ACTU/USD13,25\r\n",
+        ":93B::AGGR//UNIT/4,\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
+
+    assert_eq!(page.positions.len(), 4);
+    let prices = page
+        .positions
+        .iter()
+        .map(|position| position.price().unwrap())
+        .collect::<Vec<_>>();
+    assert!(prices[0].is_percentage());
+    assert_eq!(prices[0].quality(), Some(crate::PriceQuality::Market));
+    assert!(prices[1].is_percentage());
+    assert_eq!(prices[1].quality(), Some(crate::PriceQuality::Indicative));
+    assert_eq!(prices[2].currency(), Some("EUR"));
+    assert_eq!(prices[2].quality(), Some(crate::PriceQuality::Market));
+    assert_eq!(prices[3].currency(), Some("USD"));
+    assert_eq!(prices[3].quality(), Some(crate::PriceQuality::Indicative));
+    #[cfg(feature = "development-diagnostics")]
+    {
+        let shapes = page.development_facts.price_shapes();
+        assert_eq!(shapes.len(), 4);
+        assert_eq!(shapes[0].tag(), crate::DepotPriceTagKind::Percentage90A);
+        assert_eq!(
+            shapes[0].qualifier(),
+            crate::DepotPriceQualifierKind::Market
+        );
+        assert_eq!(shapes[0].unit(), crate::DepotPriceUnitKind::Percentage);
+        assert_eq!(shapes[3].tag(), crate::DepotPriceTagKind::Amount90B);
+        assert_eq!(
+            shapes[3].qualifier(),
+            crate::DepotPriceQualifierKind::Indicative
+        );
+        assert_eq!(shapes[3].unit(), crate::DepotPriceUnitKind::ActualAmount);
+        assert!(shapes[3].currency_present());
+        assert!(shapes[3].price_present());
+    }
+}
+
+#[test]
+fn mt535_price_options_reject_crossed_tag_and_unit_choices() {
+    for price in [":90A::MRKT//ACTU/EUR100,", ":90B::INDC//PRCT/100,"] {
+        let payload = format!(
+            "\r\n:16R:GENL\r\n:28E:1/ONLY\r\n\
+             :97A::SAFE//12345678/300001\r\n:17B::ACTI//Y\r\n:16S:GENL\r\n\
+             :16R:FIN\r\n:35B:ISIN DE000FINTS24\r\nFictional Crossed Price\r\n\
+             {price}\r\n:93B::AGGR//UNIT/1,\r\n:16S:FIN\r\n-"
+        );
+        let response =
+            Response::parse(&message_with_binary("HIWPD", 6, payload.as_bytes())).unwrap();
+        assert!(matches!(
+            response.depot_positions(6),
+            Err(Error::MalformedSecuritiesData { .. })
+        ));
+    }
+}
+
 // DK Anlage 3 v3.9 4.3 full-message example and HBCI 2.2 IX.2.4
 // independently print `70E::HOLD` without the line-number digits required by
 // their structured-field tables. The fictional first position keeps that
@@ -368,6 +464,58 @@ fn mt536_transaction_fixture_preserves_reference_amounts_and_dates() {
                 (DepotBlockKind::TransactionDetails, 3, 1),
             ]
         );
+    }
+}
+
+// DK Anlage 3 v3.9, 4.4 full-message example, page 430, independently prints
+// 90B::MRKT//PRCT despite the chapter's 90A/PRCT and 90B/ACTU table. Preserve
+// that official source shape for MT536 without widening the MT535 matrix.
+#[test]
+fn mt536_official_example_price_shape_remains_accepted() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":20C::SEME//NONREF\r\n",
+        ":23G:NEWM\r\n",
+        ":69A::STAT//20260701/20260728\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS25\r\n",
+        "Fictional Percentage-Priced Security\r\n",
+        ":90B::MRKT//PRCT/105,\r\n",
+        ":16R:TRAN\r\n",
+        ":16R:LINK\r\n",
+        ":20C::RELA//FICTREF0025\r\n",
+        ":16S:LINK\r\n",
+        ":16R:TRANSDET\r\n",
+        ":36B::PSTA//UNIT/1,\r\n",
+        ":22F::TRAN//SETT\r\n",
+        ":22H::REDE//RECE\r\n",
+        ":22H::PAYM//FREE\r\n",
+        ":98A::ESET//20260727\r\n",
+        ":16S:TRANSDET\r\n",
+        ":16S:TRAN\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWDU", 5, payload)).unwrap();
+    let page = response.securities_transactions().unwrap().unwrap();
+    let price = page.entries[0].price().unwrap();
+
+    assert!(price.is_percentage());
+    assert_eq!(price.coefficient(), 105);
+    assert_eq!(price.currency(), None);
+    #[cfg(feature = "development-diagnostics")]
+    {
+        let shape = page.development_facts.price_shapes()[0];
+        assert_eq!(shape.tag(), crate::DepotPriceTagKind::Amount90B);
+        assert_eq!(shape.unit(), crate::DepotPriceUnitKind::Percentage);
+        assert!(!shape.currency_present());
+        assert!(shape.price_present());
     }
 }
 

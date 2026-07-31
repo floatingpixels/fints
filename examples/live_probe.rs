@@ -584,6 +584,26 @@ fn print_depot_response_facts(client: &Client) {
             block.occurrence()
         );
     }
+    for (index, tag) in facts.tag_inventory().iter().enumerate() {
+        println!(
+            "depot_tag index={index} kind={:?} depth={} occurrence={}",
+            tag.kind(),
+            tag.depth(),
+            tag.occurrence()
+        );
+    }
+    for (index, price) in facts.price_shapes().iter().enumerate() {
+        println!(
+            "depot_price_shape index={index} tag={:?} qualifier={:?} unit={:?} qualifier_present={} unit_present={} currency_present={} price_present={}",
+            price.tag(),
+            price.qualifier(),
+            price.unit(),
+            price.qualifier_present(),
+            price.unit_present(),
+            price.currency_present(),
+            price.price_present()
+        );
+    }
     for (index, position) in facts.positions().iter().enumerate() {
         println!(
             "depot_position index={index} isin_present={} wkn_present={} name_present={} quantity_present={} price_present={} market_value_present={} cost_basis_present={}",

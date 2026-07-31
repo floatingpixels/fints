@@ -29,6 +29,175 @@ pub enum DepotBlockKind {
     Other,
 }
 
+/// A redacted MT535/MT536 field tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotTagKind {
+    StatementNumber13A,
+    Activity17B,
+    Amount19A,
+    Reference20C,
+    Indicator22F,
+    Movement22H,
+    Status25D,
+    Page28E,
+    Instrument35B,
+    TransactionQuantity36B,
+    DateRange69,
+    FreeText70,
+    PercentagePrice90A,
+    AmountPrice90B,
+    ExchangeRate92B,
+    Quantity93B,
+    SubBalance93C,
+    Location94,
+    Account97A,
+    DateTime98,
+    Days99A,
+    Other,
+}
+
+impl DepotTagKind {
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::StatementNumber13A => 0,
+            Self::Activity17B => 1,
+            Self::Amount19A => 2,
+            Self::Reference20C => 3,
+            Self::Indicator22F => 4,
+            Self::Movement22H => 5,
+            Self::Status25D => 6,
+            Self::Page28E => 7,
+            Self::Instrument35B => 8,
+            Self::TransactionQuantity36B => 9,
+            Self::DateRange69 => 10,
+            Self::FreeText70 => 11,
+            Self::PercentagePrice90A => 12,
+            Self::AmountPrice90B => 13,
+            Self::ExchangeRate92B => 14,
+            Self::Quantity93B => 15,
+            Self::SubBalance93C => 16,
+            Self::Location94 => 17,
+            Self::Account97A => 18,
+            Self::DateTime98 => 19,
+            Self::Days99A => 20,
+            Self::Other => 21,
+        }
+    }
+}
+
+/// One field tag occurrence, without its qualifier or value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepotTagFact {
+    kind: DepotTagKind,
+    depth: usize,
+    occurrence: usize,
+}
+
+impl DepotTagFact {
+    pub(crate) fn new(kind: DepotTagKind, depth: usize, occurrence: usize) -> Self {
+        Self {
+            kind,
+            depth,
+            occurrence,
+        }
+    }
+
+    pub fn kind(self) -> DepotTagKind {
+        self.kind
+    }
+    /// Nesting depth of the block containing this tag.
+    pub fn depth(self) -> usize {
+        self.depth
+    }
+    /// One-based occurrence count for this tag kind in traversal order.
+    pub fn occurrence(self) -> usize {
+        self.occurrence
+    }
+}
+
+/// Which optional MT535/MT536 price tag was structurally present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceTagKind {
+    Percentage90A,
+    Amount90B,
+}
+
+/// Value-free classification of the price qualifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceQualifierKind {
+    Market,
+    Indicative,
+    Unknown,
+}
+
+/// Value-free classification of the price-unit code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceUnitKind {
+    Percentage,
+    ActualAmount,
+    Unknown,
+}
+
+/// Redacted structural shape of one optional 90A/90B price field.
+///
+/// This fact retains only enum classifications and component-presence booleans.
+/// It never contains the qualifier, unit, currency, price, instrument identity,
+/// or raw field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepotPriceShapeFact {
+    tag: DepotPriceTagKind,
+    qualifier: DepotPriceQualifierKind,
+    unit: DepotPriceUnitKind,
+    qualifier_present: bool,
+    unit_present: bool,
+    currency_present: bool,
+    price_present: bool,
+}
+
+impl DepotPriceShapeFact {
+    pub(crate) fn new(
+        tag: DepotPriceTagKind,
+        qualifier: DepotPriceQualifierKind,
+        unit: DepotPriceUnitKind,
+        qualifier_present: bool,
+        unit_present: bool,
+        currency_present: bool,
+        price_present: bool,
+    ) -> Self {
+        Self {
+            tag,
+            qualifier,
+            unit,
+            qualifier_present,
+            unit_present,
+            currency_present,
+            price_present,
+        }
+    }
+
+    pub fn tag(self) -> DepotPriceTagKind {
+        self.tag
+    }
+    pub fn qualifier(self) -> DepotPriceQualifierKind {
+        self.qualifier
+    }
+    pub fn unit(self) -> DepotPriceUnitKind {
+        self.unit
+    }
+    pub fn qualifier_present(self) -> bool {
+        self.qualifier_present
+    }
+    pub fn unit_present(self) -> bool {
+        self.unit_present
+    }
+    pub fn currency_present(self) -> bool {
+        self.currency_present
+    }
+    pub fn price_present(self) -> bool {
+        self.price_present
+    }
+}
+
 impl DepotBlockKind {
     pub(crate) const fn index(self) -> usize {
         match self {
@@ -208,25 +377,62 @@ impl SecuritiesTransactionPresenceFact {
 
 /// Redacted structure of the most recently parsed MT535 or MT536 response page.
 ///
-/// The inventory contains only recognized block kinds, nesting depth, and occurrence
-/// counts. Entry facts contain booleans only. This type never contains securities
-/// identifiers, amounts, references, dates, free text, or raw wire data.
+/// The inventories contain only recognized block/tag kinds, nesting depth, and
+/// occurrence counts. Price shapes contain only enum classifications and presence
+/// booleans; entry facts contain booleans only. This type never contains securities
+/// identifiers, currencies, amounts, references, dates, free text, or raw wire data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepotResponseFacts {
     document_kind: DepotDocumentKind,
     block_inventory: Vec<DepotBlockFact>,
+    tag_inventory: Vec<DepotTagFact>,
+    price_shapes: Vec<DepotPriceShapeFact>,
     positions: Vec<DepotPositionPresenceFact>,
     transactions: Vec<SecuritiesTransactionPresenceFact>,
 }
 
 impl DepotResponseFacts {
+    pub(crate) fn for_position_structure(
+        block_inventory: Vec<DepotBlockFact>,
+        tag_inventory: Vec<DepotTagFact>,
+        price_shapes: Vec<DepotPriceShapeFact>,
+    ) -> Self {
+        Self {
+            document_kind: DepotDocumentKind::Mt535,
+            block_inventory,
+            tag_inventory,
+            price_shapes,
+            positions: Vec::new(),
+            transactions: Vec::new(),
+        }
+    }
+
+    pub(crate) fn for_transaction_structure(
+        block_inventory: Vec<DepotBlockFact>,
+        tag_inventory: Vec<DepotTagFact>,
+        price_shapes: Vec<DepotPriceShapeFact>,
+    ) -> Self {
+        Self {
+            document_kind: DepotDocumentKind::Mt536,
+            block_inventory,
+            tag_inventory,
+            price_shapes,
+            positions: Vec::new(),
+            transactions: Vec::new(),
+        }
+    }
+
     pub(crate) fn for_positions(
         block_inventory: Vec<DepotBlockFact>,
+        tag_inventory: Vec<DepotTagFact>,
+        price_shapes: Vec<DepotPriceShapeFact>,
         positions: &[crate::DepotPosition],
     ) -> Self {
         Self {
             document_kind: DepotDocumentKind::Mt535,
             block_inventory,
+            tag_inventory,
+            price_shapes,
             positions: positions
                 .iter()
                 .map(DepotPositionPresenceFact::from_position)
@@ -237,11 +443,15 @@ impl DepotResponseFacts {
 
     pub(crate) fn for_transactions(
         block_inventory: Vec<DepotBlockFact>,
+        tag_inventory: Vec<DepotTagFact>,
+        price_shapes: Vec<DepotPriceShapeFact>,
         transactions: &[crate::SecuritiesTransaction],
     ) -> Self {
         Self {
             document_kind: DepotDocumentKind::Mt536,
             block_inventory,
+            tag_inventory,
+            price_shapes,
             positions: Vec::new(),
             transactions: transactions
                 .iter()
@@ -255,6 +465,12 @@ impl DepotResponseFacts {
     }
     pub fn block_inventory(&self) -> &[DepotBlockFact] {
         &self.block_inventory
+    }
+    pub fn tag_inventory(&self) -> &[DepotTagFact] {
+        &self.tag_inventory
+    }
+    pub fn price_shapes(&self) -> &[DepotPriceShapeFact] {
+        &self.price_shapes
     }
     pub fn positions(&self) -> &[DepotPositionPresenceFact] {
         &self.positions

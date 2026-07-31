@@ -429,10 +429,25 @@ impl Response {
         securities::positions(&self.segments, version)
     }
 
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_depot_position_structure(
+        &self,
+        version: u16,
+    ) -> Result<Option<crate::DepotResponseFacts>, Error> {
+        securities::position_structure(&self.segments, version)
+    }
+
     pub(crate) fn securities_transactions(
         &self,
     ) -> Result<Option<securities::SecuritiesTransactionPage>, Error> {
         securities::transactions(&self.segments)
+    }
+
+    #[cfg(feature = "development-diagnostics")]
+    pub(crate) fn development_securities_transaction_structure(
+        &self,
+    ) -> Result<Option<crate::DepotResponseFacts>, Error> {
+        securities::transaction_structure(&self.segments)
     }
 
     pub(crate) fn credit_card_transactions(

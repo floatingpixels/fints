@@ -257,6 +257,16 @@ impl Engine {
             .as_ref()
             .ok_or(Error::InconsistentState)?
             .version;
+        #[cfg(feature = "development-diagnostics")]
+        {
+            // Parse and retain the value-free block tree before any position
+            // field can fail. A later typed parse error must not erase the
+            // structural evidence needed for an owner-attended diagnosis.
+            self.development_depot_response = response
+                .development_depot_position_structure(version)
+                .ok()
+                .flatten();
+        }
         let page = match response.depot_positions(version) {
             Ok(Some(page)) => page,
             Ok(None)
@@ -496,6 +506,13 @@ impl Engine {
         };
         if let Some(challenge) = challenge {
             return Ok(SecuritiesTransactionsResult::Challenge(Box::new(challenge)));
+        }
+        #[cfg(feature = "development-diagnostics")]
+        {
+            self.development_depot_response = response
+                .development_securities_transaction_structure()
+                .ok()
+                .flatten();
         }
         let page = match response.securities_transactions() {
             Ok(Some(page)) => page,

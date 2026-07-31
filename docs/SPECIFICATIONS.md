@@ -558,7 +558,11 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   4.4 (MT536 `Statement of Transactions`, SRG 1998), including GENL/FIN,
   SUBBAL, TRAN/TRANSDET, instrument identifiers, quantities, prices, position
   values, structured cost-basis data, transaction amounts, dates, directions,
-  reversal status, references, and continuation indicators.
+  reversal status, references, and continuation indicators. Section 4.3 pages
+  405-406 defines the complete optional price choice: `90A` carries
+  `MRKT|INDC//PRCT/<decimal>`, while `90B` carries
+  `MRKT|INDC//ACTU/<ISO-4217 currency><decimal>`; the `d` format requires a
+  pre-comma digit and the decimal comma.
 - **Gate 4 acceptance note:** the document's `:22H::PAYM//FREE`,
   `:22F::TRAN//` value set, GENL constants, SUBBAL occupancy, and structured
   `70E::HOLD` line-number rules remain the recorded normative findings. The
@@ -574,13 +578,24 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   otherwise typed positions.
   Block pairing, safe identity, instrument, quantity, amount, direction, date,
   reference, pagination-indicator, and response-size checks remain enforced.
+  The independent HBCI 2.2 IX.2.4 table and full example define the same
+  90A/90B price choice. No registered source permits another qualifier, unit,
+  crossed tag/unit pair, or decimal syntax. A live failure at the former shared
+  90A/90B site therefore did not authorize broader MT535 parsing; value-free
+  diagnostics now preserve the parsed block inventory and classify only the tag,
+  known/unknown qualifier and unit, and expected-component presence for a
+  subsequent structural observation. Separately, the section 4.4 MT536
+  full-message example on page 430 prints `:90B::MRKT//PRCT/105,` despite that
+  chapter's 90A/PRCT and 90B/ACTU table. The MT536 parser therefore preserves
+  its existing unit-driven acceptance of this independently printed official
+  example; that source inconsistency does not widen MT535.
 - **Gate 4 authorizes:** bounded SWIFT MT535 parsing for explicitly supplied
   depot positions and MT536 parsing for explicitly supplied booked securities
   transactions. Free text is never reinterpreted as a missing typed amount,
   fee, reference, or identifier.
-- **Access/redistribution:** the official PDF is rights-reserved and was
-  downloaded only to ignored `local/` for research. It is not committed or
-  redistributed.
+- **Access/redistribution:** re-checked 2026-07-31. The official PDF is
+  rights-reserved and was downloaded only to ignored `local/` for research. It
+  is not committed or redistributed.
 
 ## Gate 4 credit-card extension
 
