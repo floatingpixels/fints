@@ -314,6 +314,12 @@ fn mt535_price_options_accept_the_complete_official_matrix() {
         assert_eq!(shapes[3].unit(), crate::DepotPriceUnitKind::ActualAmount);
         assert!(shapes[3].currency_present());
         assert!(shapes[3].price_present());
+        assert!(shapes.iter().all(|shape| shape.qualifier_shape_valid()));
+        assert!(shapes.iter().all(|shape| shape.tag_unit_pair_valid()));
+        assert!(shapes.iter().all(|shape| shape.currency_shape_valid()));
+        assert!(shapes.iter().all(|shape| shape.decimal_shape_valid()));
+        assert_eq!(page.development_facts.first_failing_price_ordinal(), None);
+        assert_eq!(page.development_facts.first_failing_price_stage(), None);
     }
 }
 

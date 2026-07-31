@@ -2390,13 +2390,8 @@ fn depot_positions_version_five_rejects_wrong_version_and_identity() {
     assert!(!rendered.contains("12345678"));
 }
 
-// DK Anlage 3 v3.9 4.3: once the bounded 16R/16S tree is available, later
-// field failures must preserve only its value-free structure. The fictional
-// price deliberately uses unknown qualifier/unit categories so an attended
-// run can distinguish that shape without retaining the price or currency.
 #[cfg(feature = "diagnostics")]
-#[test]
-fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
+fn fictional_mt535_price_failure(financial_blocks: &str) -> (Error, crate::DepotResponseFacts) {
     let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
     account.account_type = None;
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
@@ -2413,23 +2408,10 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
         .depot_positions_request(0, now().date(), now().time())
         .unwrap();
 
-    let payload = concat!(
-        "\r\n",
-        ":16R:GENL\r\n",
-        ":28E:1/ONLY\r\n",
-        ":97A::SAFE//12345678/300001\r\n",
-        ":17B::ACTI//Y\r\n",
-        ":16S:GENL\r\n",
-        ":16R:FIN\r\n",
-        ":35B:ISIN DE000FINTS25\r\n",
-        "Fictional Diagnostic Security\r\n",
-        ":90B::FICT//ODD1/EUR12,\r\n",
-        ":93B::AGGR//UNIT/1,\r\n",
-        ":16R:SUBBAL\r\n",
-        ":93C::TAVI//UNIT/AVAI/1,\r\n",
-        ":16S:SUBBAL\r\n",
-        ":16S:FIN\r\n",
-        "-"
+    let payload = format!(
+        "\r\n:16R:GENL\r\n:28E:1/ONLY\r\n\
+         :97A::SAFE//12345678/300001\r\n:17B::ACTI//Y\r\n:16S:GENL\r\n\
+         {financial_blocks}-"
     );
     let malformed = binary_response(
         "HIWPD:3:5:3+@",
@@ -2442,13 +2424,34 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
         Err(error) => error,
         Ok(_) => panic!("expected a malformed fictional MT535 price"),
     };
+    let facts = engine.development_depot_response().unwrap().clone();
+    (error, facts)
+}
+
+// DK Anlage 3 v3.9 4.3: once the bounded 16R/16S tree is available, later
+// field failures must preserve only its value-free structure. The fictional
+// price deliberately uses unknown qualifier/unit categories so an attended
+// run can distinguish that shape without retaining the price or currency.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
+    let (error, facts) = fictional_mt535_price_failure(concat!(
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS25\r\n",
+        "Fictional Diagnostic Security\r\n",
+        ":90B::FICT//ODD1/EUR12,\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16R:SUBBAL\r\n",
+        ":93C::TAVI//UNIT/AVAI/1,\r\n",
+        ":16S:SUBBAL\r\n",
+        ":16S:FIN\r\n"
+    ));
     assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
     let formatted = format!("{error:?} {error}");
     for private_value in ["FICT", "ODD1", "EUR", "12,"] {
         assert!(!formatted.contains(private_value));
     }
 
-    let facts = engine.development_depot_response().unwrap();
     assert_eq!(facts.document_kind(), crate::DepotDocumentKind::Mt535);
     assert_eq!(
         facts
@@ -2481,6 +2484,156 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
     assert!(shape.unit_present());
     assert!(shape.currency_present());
     assert!(shape.price_present());
+    assert_eq!(facts.first_failing_price_ordinal(), Some(1));
+    assert_eq!(
+        facts.first_failing_price_stage(),
+        Some(crate::DepotPriceFailureStage::Qualifier)
+    );
+}
+
+// DK Anlage 3 v3.9 4.3 pages 405-407 and HBCI 2.2 IX.2.4 pages 89-91
+// independently define each validated MT535 price/timestamp component. These
+// fictional failures prove that diagnostics name only the static stage.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn mt535_price_failure_stages_are_static_value_free_and_retained() {
+    let cases = [
+        (
+            ":90B::FICT//ACTU/EUR12,\r\n",
+            "",
+            crate::DepotPriceFailureStage::Qualifier,
+            "/qualifier",
+        ),
+        (
+            ":90B::MRKT//PRCT/12,\r\n",
+            "",
+            crate::DepotPriceFailureStage::TagUnitPairing,
+            "/tag-unit",
+        ),
+        (
+            ":90B::MRKT//ACTU/EU112,\r\n",
+            "",
+            crate::DepotPriceFailureStage::CurrencyShape,
+            "/currency-shape",
+        ),
+        (
+            ":90B::MRKT//ACTU/EUR12.5\r\n",
+            "",
+            crate::DepotPriceFailureStage::DecimalShape,
+            "/decimal-shape",
+        ),
+        (
+            ":90B::MRKT//ACTU/EUR12,\r\n",
+            ":98C::PRIC//20261301129999\r\n",
+            crate::DepotPriceFailureStage::PriceTimestamp,
+            "/timestamp-shape",
+        ),
+    ];
+
+    for (price, timestamp, expected_stage, site_suffix) in cases {
+        let financial = format!(
+            ":16R:FIN\r\n:35B:ISIN DE000FINTS26\r\n\
+             Fictional Staged Price\r\n{price}{timestamp}\
+             :93B::AGGR//UNIT/1,\r\n:16S:FIN\r\n"
+        );
+        let (error, facts) = fictional_mt535_price_failure(&financial);
+        let site = match &error {
+            Error::MalformedSecuritiesData { site } => *site,
+            _ => panic!("expected a staged securities parse error"),
+        };
+        assert!(site.ends_with(site_suffix), "unexpected site: {site}");
+        assert_eq!(facts.first_failing_price_ordinal(), Some(1));
+        assert_eq!(facts.first_failing_price_stage(), Some(expected_stage));
+        assert_eq!(facts.price_shapes().len(), 1);
+        assert!(!facts.block_inventory().is_empty());
+        let rendered = format!("{error:?} {error} {facts:?}");
+        for private_value in [
+            "FICT",
+            "EU1",
+            "EUR",
+            "12,",
+            "12.5",
+            "20261301129999",
+            "DE000FINTS26",
+        ] {
+            assert!(!rendered.contains(private_value));
+        }
+    }
+
+    let (_, timestamp_facts) = fictional_mt535_price_failure(concat!(
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS27\r\n",
+        "Fictional Timestamp Shape\r\n",
+        ":90B::MRKT//ACTU/EUR12,\r\n",
+        ":98C::PRIC//20261301129999\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n"
+    ));
+    let timestamp = timestamp_facts.price_shapes()[0];
+    assert!(timestamp.qualifier_shape_valid());
+    assert!(timestamp.tag_unit_pair_valid());
+    assert!(timestamp.currency_shape_valid());
+    assert!(timestamp.decimal_shape_valid());
+    assert!(timestamp.timestamp_present());
+    assert_eq!(
+        timestamp.timestamp_tag(),
+        Some(crate::DepotPriceTimestampTagKind::DateTime98C)
+    );
+    assert_eq!(
+        timestamp.timestamp_qualifier(),
+        Some(crate::DepotPriceTimestampQualifierKind::Price)
+    );
+    assert!(timestamp.timestamp_qualifier_shape_valid());
+    assert!(timestamp.timestamp_length_digit_shape_valid());
+    assert!(!timestamp.timestamp_value_valid());
+
+    let (_, malformed_timestamp_facts) = fictional_mt535_price_failure(concat!(
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS30\r\n",
+        "Fictional Timestamp Digits\r\n",
+        ":90B::MRKT//ACTU/EUR12,\r\n",
+        ":98A::PRIC//2026072X\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n"
+    ));
+    let malformed_timestamp = malformed_timestamp_facts.price_shapes()[0];
+    assert_eq!(
+        malformed_timestamp.timestamp_tag(),
+        Some(crate::DepotPriceTimestampTagKind::Date98A)
+    );
+    assert!(malformed_timestamp.timestamp_qualifier_shape_valid());
+    assert!(!malformed_timestamp.timestamp_length_digit_shape_valid());
+    assert!(!malformed_timestamp.timestamp_value_valid());
+}
+
+// The ordinal is the one-based order of the price fields, not an identifier.
+// A valid first fictional position followed by one malformed price must report 2.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn mt535_first_failing_price_ordinal_distinguishes_one_exceptional_position() {
+    let (error, facts) = fictional_mt535_price_failure(concat!(
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS28\r\n",
+        "Fictional Valid Price\r\n",
+        ":90B::MRKT//ACTU/EUR11,\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS29\r\n",
+        "Fictional Invalid Price\r\n",
+        ":90B::MRKT//ACTU/EUR12.5\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n"
+    ));
+    assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
+    assert_eq!(facts.price_shapes().len(), 2);
+    assert_eq!(facts.first_failing_price_ordinal(), Some(2));
+    assert_eq!(
+        facts.first_failing_price_stage(),
+        Some(crate::DepotPriceFailureStage::DecimalShape)
+    );
+    assert!(facts.price_shapes()[0].decimal_shape_valid());
+    assert!(!facts.price_shapes()[1].decimal_shape_valid());
 }
 
 // FinTS Messages 2022 C.4.3.1 and return codes 3040/3010: a terminal

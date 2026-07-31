@@ -593,17 +593,33 @@ fn print_depot_response_facts(client: &Client) {
         );
     }
     for (index, price) in facts.price_shapes().iter().enumerate() {
+        let ordinal = index + 1;
         println!(
-            "depot_price_shape index={index} tag={:?} qualifier={:?} unit={:?} qualifier_present={} unit_present={} currency_present={} price_present={}",
+            "depot_price_shape ordinal={ordinal} tag={:?} qualifier={:?} unit={:?} qualifier_present={} unit_present={} currency_present={} price_present={} qualifier_shape_valid={} tag_unit_pair_valid={} currency_shape_valid={} decimal_shape_valid={} timestamp_present={} timestamp_tag={:?} timestamp_qualifier={:?} timestamp_qualifier_shape_valid={} timestamp_length_digit_shape_valid={} timestamp_value_valid={}",
             price.tag(),
             price.qualifier(),
             price.unit(),
             price.qualifier_present(),
             price.unit_present(),
             price.currency_present(),
-            price.price_present()
+            price.price_present(),
+            price.qualifier_shape_valid(),
+            price.tag_unit_pair_valid(),
+            price.currency_shape_valid(),
+            price.decimal_shape_valid(),
+            price.timestamp_present(),
+            price.timestamp_tag(),
+            price.timestamp_qualifier(),
+            price.timestamp_qualifier_shape_valid(),
+            price.timestamp_length_digit_shape_valid(),
+            price.timestamp_value_valid()
         );
     }
+    println!(
+        "depot_price_failure ordinal={:?} stage={:?}",
+        facts.first_failing_price_ordinal(),
+        facts.first_failing_price_stage()
+    );
     for (index, position) in facts.positions().iter().enumerate() {
         println!(
             "depot_position index={index} isin_present={} wkn_present={} name_present={} quantity_present={} price_present={} market_value_present={} cost_basis_present={}",

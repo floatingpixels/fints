@@ -150,6 +150,34 @@ pub enum DepotPriceUnitKind {
     Unknown,
 }
 
+/// Static stage at which the first optional depot price failed validation.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceFailureStage {
+    Qualifier,
+    TagUnitPairing,
+    CurrencyShape,
+    DecimalShape,
+    PriceTimestamp,
+}
+
+/// Value-free classification of an optional price timestamp tag.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceTimestampTagKind {
+    Date98A,
+    DateTime98C,
+    Unknown,
+}
+
+/// Value-free classification of an optional price timestamp qualifier.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceTimestampQualifierKind {
+    Price,
+    Unknown,
+}
+
 /// Redacted structural shape of one optional 90A/90B price field.
 ///
 /// This fact retains only enum classifications and component-presence booleans.
@@ -165,26 +193,58 @@ pub struct DepotPriceShapeFact {
     unit_present: bool,
     currency_present: bool,
     price_present: bool,
+    qualifier_shape_valid: bool,
+    tag_unit_pair_valid: bool,
+    currency_shape_valid: bool,
+    decimal_shape_valid: bool,
+    timestamp_present: bool,
+    timestamp_tag: Option<DepotPriceTimestampTagKind>,
+    timestamp_qualifier: Option<DepotPriceTimestampQualifierKind>,
+    timestamp_qualifier_shape_valid: bool,
+    timestamp_length_digit_shape_valid: bool,
+    timestamp_value_valid: bool,
+}
+
+pub(crate) struct DepotPriceShapeInput {
+    pub(crate) tag: DepotPriceTagKind,
+    pub(crate) qualifier: DepotPriceQualifierKind,
+    pub(crate) unit: DepotPriceUnitKind,
+    pub(crate) qualifier_present: bool,
+    pub(crate) unit_present: bool,
+    pub(crate) currency_present: bool,
+    pub(crate) price_present: bool,
+    pub(crate) qualifier_shape_valid: bool,
+    pub(crate) tag_unit_pair_valid: bool,
+    pub(crate) currency_shape_valid: bool,
+    pub(crate) decimal_shape_valid: bool,
+    pub(crate) timestamp_present: bool,
+    pub(crate) timestamp_tag: Option<DepotPriceTimestampTagKind>,
+    pub(crate) timestamp_qualifier: Option<DepotPriceTimestampQualifierKind>,
+    pub(crate) timestamp_qualifier_shape_valid: bool,
+    pub(crate) timestamp_length_digit_shape_valid: bool,
+    pub(crate) timestamp_value_valid: bool,
 }
 
 impl DepotPriceShapeFact {
-    pub(crate) fn new(
-        tag: DepotPriceTagKind,
-        qualifier: DepotPriceQualifierKind,
-        unit: DepotPriceUnitKind,
-        qualifier_present: bool,
-        unit_present: bool,
-        currency_present: bool,
-        price_present: bool,
-    ) -> Self {
+    pub(crate) fn new(input: DepotPriceShapeInput) -> Self {
         Self {
-            tag,
-            qualifier,
-            unit,
-            qualifier_present,
-            unit_present,
-            currency_present,
-            price_present,
+            tag: input.tag,
+            qualifier: input.qualifier,
+            unit: input.unit,
+            qualifier_present: input.qualifier_present,
+            unit_present: input.unit_present,
+            currency_present: input.currency_present,
+            price_present: input.price_present,
+            qualifier_shape_valid: input.qualifier_shape_valid,
+            tag_unit_pair_valid: input.tag_unit_pair_valid,
+            currency_shape_valid: input.currency_shape_valid,
+            decimal_shape_valid: input.decimal_shape_valid,
+            timestamp_present: input.timestamp_present,
+            timestamp_tag: input.timestamp_tag,
+            timestamp_qualifier: input.timestamp_qualifier,
+            timestamp_qualifier_shape_valid: input.timestamp_qualifier_shape_valid,
+            timestamp_length_digit_shape_valid: input.timestamp_length_digit_shape_valid,
+            timestamp_value_valid: input.timestamp_value_valid,
         }
     }
 
@@ -208,6 +268,36 @@ impl DepotPriceShapeFact {
     }
     pub fn price_present(self) -> bool {
         self.price_present
+    }
+    pub fn qualifier_shape_valid(self) -> bool {
+        self.qualifier_shape_valid
+    }
+    pub fn tag_unit_pair_valid(self) -> bool {
+        self.tag_unit_pair_valid
+    }
+    pub fn currency_shape_valid(self) -> bool {
+        self.currency_shape_valid
+    }
+    pub fn decimal_shape_valid(self) -> bool {
+        self.decimal_shape_valid
+    }
+    pub fn timestamp_present(self) -> bool {
+        self.timestamp_present
+    }
+    pub fn timestamp_tag(self) -> Option<DepotPriceTimestampTagKind> {
+        self.timestamp_tag
+    }
+    pub fn timestamp_qualifier(self) -> Option<DepotPriceTimestampQualifierKind> {
+        self.timestamp_qualifier
+    }
+    pub fn timestamp_qualifier_shape_valid(self) -> bool {
+        self.timestamp_qualifier_shape_valid
+    }
+    pub fn timestamp_length_digit_shape_valid(self) -> bool {
+        self.timestamp_length_digit_shape_valid
+    }
+    pub fn timestamp_value_valid(self) -> bool {
+        self.timestamp_value_valid
     }
 }
 
@@ -394,9 +484,10 @@ impl SecuritiesTransactionPresenceFact {
 /// Redacted structure of the most recently parsed MT535 or MT536 response page.
 ///
 /// The inventories contain only recognized block/tag kinds, nesting depth, and
-/// occurrence counts. Price shapes contain only enum classifications and presence
-/// booleans; entry facts contain booleans only. This type never contains securities
-/// identifiers, currencies, amounts, references, dates, free text, or raw wire data.
+/// occurrence counts. Price shapes contain only enum classifications, presence and
+/// validation booleans, and an optional one-based failure ordinal; entry facts contain
+/// booleans only. This type never contains securities identifiers, currencies,
+/// amounts, references, dates, free text, or raw wire data.
 #[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepotResponseFacts {
@@ -404,6 +495,8 @@ pub struct DepotResponseFacts {
     block_inventory: Vec<DepotBlockFact>,
     tag_inventory: Vec<DepotTagFact>,
     price_shapes: Vec<DepotPriceShapeFact>,
+    first_failing_price_ordinal: Option<usize>,
+    first_failing_price_stage: Option<DepotPriceFailureStage>,
     positions: Vec<DepotPositionPresenceFact>,
     transactions: Vec<SecuritiesTransactionPresenceFact>,
 }
@@ -413,12 +506,16 @@ impl DepotResponseFacts {
         block_inventory: Vec<DepotBlockFact>,
         tag_inventory: Vec<DepotTagFact>,
         price_shapes: Vec<DepotPriceShapeFact>,
+        first_failing_price_ordinal: Option<usize>,
+        first_failing_price_stage: Option<DepotPriceFailureStage>,
     ) -> Self {
         Self {
             document_kind: DepotDocumentKind::Mt535,
             block_inventory,
             tag_inventory,
             price_shapes,
+            first_failing_price_ordinal,
+            first_failing_price_stage,
             positions: Vec::new(),
             transactions: Vec::new(),
         }
@@ -428,12 +525,16 @@ impl DepotResponseFacts {
         block_inventory: Vec<DepotBlockFact>,
         tag_inventory: Vec<DepotTagFact>,
         price_shapes: Vec<DepotPriceShapeFact>,
+        first_failing_price_ordinal: Option<usize>,
+        first_failing_price_stage: Option<DepotPriceFailureStage>,
     ) -> Self {
         Self {
             document_kind: DepotDocumentKind::Mt536,
             block_inventory,
             tag_inventory,
             price_shapes,
+            first_failing_price_ordinal,
+            first_failing_price_stage,
             positions: Vec::new(),
             transactions: Vec::new(),
         }
@@ -450,6 +551,8 @@ impl DepotResponseFacts {
             block_inventory,
             tag_inventory,
             price_shapes,
+            first_failing_price_ordinal: None,
+            first_failing_price_stage: None,
             positions: positions
                 .iter()
                 .map(DepotPositionPresenceFact::from_position)
@@ -469,6 +572,8 @@ impl DepotResponseFacts {
             block_inventory,
             tag_inventory,
             price_shapes,
+            first_failing_price_ordinal: None,
+            first_failing_price_stage: None,
             positions: Vec::new(),
             transactions: transactions
                 .iter()
@@ -488,6 +593,13 @@ impl DepotResponseFacts {
     }
     pub fn price_shapes(&self) -> &[DepotPriceShapeFact] {
         &self.price_shapes
+    }
+    /// One-based document-order ordinal of the first invalid price field.
+    pub fn first_failing_price_ordinal(&self) -> Option<usize> {
+        self.first_failing_price_ordinal
+    }
+    pub fn first_failing_price_stage(&self) -> Option<DepotPriceFailureStage> {
+        self.first_failing_price_stage
     }
     pub fn positions(&self) -> &[DepotPositionPresenceFact] {
         &self.positions

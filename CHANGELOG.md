@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Split MT535 price failures into value-free component stages
+  and retained the first failing price ordinal plus bounded validation facts.
+
 - **2026-07-31** — Renamed the permanent, opt-in structural diagnostics feature
   to `diagnostics` and documented its value-free but intentionally unstable fact API.
 

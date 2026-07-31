@@ -584,7 +584,14 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   90A/90B site therefore did not authorize broader MT535 parsing; value-free
   diagnostics now preserve the parsed block inventory and classify only the tag,
   known/unknown qualifier and unit, and expected-component presence for a
-  subsequent structural observation. Separately, the section 4.4 MT536
+  subsequent structural observation. Pages 405-407 further define the optional
+  price timestamp as `98A::PRIC//` plus eight date digits or `98C::PRIC//` plus
+  eight date and six time digits. The independently equivalent HBCI 2.2 IX.2.4
+  table appears on pages 89-91. Diagnostics therefore distinguish qualifier,
+  tag/unit, currency, decimal, and PRIC-timestamp validation and retain only the
+  one-based ordinal of the first failing price. They expose no component value,
+  and this added observability does not expand the accepted MT535 syntax.
+  Separately, the section 4.4 MT536
   full-message example on page 430 prints `:90B::MRKT//PRCT/105,` despite that
   chapter's 90A/PRCT and 90B/ACTU table. The MT536 parser therefore preserves
   its existing unit-driven acceptance of this independently printed official

@@ -33,7 +33,8 @@ pub use client::{
 #[cfg(feature = "diagnostics")]
 pub use diagnostics::{
     DepotBlockFact, DepotBlockKind, DepotDocumentKind, DepotPositionPresenceFact,
-    DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,
+    DepotPriceFailureStage, DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind,
+    DepotPriceTimestampQualifierKind, DepotPriceTimestampTagKind, DepotPriceUnitKind,
     DepotResponseFacts, DepotTagFact, DepotTagKind, HitansMediumRequirementFact, HktabRequestFact,
     InitializationRecoveryFacts, ReceivedResponseFact, ReceivedSegmentFact, ReturnedTanMediumFact,
     SecuritiesTransactionPresenceFact, TanMediaDiscoveryFacts, TanMediumElementShapeFact,

@@ -56,10 +56,13 @@ pub(super) fn position_structure(
     payload
         .map(|input| {
             let root = document(input)?;
+            let first_price_failure = first_price_failure(&root, true);
             Ok(crate::DepotResponseFacts::for_position_structure(
                 block_inventory(&root),
                 tag_inventory(&root),
-                price_shapes(&root),
+                price_shapes(&root, true),
+                first_price_failure.map(|(ordinal, _)| ordinal),
+                first_price_failure.map(|(_, stage)| stage),
             ))
         })
         .transpose()
@@ -80,10 +83,13 @@ pub(super) fn transaction_structure(
     payload
         .map(|input| {
             let root = document(input)?;
+            let first_price_failure = first_price_failure(&root, false);
             Ok(crate::DepotResponseFacts::for_transaction_structure(
                 block_inventory(&root),
                 tag_inventory(&root),
-                price_shapes(&root),
+                price_shapes(&root, false),
+                first_price_failure.map(|(ordinal, _)| ordinal),
+                first_price_failure.map(|(_, stage)| stage),
             ))
         })
         .transpose()
@@ -144,6 +150,15 @@ struct Block {
     name: String,
     fields: Vec<Field>,
     children: Vec<Block>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PriceParseStage {
+    Qualifier,
+    TagUnitPairing,
+    CurrencyShape,
+    DecimalShape,
+    PriceTimestamp,
 }
 
 fn document(input: &[u8]) -> Result<Block, Error> {
@@ -285,7 +300,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     let development_facts = crate::DepotResponseFacts::for_positions(
         block_inventory(&root),
         tag_inventory(&root),
-        price_shapes(&root),
+        price_shapes(&root, true),
         &positions,
     );
     Ok(DepotPositionPage {
@@ -323,7 +338,7 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
             .or_else(|| optional_field(financial, "90B"))
             .map(|field| parse_price(field, financial, false))
             .transpose()
-            .map_err(|_| malformed_securities_data!("MT536/FIN/90A:90B"))?;
+            .map_err(mt536_price_error)?;
         for transaction in children(financial, "TRAN") {
             entries.push(parse_transaction(transaction, &instrument, price.as_ref())?);
             if entries.len() > MAX_PAGE_ENTRIES {
@@ -338,7 +353,7 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
     let development_facts = crate::DepotResponseFacts::for_transactions(
         block_inventory(&root),
         tag_inventory(&root),
-        price_shapes(&root),
+        price_shapes(&root, false),
         &entries,
     );
     Ok(SecuritiesTransactionPage {
@@ -442,9 +457,14 @@ fn tag_inventory(root: &Block) -> Vec<crate::DepotTagFact> {
 }
 
 #[cfg(feature = "diagnostics")]
-fn price_shapes(root: &Block) -> Vec<crate::DepotPriceShapeFact> {
+fn price_shapes(
+    root: &Block,
+    require_mt535_tag_unit_pair: bool,
+) -> Vec<crate::DepotPriceShapeFact> {
     use crate::{
-        DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,
+        DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind,
+        DepotPriceTimestampQualifierKind, DepotPriceTimestampTagKind, DepotPriceUnitKind,
+        diagnostics::DepotPriceShapeInput,
     };
 
     children(root, "FIN")
@@ -471,6 +491,26 @@ fn price_shapes(root: &Block) -> Vec<crate::DepotPriceShapeFact> {
                     "ACTU" => DepotPriceUnitKind::ActualAmount,
                     _ => DepotPriceUnitKind::Unknown,
                 };
+                let qualifier_shape_valid = matches!(
+                    qualifier_kind,
+                    DepotPriceQualifierKind::Market | DepotPriceQualifierKind::Indicative
+                );
+                let tag_unit_pair_valid = matches!(
+                    (require_mt535_tag_unit_pair, tag, unit_kind),
+                    (
+                        true,
+                        DepotPriceTagKind::Percentage90A,
+                        DepotPriceUnitKind::Percentage
+                    ) | (
+                        true,
+                        DepotPriceTagKind::Amount90B,
+                        DepotPriceUnitKind::ActualAmount
+                    ) | (
+                        false,
+                        _,
+                        DepotPriceUnitKind::Percentage | DepotPriceUnitKind::ActualAmount
+                    )
+                );
                 let (currency_present, price_present) = match unit_kind {
                     DepotPriceUnitKind::Percentage => (false, !payload.is_empty()),
                     DepotPriceUnitKind::ActualAmount => (payload.len() >= 3, payload.len() > 3),
@@ -479,18 +519,137 @@ fn price_shapes(root: &Block) -> Vec<crate::DepotPriceShapeFact> {
                         DepotPriceTagKind::Amount90B => (payload.len() >= 3, payload.len() > 3),
                     },
                 };
-                Some(DepotPriceShapeFact::new(
+                let (currency_shape_valid, decimal_shape_valid) = match unit_kind {
+                    DepotPriceUnitKind::Percentage => (true, decimal(payload).is_ok()),
+                    DepotPriceUnitKind::ActualAmount => {
+                        let currency = payload.get(..3);
+                        let number = payload.get(3..);
+                        (
+                            currency.is_some_and(|value| validate_currency(value).is_ok()),
+                            number.is_some_and(|value| decimal(value).is_ok()),
+                        )
+                    }
+                    DepotPriceUnitKind::Unknown => (false, false),
+                };
+                let timestamp_field = financial
+                    .fields
+                    .iter()
+                    .filter(|field| field.tag.starts_with("98"))
+                    .find(|field| field.value.starts_with(":PRIC"))
+                    .or_else(|| {
+                        financial
+                            .fields
+                            .iter()
+                            .find(|field| field.tag == "98A" || field.tag == "98C")
+                    });
+                let (
+                    timestamp_present,
+                    timestamp_tag,
+                    timestamp_qualifier,
+                    timestamp_qualifier_shape_valid,
+                    timestamp_length_digit_shape_valid,
+                    timestamp_value_valid,
+                ) = if let Some(timestamp) = timestamp_field {
+                    let timestamp_tag = match timestamp.tag.as_str() {
+                        "98A" => DepotPriceTimestampTagKind::Date98A,
+                        "98C" => DepotPriceTimestampTagKind::DateTime98C,
+                        _ => DepotPriceTimestampTagKind::Unknown,
+                    };
+                    let (timestamp_qualifier, timestamp_value) = timestamp
+                        .value
+                        .strip_prefix(':')
+                        .and_then(|value| value.split_once("//"))
+                        .unwrap_or(("", ""));
+                    let timestamp_qualifier = match timestamp_qualifier {
+                        "PRIC" => DepotPriceTimestampQualifierKind::Price,
+                        _ => DepotPriceTimestampQualifierKind::Unknown,
+                    };
+                    let timestamp_qualifier_shape_valid =
+                        timestamp_qualifier == DepotPriceTimestampQualifierKind::Price;
+                    let timestamp_length_digit_shape_valid = match timestamp_tag {
+                        DepotPriceTimestampTagKind::Date98A => {
+                            timestamp_value.len() == 8
+                                && timestamp_value.bytes().all(|byte| byte.is_ascii_digit())
+                        }
+                        DepotPriceTimestampTagKind::DateTime98C => {
+                            timestamp_value.len() == 14
+                                && timestamp_value.bytes().all(|byte| byte.is_ascii_digit())
+                        }
+                        DepotPriceTimestampTagKind::Unknown => false,
+                    };
+                    (
+                        true,
+                        Some(timestamp_tag),
+                        Some(timestamp_qualifier),
+                        timestamp_qualifier_shape_valid,
+                        timestamp_length_digit_shape_valid,
+                        timestamp_qualifier_shape_valid
+                            && timestamp_length_digit_shape_valid
+                            && parse_qualified_timestamp(timestamp).is_ok(),
+                    )
+                } else {
+                    (false, None, None, true, true, true)
+                };
+                Some(DepotPriceShapeFact::new(DepotPriceShapeInput {
                     tag,
-                    qualifier_kind,
-                    unit_kind,
-                    !qualifier.is_empty(),
-                    !unit.is_empty(),
+                    qualifier: qualifier_kind,
+                    unit: unit_kind,
+                    qualifier_present: !qualifier.is_empty(),
+                    unit_present: !unit.is_empty(),
                     currency_present,
                     price_present,
-                ))
+                    qualifier_shape_valid,
+                    tag_unit_pair_valid,
+                    currency_shape_valid,
+                    decimal_shape_valid,
+                    timestamp_present,
+                    timestamp_tag,
+                    timestamp_qualifier,
+                    timestamp_qualifier_shape_valid,
+                    timestamp_length_digit_shape_valid,
+                    timestamp_value_valid,
+                }))
             })
         })
         .collect()
+}
+
+#[cfg(feature = "diagnostics")]
+fn first_price_failure(
+    root: &Block,
+    require_mt535_tag_unit_pair: bool,
+) -> Option<(usize, crate::DepotPriceFailureStage)> {
+    children(root, "FIN")
+        .flat_map(|financial| {
+            financial
+                .fields
+                .iter()
+                .filter(|field| field.tag == "90A" || field.tag == "90B")
+                .map(move |field| (field, financial))
+        })
+        .enumerate()
+        .find_map(|(index, (field, financial))| {
+            parse_price(field, financial, require_mt535_tag_unit_pair)
+                .err()
+                .map(|stage| {
+                    let stage = match stage {
+                        PriceParseStage::Qualifier => crate::DepotPriceFailureStage::Qualifier,
+                        PriceParseStage::TagUnitPairing => {
+                            crate::DepotPriceFailureStage::TagUnitPairing
+                        }
+                        PriceParseStage::CurrencyShape => {
+                            crate::DepotPriceFailureStage::CurrencyShape
+                        }
+                        PriceParseStage::DecimalShape => {
+                            crate::DepotPriceFailureStage::DecimalShape
+                        }
+                        PriceParseStage::PriceTimestamp => {
+                            crate::DepotPriceFailureStage::PriceTimestamp
+                        }
+                    };
+                    (index + 1, stage)
+                })
+        })
 }
 
 fn safe_identity(block: &Block) -> Result<(String, String), Error> {
@@ -546,7 +705,7 @@ fn parse_position(block: &Block) -> Result<DepotPosition, Error> {
         .or_else(|| optional_field(block, "90B"))
         .map(|field| parse_price(field, block, true))
         .transpose()
-        .map_err(|_| malformed_securities_data!("MT535/FIN/90A:90B"))?;
+        .map_err(mt535_price_error)?;
     let market_values = fields(block, "19A")
         .filter(|field| field.value.starts_with(":HOLD//"))
         .map(|field| {
@@ -711,17 +870,57 @@ fn parse_instrument(field: &Field) -> Result<SecurityInstrument, Error> {
     Ok(SecurityInstrument { isin, wkn, name })
 }
 
+fn mt535_price_error(stage: PriceParseStage) -> Error {
+    match stage {
+        PriceParseStage::Qualifier => {
+            malformed_securities_data!("MT535/FIN/90A:90B/qualifier")
+        }
+        PriceParseStage::TagUnitPairing => {
+            malformed_securities_data!("MT535/FIN/90A:90B/tag-unit")
+        }
+        PriceParseStage::CurrencyShape => {
+            malformed_securities_data!("MT535/FIN/90B/currency-shape")
+        }
+        PriceParseStage::DecimalShape => {
+            malformed_securities_data!("MT535/FIN/90A:90B/decimal-shape")
+        }
+        PriceParseStage::PriceTimestamp => {
+            malformed_securities_data!("MT535/FIN/98A:98C:PRIC/timestamp-shape")
+        }
+    }
+}
+
+fn mt536_price_error(stage: PriceParseStage) -> Error {
+    match stage {
+        PriceParseStage::Qualifier => {
+            malformed_securities_data!("MT536/FIN/90A:90B/qualifier")
+        }
+        PriceParseStage::TagUnitPairing => {
+            malformed_securities_data!("MT536/FIN/90A:90B/tag-unit")
+        }
+        PriceParseStage::CurrencyShape => {
+            malformed_securities_data!("MT536/FIN/90B/currency-shape")
+        }
+        PriceParseStage::DecimalShape => {
+            malformed_securities_data!("MT536/FIN/90A:90B/decimal-shape")
+        }
+        PriceParseStage::PriceTimestamp => {
+            malformed_securities_data!("MT536/FIN/98A:98C:PRIC/timestamp-shape")
+        }
+    }
+}
+
 fn parse_price(
     field: &Field,
     block: &Block,
     require_mt535_tag_unit_pair: bool,
-) -> Result<SecurityPrice, Error> {
+) -> Result<SecurityPrice, PriceParseStage> {
     let (quality, rest) = if let Some(rest) = field.value.strip_prefix(":MRKT//") {
         (PriceQuality::Market, rest)
     } else if let Some(rest) = field.value.strip_prefix(":INDC//") {
         (PriceQuality::Indicative, rest)
     } else {
-        return Err(malformed_securities_data!());
+        return Err(PriceParseStage::Qualifier);
     };
     // DK Anlage 3 v3.9 4.3 and HBCI 2.2 IX.2.4 define MT535 Option A as
     // 90A + PRCT and Option B as 90B + ACTU. For MT536, the v3.9 chapter
@@ -732,31 +931,32 @@ fn parse_price(
         (true, "90A") => (
             true,
             rest.strip_prefix("PRCT/")
-                .ok_or(malformed_securities_data!())?,
+                .ok_or(PriceParseStage::TagUnitPairing)?,
         ),
         (true, "90B") => (
             false,
             rest.strip_prefix("ACTU/")
-                .ok_or(malformed_securities_data!())?,
+                .ok_or(PriceParseStage::TagUnitPairing)?,
         ),
         (false, "90A" | "90B") if rest.starts_with("PRCT/") => (true, &rest[5..]),
         (false, "90A" | "90B") if rest.starts_with("ACTU/") => (false, &rest[5..]),
-        _ => return Err(malformed_securities_data!()),
+        _ => return Err(PriceParseStage::TagUnitPairing),
     };
     let (currency, number) = if percentage {
         (None, rest)
     } else {
         let (currency, number) = rest
             .split_at_checked(3)
-            .ok_or(malformed_securities_data!())?;
-        validate_currency(currency)?;
+            .ok_or(PriceParseStage::CurrencyShape)?;
+        validate_currency(currency).map_err(|_| PriceParseStage::CurrencyShape)?;
         (Some(currency.to_owned()), number)
     };
-    let (coefficient, scale) = decimal(number)?;
+    let (coefficient, scale) = decimal(number).map_err(|_| PriceParseStage::DecimalShape)?;
     let date_field = optional_qualified_any(block, &["98A", "98C"], ":PRIC//");
     let (date, time) = date_field
         .map(parse_qualified_timestamp)
-        .transpose()?
+        .transpose()
+        .map_err(|_| PriceParseStage::PriceTimestamp)?
         .unwrap_or((None, None));
     Ok(SecurityPrice::new(
         coefficient,
