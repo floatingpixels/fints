@@ -698,14 +698,17 @@ impl SecuritiesAmount {
 
 /// One explicitly reported position in a depot statement.
 ///
-/// Optional values remain absent and the private result intentionally provides no
-/// `Debug` implementation.
+/// Optional values remain absent, including supplied optional fields that could not
+/// be typed without fabrication. The enclosing [`DepotPositions`] reports that
+/// degradation. This private result intentionally provides no `Debug` implementation.
 pub struct DepotPosition {
     pub(crate) instrument: SecurityInstrument,
     pub(crate) quantity: SecuritiesQuantity,
     pub(crate) price: Option<SecurityPrice>,
     pub(crate) market_values: Vec<SecuritiesAmount>,
     pub(crate) cost_basis: Option<SecurityPrice>,
+    #[cfg(feature = "diagnostics")]
+    pub(crate) price_location_detail_present: bool,
 }
 
 impl DepotPosition {
@@ -733,12 +736,14 @@ impl DepotPosition {
 /// Exhaustively paginated positions for exactly one UPD depot.
 ///
 /// Institution-reported page totals remain in response order; they are never
-/// recomputed or deduplicated. This private result intentionally provides no
-/// `Debug` implementation.
+/// recomputed or deduplicated. Position parsing losses are reported separately
+/// without exposing which instrument was affected. This private result
+/// intentionally provides no `Debug` implementation.
 pub struct DepotPositions {
     pub(crate) account: Account,
     pub(crate) positions: Vec<DepotPosition>,
     pub(crate) total_values: Vec<SecuritiesAmount>,
+    pub(crate) parse_counts: DepotPositionParseCounts,
 }
 
 impl DepotPositions {
@@ -752,6 +757,35 @@ impl DepotPositions {
 
     pub fn total_values(&self) -> &[SecuritiesAmount] {
         &self.total_values
+    }
+
+    /// Redacted counts of positions that were degraded or skipped while parsing.
+    pub fn parse_counts(&self) -> DepotPositionParseCounts {
+        self.parse_counts
+    }
+}
+
+/// Value-free MT535 position parsing-loss counts across all returned pages.
+///
+/// A degraded position remains in the result with one or more malformed optional
+/// values absent. A skipped position lacked a usable required position field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DepotPositionParseCounts {
+    degraded: usize,
+    skipped: usize,
+}
+
+impl DepotPositionParseCounts {
+    pub(crate) fn new(degraded: usize, skipped: usize) -> Self {
+        Self { degraded, skipped }
+    }
+
+    pub fn degraded(self) -> usize {
+        self.degraded
+    }
+
+    pub fn skipped(self) -> usize {
+        self.skipped
     }
 }
 

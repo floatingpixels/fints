@@ -277,9 +277,11 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
     match result? {
         DepotPositionRequest::Complete(result) => {
             println!(
-                "probe operation=depot_positions status=complete positions={} page_totals={}",
+                "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={}",
                 result.positions().len(),
-                result.total_values().len()
+                result.total_values().len(),
+                result.parse_counts().degraded(),
+                result.parse_counts().skipped()
             )
         }
         DepotPositionRequest::Challenge(continuation) => {
@@ -296,9 +298,11 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
             match submitted? {
                 DepotPositionRequest::Complete(result) => {
                     println!(
-                        "probe operation=depot_positions status=complete positions={} page_totals={}",
+                        "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={}",
                         result.positions().len(),
-                        result.total_values().len()
+                        result.total_values().len(),
+                        result.parse_counts().degraded(),
+                        result.parse_counts().skipped()
                     )
                 }
                 DepotPositionRequest::Challenge(_) => {
@@ -624,14 +628,23 @@ fn print_depot_response_facts(client: &Client) {
     );
     for (index, position) in facts.positions().iter().enumerate() {
         println!(
-            "depot_position index={index} isin_present={} wkn_present={} name_present={} quantity_present={} price_present={} market_value_present={} cost_basis_present={}",
+            "depot_position index={index} isin_present={} wkn_present={} name_present={} quantity_present={} price_present={} location_detail_present={} market_value_present={} cost_basis_present={}",
             position.isin_present(),
             position.wkn_present(),
             position.name_present(),
             position.quantity_present(),
             position.price_present(),
+            position.location_detail_present(),
             position.market_value_present(),
             position.cost_basis_present()
+        );
+    }
+    for failure in facts.position_failures() {
+        println!(
+            "depot_position_failure ordinal={} disposition={:?} site={:?}",
+            failure.ordinal(),
+            failure.disposition(),
+            failure.site()
         );
     }
     for (index, entry) in facts.transactions().iter().enumerate() {

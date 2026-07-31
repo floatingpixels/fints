@@ -32,7 +32,8 @@ pub use client::{
 };
 #[cfg(feature = "diagnostics")]
 pub use diagnostics::{
-    DepotBlockFact, DepotBlockKind, DepotDocumentKind, DepotPositionPresenceFact,
+    DepotBlockFact, DepotBlockKind, DepotDocumentKind, DepotPositionFailureDisposition,
+    DepotPositionFailureFact, DepotPositionFailureSite, DepotPositionPresenceFact,
     DepotPriceCurrencyShapeKind, DepotPriceFailureStage, DepotPriceQualifierKind,
     DepotPriceShapeFact, DepotPriceTagKind, DepotPriceTimestampQualifierKind,
     DepotPriceTimestampTagKind, DepotPriceUnitKind, DepotResponseFacts, DepotTagFact, DepotTagKind,
@@ -44,11 +45,11 @@ pub use error::{BankResponse, Error, InputError, Limitation, Recovery, ResponseC
 pub use model::{
     Account, Amount, Balance, BookedEntry, BookedTransactionDetail, BookedTransactions, Challenge,
     Credentials, CreditCardAmount, CreditCardBalance, CreditCardCurrentBalance, CreditCardEntry,
-    CreditCardTransactions, CreditDebit, DepotPosition, DepotPositions, InstituteId, PriceQuality,
-    ProductIdentity, QuantityUnit, ReusableState, SecuritiesAmount, SecuritiesMovement,
-    SecuritiesQuantity, SecuritiesTransaction, SecuritiesTransactions, SecurityInstrument,
-    SecurityPrice, SignedAmount, StatementPosition, Tan, TanMedium, TanMediumClass,
-    TanMediumStatus, TanMethod, TanProcess, Timestamp,
+    CreditCardTransactions, CreditDebit, DepotPosition, DepotPositionParseCounts, DepotPositions,
+    InstituteId, PriceQuality, ProductIdentity, QuantityUnit, ReusableState, SecuritiesAmount,
+    SecuritiesMovement, SecuritiesQuantity, SecuritiesTransaction, SecuritiesTransactions,
+    SecurityInstrument, SecurityPrice, SignedAmount, StatementPosition, Tan, TanMedium,
+    TanMediumClass, TanMediumStatus, TanMethod, TanProcess, Timestamp,
 };
 pub use transport::{TraceDirection, TraceEvent, TraceSink, TransportError};
 pub use wire::WireError;

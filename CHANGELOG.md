@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Isolated malformed MT535 position fields, returning usable
+  siblings with redacted degraded/skipped counts and value-free failure sites.
+
 - **2026-07-31** — Classified invalid MT535 currency prefixes without retaining
   their values and clarified possible currency-less decimal structure.
 

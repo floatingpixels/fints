@@ -116,6 +116,162 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     }
 }
 
+// DK Anlage 3 v3.9 4.3 pages 402 and 406 and HBCI 2.2 IX.2.4:
+// 90B is optional, but a supplied ACTU price requires an `a 3` currency.
+// 94B and its final free-text component are optional. This independently
+// fictional document combines a space-padded currency with an omitted 94B
+// final component between two complete positions.
+#[test]
+fn mt535_blank_optional_price_degrades_one_position_without_losing_siblings() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS41\r\n",
+        "Fictional First Holding\r\n",
+        ":90B::MRKT//ACTU/EUR11,25\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS42\r\n",
+        "Fictional Blank Price Holding\r\n",
+        ":90B::MRKT//ACTU/   7,25\r\n",
+        ":94B::SAFE//CUST\r\n",
+        ":93B::AGGR//UNIT/2,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS43\r\n",
+        "Fictional Third Holding\r\n",
+        ":90B::MRKT//ACTU/USD13,75\r\n",
+        ":94B::PRIC//LMAR/XFIC\r\n",
+        ":93B::AGGR//UNIT/3,\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
+
+    assert_eq!(page.positions.len(), 3);
+    assert!(page.positions[0].price().is_some());
+    assert!(page.positions[1].price().is_none());
+    assert!(page.positions[2].price().is_some());
+    assert_eq!(page.parse_counts.degraded(), 1);
+    assert_eq!(page.parse_counts.skipped(), 0);
+    #[cfg(feature = "diagnostics")]
+    {
+        assert_eq!(
+            page.development_facts.price_shapes()[1].currency_shape(),
+            Some(crate::DepotPriceCurrencyShapeKind::BlankSpacePadded)
+        );
+        assert!(page.development_facts.price_shapes()[1].decimal_shape_valid());
+        assert!(!page.development_facts.positions()[1].location_detail_present());
+        assert!(page.development_facts.positions()[2].location_detail_present());
+        assert_eq!(page.development_facts.position_failures().len(), 1);
+        assert_eq!(
+            page.development_facts.position_failures()[0],
+            crate::DepotPositionFailureFact::new(
+                2,
+                crate::DepotPositionFailureDisposition::Degraded,
+                crate::DepotPositionFailureSite::Price,
+            )
+        );
+        let rendered = format!("{:?}", page.development_facts);
+        for private_value in ["DE000FINTS42", "7,25", "CUST", "XFIC"] {
+            assert!(!rendered.contains(private_value));
+        }
+    }
+}
+
+// Gate 4 resilience boundary: malformed required FIN fields skip that position;
+// malformed optional typed values remain absent on an otherwise usable position.
+// Document framing, bounds, and GENL account identity remain page-level failures.
+#[test]
+fn mt535_position_failures_are_counted_and_isolated_by_static_site() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//Y\r\n",
+        ":16S:GENL\r\n",
+        ":16R:FIN\r\n",
+        ":35B:Fictional Missing Identifier\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS44\r\n",
+        "Fictional Blank Quantity\r\n",
+        ":93B::AGGR//UNIT/   \r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS45\r\n",
+        "Fictional Bad Price\r\n",
+        ":90B::MRKT//ACTU/EU112,\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS46\r\n",
+        "Fictional Bad Market Value\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":19A::HOLD//EU112,\r\n",
+        ":16S:FIN\r\n",
+        ":16R:FIN\r\n",
+        ":35B:ISIN DE000FINTS47\r\n",
+        "Fictional Bad Cost Basis\r\n",
+        ":93B::AGGR//UNIT/1,\r\n",
+        ":70E::HOLD//fictional header\r\n",
+        "fictional amount\r\n",
+        ":16S:FIN\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
+
+    assert_eq!(page.positions.len(), 3);
+    assert_eq!(page.parse_counts.degraded(), 3);
+    assert_eq!(page.parse_counts.skipped(), 2);
+    assert!(page.positions[0].price().is_none());
+    assert!(page.positions[1].market_values().is_empty());
+    assert!(page.positions[2].cost_basis().is_none());
+    #[cfg(feature = "diagnostics")]
+    {
+        use crate::{
+            DepotPositionFailureDisposition::{Degraded, Skipped},
+            DepotPositionFailureSite::{CostBasis, Instrument, MarketValue, Price, Quantity},
+        };
+
+        assert_eq!(
+            page.development_facts
+                .position_failures()
+                .iter()
+                .map(|fact| (fact.ordinal(), fact.disposition(), fact.site()))
+                .collect::<Vec<_>>(),
+            [
+                (1, Skipped, Instrument),
+                (2, Skipped, Quantity),
+                (3, Degraded, Price),
+                (4, Degraded, MarketValue),
+                (5, Degraded, CostBasis),
+            ]
+        );
+        let rendered = format!("{:?}", page.development_facts);
+        for private_value in [
+            "DE000FINTS45",
+            "EU1",
+            "fictional header",
+            "fictional amount",
+        ] {
+            assert!(!rendered.contains(private_value));
+        }
+    }
+}
+
 // HBCI 2.2 VII.4.3.1 and IX.2.4: HIWPD 5 contains exactly one binary
 // SRG-1998 MT535 statement. This fixture is independently derived from the
 // archived full-message example and uses fictional identities and values.
@@ -186,10 +342,10 @@ fn hiwpd_five_parses_its_official_mt535_payload_and_requires_version_match() {
         "-"
     );
     let response = Response::parse(&message_with_binary("HIWPD", 5, malformed.as_bytes())).unwrap();
-    assert!(matches!(
-        response.depot_positions(5),
-        Err(Error::MalformedSecuritiesData { .. })
-    ));
+    let page = response.depot_positions(5).unwrap().unwrap();
+    assert!(page.positions.is_empty());
+    assert_eq!(page.parse_counts.skipped(), 1);
+    assert_eq!(page.parse_counts.degraded(), 0);
 }
 
 // DK Anlage 3 v3.9, 4.3: AGGR can be negative, INDC can carry a
@@ -329,7 +485,7 @@ fn mt535_price_options_accept_the_complete_official_matrix() {
 }
 
 #[test]
-fn mt535_price_options_reject_crossed_tag_and_unit_choices() {
+fn mt535_crossed_optional_price_choices_degrade_only_the_price() {
     for price in [":90A::MRKT//ACTU/EUR100,", ":90B::INDC//PRCT/100,"] {
         let payload = format!(
             "\r\n:16R:GENL\r\n:28E:1/ONLY\r\n\
@@ -339,10 +495,11 @@ fn mt535_price_options_reject_crossed_tag_and_unit_choices() {
         );
         let response =
             Response::parse(&message_with_binary("HIWPD", 6, payload.as_bytes())).unwrap();
-        assert!(matches!(
-            response.depot_positions(6),
-            Err(Error::MalformedSecuritiesData { .. })
-        ));
+        let page = response.depot_positions(6).unwrap().unwrap();
+        assert_eq!(page.positions.len(), 1);
+        assert!(page.positions[0].price().is_none());
+        assert_eq!(page.parse_counts.degraded(), 1);
+        assert_eq!(page.parse_counts.skipped(), 0);
     }
 }
 
@@ -672,10 +829,11 @@ fn credit_card_groups_accept_cut_optional_tails_and_unused_extensions() {
     );
 }
 
-// DK Anlage 3 v3.9, 4.3-4.4: block ends must match their starts and mandatory
-// GENL/FIN/TRANSDET fields cannot yield partial results.
+// DK Anlage 3 v3.9, 4.3-4.4: block ends must match their starts. A malformed
+// required field skips only its FIN position, while malformed document/control
+// structure still fails the page.
 #[test]
-fn malformed_securities_documents_fail_without_partial_results() {
+fn malformed_securities_structure_fails_while_bad_positions_are_skipped() {
     let mismatched = concat!(
         "\r\n",
         ":16R:GENL\r\n",
@@ -710,12 +868,22 @@ fn malformed_securities_documents_fail_without_partial_results() {
     )
     .as_bytes();
     let response = Response::parse(&message_with_binary("HIWPD", 6, missing_quantity)).unwrap();
-    let missing_quantity_site = match response.depot_positions(6) {
-        Err(Error::MalformedSecuritiesData { site }) => site,
-        _ => panic!("expected malformed MT535 position"),
-    };
-    assert!(missing_quantity_site.contains("MT535/FIN/93B:AGGR"));
-    assert_ne!(mismatched_site, missing_quantity_site);
+    let page = response.depot_positions(6).unwrap().unwrap();
+    assert!(page.positions.is_empty());
+    assert_eq!(page.parse_counts.skipped(), 1);
+    assert_eq!(page.parse_counts.degraded(), 0);
+    #[cfg(feature = "diagnostics")]
+    {
+        assert_eq!(page.development_facts.position_failures().len(), 1);
+        assert_eq!(
+            page.development_facts.position_failures()[0].site(),
+            crate::DepotPositionFailureSite::Quantity
+        );
+        assert_eq!(
+            page.development_facts.position_failures()[0].disposition(),
+            crate::DepotPositionFailureDisposition::Skipped
+        );
+    }
 
     let inactive_with_position = concat!(
         "\r\n",
@@ -737,10 +905,12 @@ fn malformed_securities_documents_fail_without_partial_results() {
         inactive_with_position.as_bytes(),
     ))
     .unwrap();
-    assert!(matches!(
-        response.depot_positions(6),
-        Err(Error::MalformedSecuritiesData { .. })
-    ));
+    let page = response.depot_positions(6).unwrap().unwrap();
+    assert_eq!(page.positions.len(), 1);
+    assert_eq!(
+        page.parse_counts,
+        crate::DepotPositionParseCounts::default()
+    );
 
     let invalid_indicator = concat!(
         "\r\n",
@@ -847,9 +1017,10 @@ fn securities_documents_accept_exactly_one_trailing_crlf() {
 
 // DK Anlage 3 v3.9, 4.3: 98C carries an ASCII-numeric date and time.
 // A fictional Latin-1 high byte inside the date must be a typed parse error,
-// never a UTF-8 character-boundary panic.
+// never a UTF-8 character-boundary panic. Because PRIC is optional, the
+// malformed timestamp degrades the price instead of discarding the position.
 #[test]
-fn securities_date_with_latin1_high_byte_is_typed_error() {
+fn securities_date_with_latin1_high_byte_degrades_optional_price() {
     let mut payload = concat!(
         "\r\n",
         ":16R:GENL\r\n",
@@ -884,10 +1055,11 @@ fn securities_date_with_latin1_high_byte_is_typed_error() {
     );
     let response = Response::parse(&message_with_binary("HIWPD", 6, &payload)).unwrap();
 
-    assert!(matches!(
-        response.depot_positions(6),
-        Err(Error::MalformedSecuritiesData { .. })
-    ));
+    let page = response.depot_positions(6).unwrap().unwrap();
+    assert_eq!(page.positions.len(), 1);
+    assert!(page.positions[0].price().is_none());
+    assert_eq!(page.parse_counts.degraded(), 1);
+    assert_eq!(page.parse_counts.skipped(), 0);
 }
 
 // DK Anlage 3 v3.9, 4.3 specifies GENL constants, STAT data, SUBBAL, and

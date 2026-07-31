@@ -160,6 +160,7 @@ pub enum DepotPriceUnitKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotPriceCurrencyShapeKind {
     Absent,
+    BlankSpacePadded,
     UppercaseAlphabetic,
     LowercaseAlphabetic,
     MixedCaseAlphabetic,
@@ -395,6 +396,7 @@ pub struct DepotPositionPresenceFact {
     name: bool,
     quantity: bool,
     price: bool,
+    location_detail: bool,
     market_value: bool,
     cost_basis: bool,
 }
@@ -407,6 +409,7 @@ impl DepotPositionPresenceFact {
             name: !position.instrument().name().is_empty(),
             quantity: true,
             price: position.price().is_some(),
+            location_detail: position.price_location_detail_present,
             market_value: !position.market_values().is_empty(),
             cost_basis: position.cost_basis().is_some(),
         }
@@ -427,11 +430,68 @@ impl DepotPositionPresenceFact {
     pub fn price_present(self) -> bool {
         self.price
     }
+    pub fn location_detail_present(self) -> bool {
+        self.location_detail
+    }
     pub fn market_value_present(self) -> bool {
         self.market_value
     }
     pub fn cost_basis_present(self) -> bool {
         self.cost_basis
+    }
+}
+
+/// How one MT535 position was affected by a field-level parse failure.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPositionFailureDisposition {
+    Degraded,
+    Skipped,
+}
+
+/// Static MT535 position site that could not be parsed.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPositionFailureSite {
+    Instrument,
+    Quantity,
+    Price,
+    MarketValue,
+    CostBasis,
+}
+
+/// Value-free failure fact for one source-position ordinal.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepotPositionFailureFact {
+    ordinal: usize,
+    disposition: DepotPositionFailureDisposition,
+    site: DepotPositionFailureSite,
+}
+
+impl DepotPositionFailureFact {
+    pub(crate) fn new(
+        ordinal: usize,
+        disposition: DepotPositionFailureDisposition,
+        site: DepotPositionFailureSite,
+    ) -> Self {
+        Self {
+            ordinal,
+            disposition,
+            site,
+        }
+    }
+
+    pub fn ordinal(self) -> usize {
+        self.ordinal
+    }
+
+    pub fn disposition(self) -> DepotPositionFailureDisposition {
+        self.disposition
+    }
+
+    pub fn site(self) -> DepotPositionFailureSite {
+        self.site
     }
 }
 
@@ -523,9 +583,10 @@ impl SecuritiesTransactionPresenceFact {
 ///
 /// The inventories contain only recognized block/tag kinds, nesting depth, and
 /// occurrence counts. Price shapes contain only enum classifications, presence and
-/// validation booleans, and an optional one-based failure ordinal; entry facts contain
-/// booleans only. This type never contains securities identifiers, currencies,
-/// amounts, references, dates, free text, or raw wire data.
+/// validation booleans, and an optional one-based failure ordinal. Position failures
+/// contain only the source ordinal, degraded/skipped disposition, and static site;
+/// entry facts contain booleans only. This type never contains securities identifiers,
+/// currencies, amounts, references, dates, free text, or raw wire data.
 #[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepotResponseFacts {
@@ -536,6 +597,7 @@ pub struct DepotResponseFacts {
     first_failing_price_ordinal: Option<usize>,
     first_failing_price_stage: Option<DepotPriceFailureStage>,
     positions: Vec<DepotPositionPresenceFact>,
+    position_failures: Vec<DepotPositionFailureFact>,
     transactions: Vec<SecuritiesTransactionPresenceFact>,
 }
 
@@ -555,6 +617,7 @@ impl DepotResponseFacts {
             first_failing_price_ordinal,
             first_failing_price_stage,
             positions: Vec::new(),
+            position_failures: Vec::new(),
             transactions: Vec::new(),
         }
     }
@@ -574,6 +637,7 @@ impl DepotResponseFacts {
             first_failing_price_ordinal,
             first_failing_price_stage,
             positions: Vec::new(),
+            position_failures: Vec::new(),
             transactions: Vec::new(),
         }
     }
@@ -583,18 +647,21 @@ impl DepotResponseFacts {
         tag_inventory: Vec<DepotTagFact>,
         price_shapes: Vec<DepotPriceShapeFact>,
         positions: &[crate::DepotPosition],
+        position_failures: Vec<DepotPositionFailureFact>,
+        first_failing_price: Option<(usize, DepotPriceFailureStage)>,
     ) -> Self {
         Self {
             document_kind: DepotDocumentKind::Mt535,
             block_inventory,
             tag_inventory,
             price_shapes,
-            first_failing_price_ordinal: None,
-            first_failing_price_stage: None,
+            first_failing_price_ordinal: first_failing_price.map(|(ordinal, _)| ordinal),
+            first_failing_price_stage: first_failing_price.map(|(_, stage)| stage),
             positions: positions
                 .iter()
                 .map(DepotPositionPresenceFact::from_position)
                 .collect(),
+            position_failures,
             transactions: Vec::new(),
         }
     }
@@ -613,6 +680,7 @@ impl DepotResponseFacts {
             first_failing_price_ordinal: None,
             first_failing_price_stage: None,
             positions: Vec::new(),
+            position_failures: Vec::new(),
             transactions: transactions
                 .iter()
                 .map(SecuritiesTransactionPresenceFact::from_transaction)
@@ -641,6 +709,9 @@ impl DepotResponseFacts {
     }
     pub fn positions(&self) -> &[DepotPositionPresenceFact] {
         &self.positions
+    }
+    pub fn position_failures(&self) -> &[DepotPositionFailureFact] {
+        &self.position_failures
     }
     pub fn transactions(&self) -> &[SecuritiesTransactionPresenceFact] {
         &self.transactions

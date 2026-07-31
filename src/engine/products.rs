@@ -6,7 +6,8 @@ use crate::{
     error::{Error, InputError, Limitation},
     model::{
         Account, CreditCardBalance, CreditCardCapability, CreditCardTransactions, DepotPosition,
-        DepotPositions, SecuritiesTransaction, SecuritiesTransactions, TanProcess,
+        DepotPositionParseCounts, DepotPositions, SecuritiesTransaction, SecuritiesTransactions,
+        TanProcess,
     },
     response::Response,
     segments,
@@ -50,6 +51,8 @@ struct PositionState {
     pages: u16,
     positions: Vec<DepotPosition>,
     total_values: Vec<crate::model::SecuritiesAmount>,
+    degraded_positions: usize,
+    skipped_positions: usize,
 }
 
 struct SecuritiesState {
@@ -159,6 +162,8 @@ impl Engine {
             pages: 1,
             positions: Vec::new(),
             total_values: Vec::new(),
+            degraded_positions: 0,
+            skipped_positions: 0,
         });
         Ok(message)
     }
@@ -316,14 +321,17 @@ impl Engine {
             .positions
             .as_mut()
             .ok_or(Error::InconsistentState)?;
-        if state
+        let reported_count = state
             .positions
             .len()
-            .checked_add(page.positions.len())
-            .is_none_or(|count| count > ENTRY_LIMIT)
-        {
+            .checked_add(state.skipped_positions)
+            .and_then(|count| count.checked_add(page.positions.len()))
+            .and_then(|count| count.checked_add(page.parse_counts.skipped()));
+        if reported_count.is_none_or(|count| count > ENTRY_LIMIT) {
             return self.fail_positions(Error::PaginationLimitReached);
         }
+        state.degraded_positions += page.parse_counts.degraded();
+        state.skipped_positions += page.parse_counts.skipped();
         state.positions.extend(page.positions);
         state.total_values.extend(page.total_values);
         self.continuation_active = false;
@@ -343,6 +351,10 @@ impl Engine {
             account: state.account,
             positions: state.positions,
             total_values: state.total_values,
+            parse_counts: DepotPositionParseCounts::new(
+                state.degraded_positions,
+                state.skipped_positions,
+            ),
         })))
     }
 
@@ -357,6 +369,10 @@ impl Engine {
             account: state.account,
             positions: state.positions,
             total_values: state.total_values,
+            parse_counts: DepotPositionParseCounts::new(
+                state.degraded_positions,
+                state.skipped_positions,
+            ),
         })))
     }
 

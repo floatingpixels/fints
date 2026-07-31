@@ -2391,7 +2391,9 @@ fn depot_positions_version_five_rejects_wrong_version_and_identity() {
 }
 
 #[cfg(feature = "diagnostics")]
-fn fictional_mt535_price_failure(financial_blocks: &str) -> (Error, crate::DepotResponseFacts) {
+fn fictional_mt535_price_failure(
+    financial_blocks: &str,
+) -> (Box<crate::DepotPositions>, crate::DepotResponseFacts) {
     let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
     account.account_type = None;
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
@@ -2420,12 +2422,12 @@ fn fictional_mt535_price_failure(financial_blocks: &str) -> (Error, crate::Depot
         "dialog1",
         2,
     );
-    let error = match engine.accept_depot_positions(&malformed, now()) {
-        Err(error) => error,
-        Ok(_) => panic!("expected a malformed fictional MT535 price"),
+    let result = match engine.accept_depot_positions(&malformed, now()).unwrap() {
+        DepotPositionsResult::Complete(result) => result,
+        _ => panic!("expected a completed fictional MT535 page"),
     };
     let facts = engine.development_depot_response().unwrap().clone();
-    (error, facts)
+    (result, facts)
 }
 
 // DK Anlage 3 v3.9 4.3: once the bounded 16R/16S tree is available, later
@@ -2435,7 +2437,7 @@ fn fictional_mt535_price_failure(financial_blocks: &str) -> (Error, crate::Depot
 #[cfg(feature = "diagnostics")]
 #[test]
 fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
-    let (error, facts) = fictional_mt535_price_failure(concat!(
+    let (result, facts) = fictional_mt535_price_failure(concat!(
         ":16R:FIN\r\n",
         ":35B:ISIN DE000FINTS25\r\n",
         "Fictional Diagnostic Security\r\n",
@@ -2446,8 +2448,11 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
         ":16S:SUBBAL\r\n",
         ":16S:FIN\r\n"
     ));
-    assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
-    let formatted = format!("{error:?} {error}");
+    assert_eq!(result.positions().len(), 1);
+    assert!(result.positions()[0].price().is_none());
+    assert_eq!(result.parse_counts().degraded(), 1);
+    assert_eq!(result.parse_counts().skipped(), 0);
+    let formatted = format!("{facts:?}");
     for private_value in ["FICT", "ODD1", "EUR", "12,"] {
         assert!(!formatted.contains(private_value));
     }
@@ -2475,7 +2480,17 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
             && fact.depth() == 2
             && fact.occurrence() == 1
     }));
-    assert!(facts.positions().is_empty());
+    assert_eq!(facts.positions().len(), 1);
+    assert_eq!(facts.position_failures().len(), 1);
+    assert_eq!(facts.position_failures()[0].ordinal(), 1);
+    assert_eq!(
+        facts.position_failures()[0].disposition(),
+        crate::DepotPositionFailureDisposition::Degraded
+    );
+    assert_eq!(
+        facts.position_failures()[0].site(),
+        crate::DepotPositionFailureSite::Price
+    );
     let shape = facts.price_shapes()[0];
     assert_eq!(shape.tag(), crate::DepotPriceTagKind::Amount90B);
     assert_eq!(shape.qualifier(), crate::DepotPriceQualifierKind::Unknown);
@@ -2503,51 +2518,48 @@ fn mt535_price_failure_stages_are_static_value_free_and_retained() {
             ":90B::FICT//ACTU/EUR12,\r\n",
             "",
             crate::DepotPriceFailureStage::Qualifier,
-            "/qualifier",
         ),
         (
             ":90B::MRKT//PRCT/12,\r\n",
             "",
             crate::DepotPriceFailureStage::TagUnitPairing,
-            "/tag-unit",
         ),
         (
             ":90B::MRKT//ACTU/EU112,\r\n",
             "",
             crate::DepotPriceFailureStage::CurrencyShape,
-            "/currency-shape",
         ),
         (
             ":90B::MRKT//ACTU/EUR12.5\r\n",
             "",
             crate::DepotPriceFailureStage::DecimalShape,
-            "/decimal-shape",
         ),
         (
             ":90B::MRKT//ACTU/EUR12,\r\n",
             ":98C::PRIC//20261301129999\r\n",
             crate::DepotPriceFailureStage::PriceTimestamp,
-            "/timestamp-shape",
         ),
     ];
 
-    for (price, timestamp, expected_stage, site_suffix) in cases {
+    for (price, timestamp, expected_stage) in cases {
         let financial = format!(
             ":16R:FIN\r\n:35B:ISIN DE000FINTS26\r\n\
              Fictional Staged Price\r\n{price}{timestamp}\
              :93B::AGGR//UNIT/1,\r\n:16S:FIN\r\n"
         );
-        let (error, facts) = fictional_mt535_price_failure(&financial);
-        let site = match &error {
-            Error::MalformedSecuritiesData { site } => *site,
-            _ => panic!("expected a staged securities parse error"),
-        };
-        assert!(site.ends_with(site_suffix), "unexpected site: {site}");
+        let (result, facts) = fictional_mt535_price_failure(&financial);
+        assert_eq!(result.positions().len(), 1);
+        assert!(result.positions()[0].price().is_none());
+        assert_eq!(result.parse_counts().degraded(), 1);
         assert_eq!(facts.first_failing_price_ordinal(), Some(1));
         assert_eq!(facts.first_failing_price_stage(), Some(expected_stage));
         assert_eq!(facts.price_shapes().len(), 1);
         assert!(!facts.block_inventory().is_empty());
-        let rendered = format!("{error:?} {error} {facts:?}");
+        assert_eq!(
+            facts.position_failures()[0].site(),
+            crate::DepotPositionFailureSite::Price
+        );
+        let rendered = format!("{facts:?}");
         for private_value in [
             "FICT",
             "EU1",
@@ -2616,11 +2628,12 @@ fn mt535_price_failure_stages_are_static_value_free_and_retained() {
 #[test]
 fn mt535_currency_shape_categories_are_value_free() {
     use crate::DepotPriceCurrencyShapeKind::{
-        Absent, LowercaseAlphabetic, MixedCaseAlphabetic, Numeric, Other,
+        Absent, BlankSpacePadded, LowercaseAlphabetic, MixedCaseAlphabetic, Numeric, Other,
     };
 
     let cases = [
         ("1,", Absent, false, false, true, None),
+        ("   7,25", BlankSpacePadded, true, true, false, None),
         (
             "eur12,",
             LowercaseAlphabetic,
@@ -2649,8 +2662,8 @@ fn mt535_currency_shape_categories_are_value_free() {
              Fictional Currency Shape\r\n:90B::MRKT//ACTU/{payload}\r\n\
              :93B::AGGR//UNIT/1,\r\n:16S:FIN\r\n"
         );
-        let (error, facts) = fictional_mt535_price_failure(&financial);
-        assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
+        let (result, facts) = fictional_mt535_price_failure(&financial);
+        assert_eq!(result.parse_counts().degraded(), 1);
         assert_eq!(
             facts.first_failing_price_stage(),
             Some(crate::DepotPriceFailureStage::CurrencyShape)
@@ -2661,7 +2674,7 @@ fn mt535_currency_shape_categories_are_value_free() {
         assert!(!shape.currency_shape_valid());
         assert_eq!(shape.decimal_shape_valid(), remainder_valid);
         assert_eq!(shape.entire_payload_decimal_shape_valid(), entire_valid);
-        let rendered = format!("{error:?} {error} {facts:?}");
+        let rendered = format!("{facts:?}");
         if let Some(private_marker) = private_marker {
             assert!(!rendered.contains(private_marker));
         }
@@ -2674,7 +2687,7 @@ fn mt535_currency_shape_categories_are_value_free() {
 #[cfg(feature = "diagnostics")]
 #[test]
 fn mt535_first_failing_price_ordinal_distinguishes_one_exceptional_position() {
-    let (error, facts) = fictional_mt535_price_failure(concat!(
+    let (result, facts) = fictional_mt535_price_failure(concat!(
         ":16R:FIN\r\n",
         ":35B:ISIN DE000FINTS28\r\n",
         "Fictional Valid Price\r\n",
@@ -2688,7 +2701,8 @@ fn mt535_first_failing_price_ordinal_distinguishes_one_exceptional_position() {
         ":93B::AGGR//UNIT/1,\r\n",
         ":16S:FIN\r\n"
     ));
-    assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
+    assert_eq!(result.positions().len(), 2);
+    assert_eq!(result.parse_counts().degraded(), 1);
     assert_eq!(facts.price_shapes().len(), 2);
     assert_eq!(facts.first_failing_price_ordinal(), Some(2));
     assert_eq!(
@@ -2743,6 +2757,70 @@ fn terminal_empty_depot_page_preserves_collected_positions() {
     assert_eq!(
         result.positions()[0].instrument().isin(),
         Some("DE000FINTS05")
+    );
+    assert_eq!(
+        result.parse_counts(),
+        crate::DepotPositionParseCounts::default()
+    );
+}
+
+// MT535 position-loss counts aggregate across exhaustive FinTS pagination:
+// a degraded optional price remains in page one and a page-two position with
+// no mandatory quantity is skipped.
+#[test]
+fn depot_position_parse_counts_accumulate_across_pages() {
+    let account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
+    let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
+    engine.state.accounts = vec![account];
+    engine.state.depot_positions_advertised = true;
+    engine.state.depot_position_versions = vec![6];
+    engine.state.depot_positions_requires_tan = Some(false);
+    let initialized = response(&["HIRMG:2:2+0010::accepted"], "dialog1", 1);
+    assert!(matches!(
+        engine.accept_initialization(&initialized, now()).unwrap(),
+        InitializationResult::Connected
+    ));
+    engine
+        .depot_positions_request(0, now().date(), now().time())
+        .unwrap();
+
+    let first_payload = String::from_utf8(mt535_page(1, "MORE"))
+        .unwrap()
+        .replace(":93B::AGGR", ":90B::MRKT//ACTU/   7,25\r\n:93B::AGGR");
+    let first = binary_response(
+        "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
+        first_payload.as_bytes(),
+        "'HNHBS:5:1+2'",
+        "dialog1",
+        2,
+    );
+    assert!(matches!(
+        engine.accept_depot_positions(&first, now()).unwrap(),
+        DepotPositionsResult::Continue
+    ));
+    engine
+        .next_depot_positions_page_request(now().date(), now().time())
+        .unwrap();
+
+    let second_payload = String::from_utf8(mt535_page(2, "LAST"))
+        .unwrap()
+        .replace(":93B::AGGR//UNIT/1,\r\n", "");
+    let second = binary_response(
+        "HIWPD:3:6:3+@",
+        second_payload.as_bytes(),
+        "'HNHBS:4:1+3'",
+        "dialog1",
+        3,
+    );
+    let result = match engine.accept_depot_positions(&second, now()).unwrap() {
+        DepotPositionsResult::Complete(result) => result,
+        _ => panic!("expected completed depot positions"),
+    };
+    assert_eq!(result.positions().len(), 1);
+    assert!(result.positions()[0].price().is_none());
+    assert_eq!(
+        result.parse_counts(),
+        crate::DepotPositionParseCounts::new(1, 1)
     );
 }
 

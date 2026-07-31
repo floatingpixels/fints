@@ -576,8 +576,12 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   acceptance-space policy those values are therefore read past; malformed
   optional HOLD content yields an absent cost basis rather than discarding
   otherwise typed positions.
-  Block pairing, safe identity, instrument, quantity, amount, direction, date,
-  reference, pagination-indicator, and response-size checks remain enforced.
+  Document framing and block pairing, safe identity, pagination control,
+  response-size, and entry-count bounds remain page-level checks. Instrument and
+  aggregate quantity remain required for one FIN position; an unusable required
+  value skips that position, while malformed optional price, market-value, or
+  cost-basis data remains absent on an otherwise usable position. Typed,
+  value-free degraded/skipped counts make that loss observable.
   The independent HBCI 2.2 IX.2.4 table and full example define the same
   90A/90B price choice. No registered source permits another qualifier, unit,
   crossed tag/unit pair, or decimal syntax. A live failure at the former shared
@@ -591,14 +595,22 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   tag/unit, currency, decimal, and PRIC-timestamp validation and retain only the
   one-based ordinal of the first failing price. They expose no component value,
   and this added observability does not expand the accepted MT535 syntax.
-  A later value-free observation isolated one exceptional `90B/ACTU` field at
-  the currency stage. The `a 3` definition on page 406, together with HBCI 2.2
+  A later value-free structural observation isolated one exceptional
+  `90B/ACTU` field whose three-character currency component was space-padded
+  empty. The `a 3` definition on page 406, together with HBCI 2.2
   II.5.2's currency base type and IX.2.4's independent price table, requires
   three uppercase alphabetic characters and a valid ISO 4217 code; neither
-  source permits case variants, numeric codes, or omission. Diagnostics classify
-  only the three-character candidate and whether the entire ACTU payload or its
-  post-candidate remainder has decimal shape. The typed rejection is unchanged
-  pending that structural observation.
+  source permits case variants, numeric codes, blank padding, or omission.
+  Because the complete 90a price choice is optional, a malformed supplied price
+  degrades to absent instead of discarding the otherwise typed position; no
+  currency or amount is inferred.
+  The same tables make `94B` optional and its separating slash plus final free
+  text conditional on that text being supplied. A missing or all-space final
+  component is therefore absent. The registered MT535 subset defines qualifier
+  `PRIC`; an unknown optional qualifier has no Gate 4 result semantics and is
+  read past without retaining its value. Diagnostics classify only structural
+  currency shapes, optional-location presence, source-position ordinals, and
+  static failure sites.
   Separately, the section 4.4 MT536
   full-message example on page 430 prints `:90B::MRKT//PRCT/105,` despite that
   chapter's 90A/PRCT and 90B/ACTU table. The MT536 parser therefore preserves

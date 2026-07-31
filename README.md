@@ -298,12 +298,13 @@ The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
 enable the corresponding read. Financial values and identifiers are never printed;
 depot probes report only result counts and, with diagnostics enabled, value-free
 block and field-presence facts. A successfully parsed block tree remains available
-after a later field error; optional 90A/90B price diagnostics report only tag and
-known/unknown shape categories, a value-free currency-prefix category, validation
-booleans, the static failure stage, and the one-based ordinal of the first failing
-price. A separate boolean identifies when the complete ACTU payload has decimal shape,
-without treating that as a permitted currency omission. The probe prints all
-caller-visible bank response texts, which may reference the owner's accounts or orders.
+after a later field error. Depot-position results report typed degraded and skipped
+counts: malformed optional values remain absent on an otherwise usable position, while
+a position lacking a usable required instrument or aggregate quantity is skipped.
+Optional 90A/90B diagnostics report only structural categories and validation
+booleans; per-position diagnostics add only the one-based source ordinal, disposition,
+and static failure site. The probe prints all caller-visible bank response texts,
+which may reference the owner's accounts or orders.
 
 `FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
 credential-bearing request and response payloads to stdout as hexadecimal and escaped

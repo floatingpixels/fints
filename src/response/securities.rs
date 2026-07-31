@@ -4,8 +4,9 @@ use crate::{
     Limitation,
     error::{Error, malformed_securities_data},
     model::{
-        Amount, DepotPosition, PriceQuality, QuantityUnit, SecuritiesAmount, SecuritiesMovement,
-        SecuritiesQuantity, SecuritiesTransaction, SecurityInstrument, SecurityPrice,
+        Amount, DepotPosition, DepotPositionParseCounts, PriceQuality, QuantityUnit,
+        SecuritiesAmount, SecuritiesMovement, SecuritiesQuantity, SecuritiesTransaction,
+        SecurityInstrument, SecurityPrice,
     },
     wire::Segment,
 };
@@ -20,6 +21,7 @@ pub(crate) struct DepotPositionPage {
     pub(crate) account_number: String,
     pub(crate) positions: Vec<DepotPosition>,
     pub(crate) total_values: Vec<SecuritiesAmount>,
+    pub(crate) parse_counts: DepotPositionParseCounts,
     #[cfg(feature = "diagnostics")]
     pub(crate) development_facts: crate::DepotResponseFacts,
 }
@@ -161,6 +163,47 @@ enum PriceParseStage {
     PriceTimestamp,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PositionFailureSite {
+    Instrument,
+    Quantity,
+    Price,
+    MarketValue,
+    CostBasis,
+}
+
+struct ParsedPosition {
+    position: DepotPosition,
+    degraded: bool,
+    #[cfg(feature = "diagnostics")]
+    failure_sites: Vec<PositionFailureSite>,
+}
+
+fn record_position_degradation(
+    degraded: &mut bool,
+    #[cfg(feature = "diagnostics")] failure_sites: &mut Vec<PositionFailureSite>,
+    site: PositionFailureSite,
+) {
+    *degraded = true;
+    #[cfg(feature = "diagnostics")]
+    if !failure_sites.contains(&site) {
+        failure_sites.push(site);
+    }
+    #[cfg(not(feature = "diagnostics"))]
+    let _ = site;
+}
+
+#[cfg(feature = "diagnostics")]
+fn diagnostic_position_failure_site(site: PositionFailureSite) -> crate::DepotPositionFailureSite {
+    match site {
+        PositionFailureSite::Instrument => crate::DepotPositionFailureSite::Instrument,
+        PositionFailureSite::Quantity => crate::DepotPositionFailureSite::Quantity,
+        PositionFailureSite::Price => crate::DepotPositionFailureSite::Price,
+        PositionFailureSite::MarketValue => crate::DepotPositionFailureSite::MarketValue,
+        PositionFailureSite::CostBasis => crate::DepotPositionFailureSite::CostBasis,
+    }
+}
+
 fn document(input: &[u8]) -> Result<Block, Error> {
     let text = encoding_rs::mem::decode_latin1(input);
     // DK Anlage 3 v3.9, chapter 4 general syntax rule 6: the record starts
@@ -264,7 +307,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     validate_root(&root).map_err(|_| malformed_securities_data!("MT535/ROOT/GENL"))?;
     let general =
         unique_child(&root, "GENL").map_err(|_| malformed_securities_data!("MT535/GENL"))?;
-    let active =
+    let _active =
         validate_general(general).map_err(|_| malformed_securities_data!("MT535/GENL/17B:ACTI"))?;
     let more = page_more(
         required_field(general, "28E").map_err(|_| malformed_securities_data!("MT535/GENL/28E"))?,
@@ -272,14 +315,42 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     .map_err(|_| malformed_securities_data!("MT535/GENL/28E"))?;
     let (institute_code, account_number) =
         safe_identity(general).map_err(|_| malformed_securities_data!("MT535/GENL/97A:SAFE"))?;
-    let positions = children(&root, "FIN")
-        .map(parse_position)
-        .collect::<Result<Vec<_>, _>>()?;
-    if positions.len() > MAX_PAGE_ENTRIES {
+    let reported_positions = children(&root, "FIN").count();
+    if reported_positions > MAX_PAGE_ENTRIES {
         return Err(malformed_securities_data!("MT535/page/entry-limit"));
     }
-    if !active && !positions.is_empty() {
-        return Err(malformed_securities_data!("MT535/GENL/17B:ACTI"));
+    let mut positions = Vec::with_capacity(reported_positions);
+    let mut degraded = 0usize;
+    let mut skipped = 0usize;
+    #[cfg(feature = "diagnostics")]
+    let mut position_failures = Vec::new();
+    for (index, block) in children(&root, "FIN").enumerate() {
+        let _ordinal = index + 1;
+        match parse_position(block) {
+            Ok(parsed) => {
+                if parsed.degraded {
+                    degraded += 1;
+                }
+                #[cfg(feature = "diagnostics")]
+                position_failures.extend(parsed.failure_sites.into_iter().map(|site| {
+                    crate::DepotPositionFailureFact::new(
+                        _ordinal,
+                        crate::DepotPositionFailureDisposition::Degraded,
+                        diagnostic_position_failure_site(site),
+                    )
+                }));
+                positions.push(parsed.position);
+            }
+            Err(_site) => {
+                skipped += 1;
+                #[cfg(feature = "diagnostics")]
+                position_failures.push(crate::DepotPositionFailureFact::new(
+                    _ordinal,
+                    crate::DepotPositionFailureDisposition::Skipped,
+                    diagnostic_position_failure_site(_site),
+                ));
+            }
+        }
     }
     let total_values = root
         .children
@@ -288,13 +359,9 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         .map(|block| {
             fields(block, "19A")
                 .filter(|field| field.value.starts_with(":HOLP//"))
-                .map(|field| {
-                    parse_signed_amount(&field.value, ":HOLP//")
-                        .map_err(|_| malformed_securities_data!("MT535/ADDINFO/19A:HOLP"))
-                })
-                .collect()
+                .filter_map(|field| parse_signed_amount(&field.value, ":HOLP//").ok())
+                .collect::<Vec<_>>()
         })
-        .transpose()?
         .unwrap_or_default();
     #[cfg(feature = "diagnostics")]
     let development_facts = crate::DepotResponseFacts::for_positions(
@@ -302,6 +369,8 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         tag_inventory(&root),
         price_shapes(&root, true),
         &positions,
+        position_failures,
+        first_price_failure(&root, true),
     );
     Ok(DepotPositionPage {
         more,
@@ -309,6 +378,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         account_number,
         positions,
         total_values,
+        parse_counts: DepotPositionParseCounts::new(degraded, skipped),
         #[cfg(feature = "diagnostics")]
         development_facts,
     })
@@ -645,7 +715,9 @@ fn split_currency_candidate(value: &str) -> Option<(&str, &str)> {
 fn classify_currency_shape(value: &str) -> crate::DepotPriceCurrencyShapeKind {
     use crate::DepotPriceCurrencyShapeKind;
 
-    if value.bytes().all(|byte| byte.is_ascii_uppercase()) {
+    if value.bytes().all(|byte| byte == b' ') {
+        DepotPriceCurrencyShapeKind::BlankSpacePadded
+    } else if value.bytes().all(|byte| byte.is_ascii_uppercase()) {
         DepotPriceCurrencyShapeKind::UppercaseAlphabetic
     } else if value.bytes().all(|byte| byte.is_ascii_lowercase()) {
         DepotPriceCurrencyShapeKind::LowercaseAlphabetic
@@ -732,39 +804,75 @@ fn validate_general(block: &Block) -> Result<bool, Error> {
     }
 }
 
-fn parse_position(block: &Block) -> Result<DepotPosition, Error> {
+fn parse_position(block: &Block) -> Result<ParsedPosition, PositionFailureSite> {
     let instrument = parse_instrument(
-        required_field(block, "35B").map_err(|_| malformed_securities_data!("MT535/FIN/35B"))?,
+        required_field(block, "35B").map_err(|_| PositionFailureSite::Instrument)?,
     )
-    .map_err(|_| malformed_securities_data!("MT535/FIN/35B"))?;
+    .map_err(|_| PositionFailureSite::Instrument)?;
     let quantity = parse_quantity(
         &required_qualified(block, "93B", ":AGGR//")
-            .map_err(|_| malformed_securities_data!("MT535/FIN/93B:AGGR"))?
+            .map_err(|_| PositionFailureSite::Quantity)?
             .value,
         ":AGGR//",
         true,
     )
-    .map_err(|_| malformed_securities_data!("MT535/FIN/93B:AGGR"))?;
+    .map_err(|_| PositionFailureSite::Quantity)?;
+    let mut degraded = false;
+    #[cfg(feature = "diagnostics")]
+    let mut failure_sites = Vec::new();
     let price = optional_field(block, "90A")
         .or_else(|| optional_field(block, "90B"))
-        .map(|field| parse_price(field, block, true))
-        .transpose()
-        .map_err(mt535_price_error)?;
-    let market_values = fields(block, "19A")
-        .filter(|field| field.value.starts_with(":HOLD//"))
-        .map(|field| {
-            parse_signed_amount(&field.value, ":HOLD//")
-                .map_err(|_| malformed_securities_data!("MT535/FIN/19A:HOLD"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let cost_basis = optional_qualified(block, "70E", ":HOLD//")
-        .and_then(|field| parse_cost_basis(&field.value).ok().flatten());
-    Ok(DepotPosition {
-        instrument,
-        quantity,
-        price,
-        market_values,
-        cost_basis,
+        .and_then(|field| match parse_price(field, block, true) {
+            Ok(price) => Some(price),
+            Err(_) => {
+                record_position_degradation(
+                    &mut degraded,
+                    #[cfg(feature = "diagnostics")]
+                    &mut failure_sites,
+                    PositionFailureSite::Price,
+                );
+                None
+            }
+        });
+    let mut market_values = Vec::new();
+    for field in fields(block, "19A").filter(|field| field.value.starts_with(":HOLD//")) {
+        match parse_signed_amount(&field.value, ":HOLD//") {
+            Ok(amount) => market_values.push(amount),
+            Err(_) => record_position_degradation(
+                &mut degraded,
+                #[cfg(feature = "diagnostics")]
+                &mut failure_sites,
+                PositionFailureSite::MarketValue,
+            ),
+        }
+    }
+    let cost_basis = optional_qualified(block, "70E", ":HOLD//").and_then(|field| {
+        match parse_cost_basis(&field.value) {
+            Ok(value) => value,
+            Err(_) => {
+                record_position_degradation(
+                    &mut degraded,
+                    #[cfg(feature = "diagnostics")]
+                    &mut failure_sites,
+                    PositionFailureSite::CostBasis,
+                );
+                None
+            }
+        }
+    });
+    Ok(ParsedPosition {
+        position: DepotPosition {
+            instrument,
+            quantity,
+            price,
+            market_values,
+            cost_basis,
+            #[cfg(feature = "diagnostics")]
+            price_location_detail_present: optional_location_detail(block).is_some(),
+        },
+        degraded,
+        #[cfg(feature = "diagnostics")]
+        failure_sites,
     })
 }
 
@@ -914,26 +1022,6 @@ fn parse_instrument(field: &Field) -> Result<SecurityInstrument, Error> {
     Ok(SecurityInstrument { isin, wkn, name })
 }
 
-fn mt535_price_error(stage: PriceParseStage) -> Error {
-    match stage {
-        PriceParseStage::Qualifier => {
-            malformed_securities_data!("MT535/FIN/90A:90B/qualifier")
-        }
-        PriceParseStage::TagUnitPairing => {
-            malformed_securities_data!("MT535/FIN/90A:90B/tag-unit")
-        }
-        PriceParseStage::CurrencyShape => {
-            malformed_securities_data!("MT535/FIN/90B/currency-shape")
-        }
-        PriceParseStage::DecimalShape => {
-            malformed_securities_data!("MT535/FIN/90A:90B/decimal-shape")
-        }
-        PriceParseStage::PriceTimestamp => {
-            malformed_securities_data!("MT535/FIN/98A:98C:PRIC/timestamp-shape")
-        }
-    }
-}
-
 fn mt536_price_error(stage: PriceParseStage) -> Error {
     match stage {
         PriceParseStage::Qualifier => {
@@ -952,6 +1040,23 @@ fn mt536_price_error(stage: PriceParseStage) -> Error {
             malformed_securities_data!("MT536/FIN/98A:98C:PRIC/timestamp-shape")
         }
     }
+}
+
+fn non_blank_component(value: &str) -> Option<&str> {
+    (!value.is_empty() && !value.bytes().all(|byte| byte == b' ')).then_some(value)
+}
+
+#[cfg(feature = "diagnostics")]
+fn optional_location_detail(block: &Block) -> Option<&str> {
+    // DK Anlage 3 v3.9 4.3 and HBCI 2.2 IX.2.4 make 94B optional and
+    // its final free-text component conditional on the separating slash.
+    // Unknown optional qualifiers have no Gate 4 result semantics; retain
+    // only whether a non-blank final component was structurally supplied.
+    fields(block, "94B").find_map(|field| {
+        let (_, location) = field.value.split_once("//")?;
+        let (_, detail) = location.split_once('/')?;
+        non_blank_component(detail)
+    })
 }
 
 fn parse_price(
@@ -992,6 +1097,7 @@ fn parse_price(
         let (currency, number) = rest
             .split_at_checked(3)
             .ok_or(PriceParseStage::CurrencyShape)?;
+        let currency = non_blank_component(currency).ok_or(PriceParseStage::CurrencyShape)?;
         validate_currency(currency).map_err(|_| PriceParseStage::CurrencyShape)?;
         (Some(currency.to_owned()), number)
     };
