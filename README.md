@@ -13,10 +13,11 @@ been verified against live institutions. Booked securities transactions
 institution advertises `HIWDUS`.
 
 The crate is consumed at exact pinned revisions and is not published. Serialized
-`ReusableState` is version-bound; after an incompatible upgrade the caller discards it
-and re-synchronizes. Version 1.0.0 remains reserved until every target institution,
-including Commerzbank, is verified and the crate has completed a period of stability
-without continued live-compatibility findings.
+`ReusableState` is version-bound. After an upgrade, stored state may fail to deserialize
+or return `Error::ReusableStateVersion`; callers treat both identically by discarding
+the derived state and re-synchronizing. Version 1.0.0 remains reserved until every
+target institution, including Commerzbank, is verified and the crate has completed a
+period of stability without continued live-compatibility findings.
 
 - `SCOPE.md` — supported protocol surface, gates, and explicit exclusions.
 - `AGENTS.md` — implementation, dependency, security, and verification rules.
@@ -44,11 +45,13 @@ built-in registration ID and is not itself the registered customer application.
 `ReusableState` derives Serde traits so the caller can choose its own encrypted
 persistence format. Credentials are never serializable.
 
-Reusable state has an explicit serialized-format version. State written by an
-incompatible crate revision is rejected as `Error::ReusableStateVersion`; the caller
-must discard it and re-synchronize instead of attempting migration or repair. A crate
-upgrade may therefore require one additional synchronization dialog and, depending on
-the institution, a TAN.
+Reusable state has an explicit serialized-format version and a required current shape.
+After a crate upgrade, stored state may fail to deserialize or may deserialize and then
+be rejected as `Error::ReusableStateVersion`. Both outcomes are expected and use one
+caller recovery path: discard the state and re-synchronize instead of attempting
+migration or repair. This is safe because the state is derived from bank parameters. A
+crate upgrade may therefore require one additional synchronization dialog and,
+depending on the institution, a TAN.
 
 A new connection follows this bounded sequence:
 

@@ -433,9 +433,12 @@ pub(crate) enum TransactionFormat {
 /// This state deliberately never contains credentials, PINs, TANs, challenges, dialog
 /// identifiers, or live session state.
 ///
-/// The serialized form is bound to [`REUSABLE_STATE_VERSION`]. A different version is
-/// expected after incompatible crate upgrades; callers must discard that state and
-/// re-synchronize instead of attempting to repair or migrate it.
+/// The serialized form is bound to [`REUSABLE_STATE_VERSION`]. After a crate upgrade,
+/// stored state may either fail to deserialize because its shape differs or be rejected
+/// as [`crate::Error::ReusableStateVersion`] when passed to a client. Both outcomes are
+/// expected and have the same recovery: discard the stored state and re-synchronize
+/// instead of attempting repair or migration. This is safe because reusable state is
+/// derived from bank parameters rather than authored by the caller.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReusableState {

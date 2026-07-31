@@ -149,8 +149,10 @@ pub struct Client {
 impl Client {
     /// Constructs a client from new or previously serialized reusable state.
     ///
-    /// [`Error::ReusableStateVersion`] means the caller must discard the supplied
-    /// state and re-synchronize rather than attempting to migrate it.
+    /// After a crate upgrade, stored state may fail in the caller's deserializer before
+    /// this constructor runs or may reach this constructor and produce
+    /// [`Error::ReusableStateVersion`]. The caller handles both outcomes identically:
+    /// discard the derived state and re-synchronize rather than attempting migration.
     pub fn new(
         endpoint: &str,
         institute: InstituteId,
@@ -166,8 +168,9 @@ impl Client {
     /// Trace events carry credential-bearing outgoing and incoming FinTS payloads.
     /// Installing a sink is an explicit per-client decision; the crate never stores,
     /// logs, formats, or otherwise retains those payloads.
-    /// [`Error::ReusableStateVersion`] has the same discard-and-resynchronize contract
-    /// as [`Client::new`].
+    /// Stored state that fails to deserialize after a crate upgrade and state rejected
+    /// here as [`Error::ReusableStateVersion`] share the [`Client::new`]
+    /// discard-and-resynchronize contract.
     pub fn new_with_trace(
         endpoint: &str,
         institute: InstituteId,
