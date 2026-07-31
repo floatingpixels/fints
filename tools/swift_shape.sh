@@ -49,7 +49,7 @@ def block_kind(value):
 trace_path = sys.argv[1]
 raw_trace = open(trace_path, "rb").read().decode("utf-8", "replace")
 payloads = []
-for match in re.finditer(r"\bhex=([0-9a-fA-F]+)\b", raw_trace):
+for match in re.finditer(r"\b(?:payload_)?hex=([0-9a-fA-F]+)\b", raw_trace):
     try:
         payloads.append(bytes.fromhex(match.group(1)).decode("latin-1"))
     except ValueError as error:

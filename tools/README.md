@@ -5,9 +5,9 @@ structure. A raw trace contains credential-bearing and financial data: keep it o
 under ignored local storage, never paste or commit it, and delete it after rendering.
 Only the scripts' structural output is suitable for an issue or agent prompt.
 
-Both scripts read the probe/consumer trace format containing one or more
-`hex=<hexadecimal payload>` fields. They decode those payloads locally and never write
-files.
+Both scripts read the crate probe's `hex=<hexadecimal payload>` fields and
+Finanzplaner's `payload_hex=<hexadecimal payload>` fields. They decode those payloads
+locally and never write files.
 
 ## FinTS segment shapes
 
