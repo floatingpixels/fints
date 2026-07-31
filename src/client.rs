@@ -273,8 +273,8 @@ impl Client {
     /// identifiers, amounts, references, dates, free text, or wire data are retained.
     /// Once the document block tree is valid, its inventories and redacted price shapes
     /// remain available even when a later field parser rejects the page. Price facts
-    /// may include static validation stages and a one-based failing-field ordinal, but
-    /// never the inspected component values.
+    /// may include static validation stages, value-free currency-shape categories, and
+    /// a one-based failing-field ordinal, but never the inspected component values.
     /// Its fact shape is unstable and must not drive caller control flow.
     #[cfg(feature = "diagnostics")]
     pub fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {

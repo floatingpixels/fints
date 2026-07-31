@@ -591,6 +591,14 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   tag/unit, currency, decimal, and PRIC-timestamp validation and retain only the
   one-based ordinal of the first failing price. They expose no component value,
   and this added observability does not expand the accepted MT535 syntax.
+  A later value-free observation isolated one exceptional `90B/ACTU` field at
+  the currency stage. The `a 3` definition on page 406, together with HBCI 2.2
+  II.5.2's currency base type and IX.2.4's independent price table, requires
+  three uppercase alphabetic characters and a valid ISO 4217 code; neither
+  source permits case variants, numeric codes, or omission. Diagnostics classify
+  only the three-character candidate and whether the entire ACTU payload or its
+  post-candidate remainder has decimal shape. The typed rejection is unchanged
+  pending that structural observation.
   Separately, the section 4.4 MT536
   full-message example on page 430 prints `:90B::MRKT//PRCT/105,` despite that
   chapter's 90A/PRCT and 90B/ACTU table. The MT536 parser therefore preserves

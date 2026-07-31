@@ -312,7 +312,12 @@ fn mt535_price_options_accept_the_complete_official_matrix() {
             crate::DepotPriceQualifierKind::Indicative
         );
         assert_eq!(shapes[3].unit(), crate::DepotPriceUnitKind::ActualAmount);
-        assert!(shapes[3].currency_present());
+        assert!(shapes[3].currency_prefix_width_available());
+        assert_eq!(
+            shapes[3].currency_shape(),
+            Some(crate::DepotPriceCurrencyShapeKind::UppercaseAlphabetic)
+        );
+        assert!(!shapes[3].entire_payload_decimal_shape_valid());
         assert!(shapes[3].price_present());
         assert!(shapes.iter().all(|shape| shape.qualifier_shape_valid()));
         assert!(shapes.iter().all(|shape| shape.tag_unit_pair_valid()));
@@ -520,7 +525,8 @@ fn mt536_official_example_price_shape_remains_accepted() {
         let shape = page.development_facts.price_shapes()[0];
         assert_eq!(shape.tag(), crate::DepotPriceTagKind::Amount90B);
         assert_eq!(shape.unit(), crate::DepotPriceUnitKind::Percentage);
-        assert!(!shape.currency_present());
+        assert!(!shape.currency_prefix_width_available());
+        assert_eq!(shape.currency_shape(), None);
         assert!(shape.price_present());
     }
 }

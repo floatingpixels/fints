@@ -462,9 +462,9 @@ fn price_shapes(
     require_mt535_tag_unit_pair: bool,
 ) -> Vec<crate::DepotPriceShapeFact> {
     use crate::{
-        DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind,
-        DepotPriceTimestampQualifierKind, DepotPriceTimestampTagKind, DepotPriceUnitKind,
-        diagnostics::DepotPriceShapeInput,
+        DepotPriceCurrencyShapeKind, DepotPriceQualifierKind, DepotPriceShapeFact,
+        DepotPriceTagKind, DepotPriceTimestampQualifierKind, DepotPriceTimestampTagKind,
+        DepotPriceUnitKind, diagnostics::DepotPriceShapeInput,
     };
 
     children(root, "FIN")
@@ -511,25 +511,40 @@ fn price_shapes(
                         DepotPriceUnitKind::Percentage | DepotPriceUnitKind::ActualAmount
                     )
                 );
-                let (currency_present, price_present) = match unit_kind {
-                    DepotPriceUnitKind::Percentage => (false, !payload.is_empty()),
-                    DepotPriceUnitKind::ActualAmount => (payload.len() >= 3, payload.len() > 3),
-                    DepotPriceUnitKind::Unknown => match tag {
-                        DepotPriceTagKind::Percentage90A => (false, !payload.is_empty()),
-                        DepotPriceTagKind::Amount90B => (payload.len() >= 3, payload.len() > 3),
-                    },
-                };
-                let (currency_shape_valid, decimal_shape_valid) = match unit_kind {
-                    DepotPriceUnitKind::Percentage => (true, decimal(payload).is_ok()),
+                let entire_payload_decimal_shape_valid = decimal(payload).is_ok();
+                let (
+                    currency_prefix_width_available,
+                    currency_shape,
+                    price_present,
+                    currency_shape_valid,
+                    decimal_shape_valid,
+                ) = match unit_kind {
+                    DepotPriceUnitKind::Percentage => (
+                        false,
+                        None,
+                        !payload.is_empty(),
+                        true,
+                        entire_payload_decimal_shape_valid,
+                    ),
                     DepotPriceUnitKind::ActualAmount => {
-                        let currency = payload.get(..3);
-                        let number = payload.get(3..);
+                        let candidate = split_currency_candidate(payload);
+                        let currency_shape = Some(
+                            candidate.map_or(DepotPriceCurrencyShapeKind::Absent, |(prefix, _)| {
+                                classify_currency_shape(prefix)
+                            }),
+                        );
+                        let decimal_shape_valid =
+                            candidate.is_some_and(|(_, value)| decimal(value).is_ok());
                         (
-                            currency.is_some_and(|value| validate_currency(value).is_ok()),
-                            number.is_some_and(|value| decimal(value).is_ok()),
+                            candidate.is_some(),
+                            currency_shape,
+                            candidate.is_some_and(|(_, value)| !value.is_empty()),
+                            currency_shape
+                                == Some(DepotPriceCurrencyShapeKind::UppercaseAlphabetic),
+                            decimal_shape_valid,
                         )
                     }
-                    DepotPriceUnitKind::Unknown => (false, false),
+                    DepotPriceUnitKind::Unknown => (false, None, !payload.is_empty(), false, false),
                 };
                 let timestamp_field = financial
                     .fields
@@ -596,12 +611,14 @@ fn price_shapes(
                     unit: unit_kind,
                     qualifier_present: !qualifier.is_empty(),
                     unit_present: !unit.is_empty(),
-                    currency_present,
+                    currency_prefix_width_available,
+                    currency_shape,
                     price_present,
                     qualifier_shape_valid,
                     tag_unit_pair_valid,
                     currency_shape_valid,
                     decimal_shape_valid,
+                    entire_payload_decimal_shape_valid,
                     timestamp_present,
                     timestamp_tag,
                     timestamp_qualifier,
@@ -612,6 +629,33 @@ fn price_shapes(
             })
         })
         .collect()
+}
+
+#[cfg(feature = "diagnostics")]
+fn split_currency_candidate(value: &str) -> Option<(&str, &str)> {
+    let mut characters = value.char_indices();
+    characters.next()?;
+    characters.next()?;
+    characters.next()?;
+    let boundary = characters.next().map_or(value.len(), |(index, _)| index);
+    Some(value.split_at(boundary))
+}
+
+#[cfg(feature = "diagnostics")]
+fn classify_currency_shape(value: &str) -> crate::DepotPriceCurrencyShapeKind {
+    use crate::DepotPriceCurrencyShapeKind;
+
+    if value.bytes().all(|byte| byte.is_ascii_uppercase()) {
+        DepotPriceCurrencyShapeKind::UppercaseAlphabetic
+    } else if value.bytes().all(|byte| byte.is_ascii_lowercase()) {
+        DepotPriceCurrencyShapeKind::LowercaseAlphabetic
+    } else if value.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        DepotPriceCurrencyShapeKind::MixedCaseAlphabetic
+    } else if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        DepotPriceCurrencyShapeKind::Numeric
+    } else {
+        DepotPriceCurrencyShapeKind::Other
+    }
 }
 
 #[cfg(feature = "diagnostics")]

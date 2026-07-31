@@ -595,18 +595,20 @@ fn print_depot_response_facts(client: &Client) {
     for (index, price) in facts.price_shapes().iter().enumerate() {
         let ordinal = index + 1;
         println!(
-            "depot_price_shape ordinal={ordinal} tag={:?} qualifier={:?} unit={:?} qualifier_present={} unit_present={} currency_present={} price_present={} qualifier_shape_valid={} tag_unit_pair_valid={} currency_shape_valid={} decimal_shape_valid={} timestamp_present={} timestamp_tag={:?} timestamp_qualifier={:?} timestamp_qualifier_shape_valid={} timestamp_length_digit_shape_valid={} timestamp_value_valid={}",
+            "depot_price_shape ordinal={ordinal} tag={:?} qualifier={:?} unit={:?} qualifier_present={} unit_present={} currency_prefix_width_available={} currency_shape={:?} price_present={} qualifier_shape_valid={} tag_unit_pair_valid={} currency_shape_valid={} price_or_remainder_decimal_shape_valid={} entire_payload_decimal_shape_valid={} timestamp_present={} timestamp_tag={:?} timestamp_qualifier={:?} timestamp_qualifier_shape_valid={} timestamp_length_digit_shape_valid={} timestamp_value_valid={}",
             price.tag(),
             price.qualifier(),
             price.unit(),
             price.qualifier_present(),
             price.unit_present(),
-            price.currency_present(),
+            price.currency_prefix_width_available(),
+            price.currency_shape(),
             price.price_present(),
             price.qualifier_shape_valid(),
             price.tag_unit_pair_valid(),
             price.currency_shape_valid(),
             price.decimal_shape_valid(),
+            price.entire_payload_decimal_shape_valid(),
             price.timestamp_present(),
             price.timestamp_tag(),
             price.timestamp_qualifier(),

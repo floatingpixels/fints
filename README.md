@@ -299,9 +299,11 @@ enable the corresponding read. Financial values and identifiers are never printe
 depot probes report only result counts and, with diagnostics enabled, value-free
 block and field-presence facts. A successfully parsed block tree remains available
 after a later field error; optional 90A/90B price diagnostics report only tag and
-known/unknown shape categories, validation booleans, the static failure stage, and the
-one-based ordinal of the first failing price. The probe prints all caller-visible bank
-response texts, which may reference the owner's accounts or orders.
+known/unknown shape categories, a value-free currency-prefix category, validation
+booleans, the static failure stage, and the one-based ordinal of the first failing
+price. A separate boolean identifies when the complete ACTU payload has decimal shape,
+without treating that as a permitted currency omission. The probe prints all
+caller-visible bank response texts, which may reference the owner's accounts or orders.
 
 `FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
 credential-bearing request and response payloads to stdout as hexadecimal and escaped

@@ -2482,7 +2482,8 @@ fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
     assert_eq!(shape.unit(), crate::DepotPriceUnitKind::Unknown);
     assert!(shape.qualifier_present());
     assert!(shape.unit_present());
-    assert!(shape.currency_present());
+    assert!(!shape.currency_prefix_width_available());
+    assert_eq!(shape.currency_shape(), None);
     assert!(shape.price_present());
     assert_eq!(facts.first_failing_price_ordinal(), Some(1));
     assert_eq!(
@@ -2604,6 +2605,68 @@ fn mt535_price_failure_stages_are_static_value_free_and_retained() {
     assert!(malformed_timestamp.timestamp_qualifier_shape_valid());
     assert!(!malformed_timestamp.timestamp_length_digit_shape_valid());
     assert!(!malformed_timestamp.timestamp_value_valid());
+}
+
+// DK Anlage 3 v3.9 4.3 page 406 defines the mandatory 90B currency as
+// `a 3` plus an ISO 4217 code. HBCI 2.2 II.5.2 and IX.2.4 independently
+// require the alphabetic currency code in uppercase. These fictional shapes
+// distinguish invalid prefixes and a possible currency-less decimal without
+// exposing the prefix or amount.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn mt535_currency_shape_categories_are_value_free() {
+    use crate::DepotPriceCurrencyShapeKind::{
+        Absent, LowercaseAlphabetic, MixedCaseAlphabetic, Numeric, Other,
+    };
+
+    let cases = [
+        ("1,", Absent, false, false, true, None),
+        (
+            "eur12,",
+            LowercaseAlphabetic,
+            true,
+            true,
+            false,
+            Some("eur12,"),
+        ),
+        (
+            "EuR12,",
+            MixedCaseAlphabetic,
+            true,
+            true,
+            false,
+            Some("EuR12,"),
+        ),
+        ("1234,56", Numeric, true, true, true, Some("1234,56")),
+        ("E-112,", Other, true, true, false, Some("E-112,")),
+    ];
+
+    for (payload, expected_shape, width_available, remainder_valid, entire_valid, private_marker) in
+        cases
+    {
+        let financial = format!(
+            ":16R:FIN\r\n:35B:ISIN DE000FINTS31\r\n\
+             Fictional Currency Shape\r\n:90B::MRKT//ACTU/{payload}\r\n\
+             :93B::AGGR//UNIT/1,\r\n:16S:FIN\r\n"
+        );
+        let (error, facts) = fictional_mt535_price_failure(&financial);
+        assert!(matches!(error, Error::MalformedSecuritiesData { .. }));
+        assert_eq!(
+            facts.first_failing_price_stage(),
+            Some(crate::DepotPriceFailureStage::CurrencyShape)
+        );
+        let shape = facts.price_shapes()[0];
+        assert_eq!(shape.currency_shape(), Some(expected_shape));
+        assert_eq!(shape.currency_prefix_width_available(), width_available);
+        assert!(!shape.currency_shape_valid());
+        assert_eq!(shape.decimal_shape_valid(), remainder_valid);
+        assert_eq!(shape.entire_payload_decimal_shape_valid(), entire_valid);
+        let rendered = format!("{error:?} {error} {facts:?}");
+        if let Some(private_marker) = private_marker {
+            assert!(!rendered.contains(private_marker));
+        }
+        assert!(!rendered.contains("DE000FINTS31"));
+    }
 }
 
 // The ordinal is the one-based order of the price fields, not an identifier.

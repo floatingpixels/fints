@@ -150,6 +150,23 @@ pub enum DepotPriceUnitKind {
     Unknown,
 }
 
+/// Value-free classification of the first three characters after `ACTU/`.
+///
+/// `Absent` means fewer than three characters are available. A numeric prefix can
+/// still be the beginning of a currency-less decimal; use
+/// [`DepotPriceShapeFact::entire_payload_decimal_shape_valid`] to distinguish that
+/// structural possibility without exposing the payload.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepotPriceCurrencyShapeKind {
+    Absent,
+    UppercaseAlphabetic,
+    LowercaseAlphabetic,
+    MixedCaseAlphabetic,
+    Numeric,
+    Other,
+}
+
 /// Static stage at which the first optional depot price failed validation.
 #[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,8 +198,10 @@ pub enum DepotPriceTimestampQualifierKind {
 /// Redacted structural shape of one optional 90A/90B price field.
 ///
 /// This fact retains only enum classifications and component-presence booleans.
-/// It never contains the qualifier, unit, currency, price, instrument identity,
-/// or raw field.
+/// `currency_prefix_width_available` reports only whether three characters can
+/// be split from an `ACTU` payload; it does not assert that those characters are
+/// a currency. It never contains the qualifier, unit, currency, price, instrument
+/// identity, or raw field.
 #[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepotPriceShapeFact {
@@ -191,12 +210,14 @@ pub struct DepotPriceShapeFact {
     unit: DepotPriceUnitKind,
     qualifier_present: bool,
     unit_present: bool,
-    currency_present: bool,
+    currency_prefix_width_available: bool,
+    currency_shape: Option<DepotPriceCurrencyShapeKind>,
     price_present: bool,
     qualifier_shape_valid: bool,
     tag_unit_pair_valid: bool,
     currency_shape_valid: bool,
     decimal_shape_valid: bool,
+    entire_payload_decimal_shape_valid: bool,
     timestamp_present: bool,
     timestamp_tag: Option<DepotPriceTimestampTagKind>,
     timestamp_qualifier: Option<DepotPriceTimestampQualifierKind>,
@@ -211,12 +232,14 @@ pub(crate) struct DepotPriceShapeInput {
     pub(crate) unit: DepotPriceUnitKind,
     pub(crate) qualifier_present: bool,
     pub(crate) unit_present: bool,
-    pub(crate) currency_present: bool,
+    pub(crate) currency_prefix_width_available: bool,
+    pub(crate) currency_shape: Option<DepotPriceCurrencyShapeKind>,
     pub(crate) price_present: bool,
     pub(crate) qualifier_shape_valid: bool,
     pub(crate) tag_unit_pair_valid: bool,
     pub(crate) currency_shape_valid: bool,
     pub(crate) decimal_shape_valid: bool,
+    pub(crate) entire_payload_decimal_shape_valid: bool,
     pub(crate) timestamp_present: bool,
     pub(crate) timestamp_tag: Option<DepotPriceTimestampTagKind>,
     pub(crate) timestamp_qualifier: Option<DepotPriceTimestampQualifierKind>,
@@ -233,12 +256,14 @@ impl DepotPriceShapeFact {
             unit: input.unit,
             qualifier_present: input.qualifier_present,
             unit_present: input.unit_present,
-            currency_present: input.currency_present,
+            currency_prefix_width_available: input.currency_prefix_width_available,
+            currency_shape: input.currency_shape,
             price_present: input.price_present,
             qualifier_shape_valid: input.qualifier_shape_valid,
             tag_unit_pair_valid: input.tag_unit_pair_valid,
             currency_shape_valid: input.currency_shape_valid,
             decimal_shape_valid: input.decimal_shape_valid,
+            entire_payload_decimal_shape_valid: input.entire_payload_decimal_shape_valid,
             timestamp_present: input.timestamp_present,
             timestamp_tag: input.timestamp_tag,
             timestamp_qualifier: input.timestamp_qualifier,
@@ -263,8 +288,13 @@ impl DepotPriceShapeFact {
     pub fn unit_present(self) -> bool {
         self.unit_present
     }
-    pub fn currency_present(self) -> bool {
-        self.currency_present
+    /// Whether an `ACTU` payload has at least three characters for a currency candidate.
+    pub fn currency_prefix_width_available(self) -> bool {
+        self.currency_prefix_width_available
+    }
+    /// Value-free shape of the currency candidate, or `None` when no currency is expected.
+    pub fn currency_shape(self) -> Option<DepotPriceCurrencyShapeKind> {
+        self.currency_shape
     }
     pub fn price_present(self) -> bool {
         self.price_present
@@ -278,8 +308,16 @@ impl DepotPriceShapeFact {
     pub fn currency_shape_valid(self) -> bool {
         self.currency_shape_valid
     }
+    /// Whether the price decimal, after the currency candidate for `ACTU`, is valid.
     pub fn decimal_shape_valid(self) -> bool {
         self.decimal_shape_valid
+    }
+    /// Whether the complete post-unit payload is itself a valid decimal.
+    ///
+    /// For `ACTU`, `true` is the value-free structural signature of a possible
+    /// missing currency prefix. The MT535 specification still requires that prefix.
+    pub fn entire_payload_decimal_shape_valid(self) -> bool {
+        self.entire_payload_decimal_shape_valid
     }
     pub fn timestamp_present(self) -> bool {
         self.timestamp_present

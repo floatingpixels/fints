@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Classified invalid MT535 currency prefixes without retaining
+  their values and clarified possible currency-less decimal structure.
+
 - **2026-07-31** — Split MT535 price failures into value-free component stages
   and retained the first failing price ordinal plus bounded validation facts.
 
