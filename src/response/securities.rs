@@ -307,7 +307,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     validate_root(&root).map_err(|_| malformed_securities_data!("MT535/ROOT/GENL"))?;
     let general =
         unique_child(&root, "GENL").map_err(|_| malformed_securities_data!("MT535/GENL"))?;
-    let _active =
+    let active =
         validate_general(general).map_err(|_| malformed_securities_data!("MT535/GENL/17B:ACTI"))?;
     let more = page_more(
         required_field(general, "28E").map_err(|_| malformed_securities_data!("MT535/GENL/28E"))?,
@@ -318,6 +318,12 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
     let reported_positions = children(&root, "FIN").count();
     if reported_positions > MAX_PAGE_ENTRIES {
         return Err(malformed_securities_data!("MT535/page/entry-limit"));
+    }
+    // DK Anlage 3 v3.9 4.3: ACTI=N and a supplied FIN block contradict the
+    // document-level activity statement. Check the raw block count before
+    // position-level resilience can skip an unusable FIN.
+    if !active && reported_positions != 0 {
+        return Err(malformed_securities_data!("MT535/GENL/17B:ACTI"));
     }
     let mut positions = Vec::with_capacity(reported_positions);
     let mut degraded = 0usize;
@@ -352,17 +358,18 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
             }
         }
     }
-    let total_values = root
-        .children
-        .iter()
-        .find(|block| block.name == "ADDINFO")
-        .map(|block| {
-            fields(block, "19A")
-                .filter(|field| field.value.starts_with(":HOLP//"))
-                .filter_map(|field| parse_signed_amount(&field.value, ":HOLP//").ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut total_values = Vec::new();
+    let mut malformed_page_totals = 0usize;
+    if let Some(block) = root.children.iter().find(|block| block.name == "ADDINFO") {
+        // ADDINFO and each HOLP field are optional, but once a field is
+        // supplied, dropping a malformed value is observable parsing loss.
+        for field in fields(block, "19A").filter(|field| field.value.starts_with(":HOLP//")) {
+            match parse_signed_amount(&field.value, ":HOLP//") {
+                Ok(total) => total_values.push(total),
+                Err(_) => malformed_page_totals += 1,
+            }
+        }
+    }
     #[cfg(feature = "diagnostics")]
     let development_facts = crate::DepotResponseFacts::for_positions(
         block_inventory(&root),
@@ -378,7 +385,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         account_number,
         positions,
         total_values,
-        parse_counts: DepotPositionParseCounts::new(degraded, skipped),
+        parse_counts: DepotPositionParseCounts::new(degraded, skipped, malformed_page_totals),
         #[cfg(feature = "diagnostics")]
         development_facts,
     })

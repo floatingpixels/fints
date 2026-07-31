@@ -759,25 +759,31 @@ impl DepotPositions {
         &self.total_values
     }
 
-    /// Redacted counts of positions that were degraded or skipped while parsing.
+    /// Redacted counts of MT535 data omitted while parsing.
     pub fn parse_counts(&self) -> DepotPositionParseCounts {
         self.parse_counts
     }
 }
 
-/// Value-free MT535 position parsing-loss counts across all returned pages.
+/// Value-free MT535 parsing-loss counts across all returned pages.
 ///
 /// A degraded position remains in the result with one or more malformed optional
-/// values absent. A skipped position lacked a usable required position field.
+/// values absent. A skipped position lacked a usable required position field. A
+/// malformed page total is omitted while valid totals remain available.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DepotPositionParseCounts {
     degraded: usize,
     skipped: usize,
+    malformed_page_totals: usize,
 }
 
 impl DepotPositionParseCounts {
-    pub(crate) fn new(degraded: usize, skipped: usize) -> Self {
-        Self { degraded, skipped }
+    pub(crate) fn new(degraded: usize, skipped: usize, malformed_page_totals: usize) -> Self {
+        Self {
+            degraded,
+            skipped,
+            malformed_page_totals,
+        }
     }
 
     pub fn degraded(self) -> usize {
@@ -786,6 +792,10 @@ impl DepotPositionParseCounts {
 
     pub fn skipped(self) -> usize {
         self.skipped
+    }
+
+    pub fn malformed_page_totals(self) -> usize {
+        self.malformed_page_totals
     }
 }
 

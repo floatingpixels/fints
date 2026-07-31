@@ -577,11 +577,14 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   optional HOLD content yields an absent cost basis rather than discarding
   otherwise typed positions.
   Document framing and block pairing, safe identity, pagination control,
-  response-size, and entry-count bounds remain page-level checks. Instrument and
-  aggregate quantity remain required for one FIN position; an unusable required
-  value skips that position, while malformed optional price, market-value, or
-  cost-basis data remains absent on an otherwise usable position. Typed,
-  value-free degraded/skipped counts make that loss observable.
+  response-size, entry-count bounds, and the chapter 4.3 `17B::ACTI`/raw-`FIN`
+  consistency rule remain page-level checks. Instrument and aggregate quantity
+  remain required for one FIN position; an unusable required value skips that
+  position, while malformed optional price, market-value, or cost-basis data
+  remains absent on an otherwise usable position. A malformed optional
+  `ADDINFO/19A::HOLP` portfolio total is omitted without hiding its well-formed
+  siblings. Typed, value-free degraded-position, skipped-position, and
+  malformed-page-total counts make every such loss observable across pagination.
   The independent HBCI 2.2 IX.2.4 table and full example define the same
   90A/90B price choice. No registered source permits another qualifier, unit,
   crossed tag/unit pair, or decimal syntax. A live failure at the former shared
@@ -603,7 +606,10 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   source permits case variants, numeric codes, blank padding, or omission.
   Because the complete 90a price choice is optional, a malformed supplied price
   degrades to absent instead of discarding the otherwise typed position; no
-  currency or amount is inferred.
+  currency or amount is inferred. The parser's blank-component handling is
+  deliberately limited to this invalid optional price currency and the
+  diagnostics-only `94B` final-component presence check; it is not a general
+  relaxation of required SWIFT components.
   The same tables make `94B` optional and its separating slash plus final free
   text conditional on that text being supplied. A missing or all-space final
   component is therefore absent. The registered MT535 subset defines qualifier
@@ -616,6 +622,10 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   chapter's 90A/PRCT and 90B/ACTU table. The MT536 parser therefore preserves
   its existing unit-driven acceptance of this independently printed official
   example; that source inconsistency does not widen MT535.
+  Position-level loss isolation and its counters are limited to MT535 holdings,
+  for which owner-attended evidence exists. MT536 transactions and G112
+  credit-card entries retain their existing all-or-error typed page/response
+  behavior; callers must not assume uniform lossy parsing across product formats.
 - **Gate 4 authorizes:** bounded SWIFT MT535 parsing for explicitly supplied
   depot positions and MT536 parsing for explicitly supplied booked securities
   transactions. Free text is never reinterpreted as a missing typed amount,

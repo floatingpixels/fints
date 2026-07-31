@@ -2786,7 +2786,18 @@ fn depot_position_parse_counts_accumulate_across_pages() {
 
     let first_payload = String::from_utf8(mt535_page(1, "MORE"))
         .unwrap()
-        .replace(":93B::AGGR", ":90B::MRKT//ACTU/   7,25\r\n:93B::AGGR");
+        .replace(":93B::AGGR", ":90B::MRKT//ACTU/   7,25\r\n:93B::AGGR")
+        .replace(
+            ":16S:FIN\r\n-",
+            concat!(
+                ":16S:FIN\r\n",
+                ":16R:ADDINFO\r\n",
+                ":19A::HOLP//EUR10,00\r\n",
+                ":19A::HOLP//EU110,00\r\n",
+                ":16S:ADDINFO\r\n",
+                "-"
+            ),
+        );
     let first = binary_response(
         "HIRMS:3:2:3+3040::more:position-next'HIWPD:4:6:3+@",
         first_payload.as_bytes(),
@@ -2818,9 +2829,10 @@ fn depot_position_parse_counts_accumulate_across_pages() {
     };
     assert_eq!(result.positions().len(), 1);
     assert!(result.positions()[0].price().is_none());
+    assert_eq!(result.total_values().len(), 1);
     assert_eq!(
         result.parse_counts(),
-        crate::DepotPositionParseCounts::new(1, 1)
+        crate::DepotPositionParseCounts::new(1, 1, 1)
     );
 }
 

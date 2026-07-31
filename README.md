@@ -197,14 +197,18 @@ the crate reports the typed protocol or transport evidence it can verify.
   Its bounded MT535 parser preserves supplied
   instrument identifiers, quantities and signs, market or indicative prices,
   currencies, dates, market values, and amount- or percentage-denominated cost
-  basis.
+  basis. Malformed optional position values and portfolio page totals remain
+  absent with typed degraded/skipped/malformed-total counts; an unusable required
+  position is skipped without hiding that loss.
 - `securities_transactions` uses only advertised and UPD-authorized
   `HKWDU`/`HIWDU` 5. Its bounded MT536 parser preserves
   supplied references, instruments, quantities, prices, amounts, accrued
   interest, movement types, dates, reversal status, and free text. The protocol
   sentinel `NONREF` and an omitted optional transaction-detail block remain
   missing values. MT536 has no typed fee field, so free text is never interpreted
-  as a fee or transaction identity.
+  as a fee or transaction identity. The MT535 loss-isolation counters do not apply
+  to MT536 transactions or credit-card entries: their malformed consumed fields
+  still fail the complete typed page/response.
 - `credit_card_transactions` and `credit_card_balance` use G112
   `HKKKU`/`HIKKU`/`HIKKUS` 1 and `HKKKS`/`HIKKS`/`HIKKSS` 1. The conditional
   international account binding and optional date range come exclusively from
@@ -298,9 +302,11 @@ The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
 enable the corresponding read. Financial values and identifiers are never printed;
 depot probes report only result counts and, with diagnostics enabled, value-free
 block and field-presence facts. A successfully parsed block tree remains available
-after a later field error. Depot-position results report typed degraded and skipped
-counts: malformed optional values remain absent on an otherwise usable position, while
-a position lacking a usable required instrument or aggregate quantity is skipped.
+after a later field error. Depot-position results report typed degraded, skipped, and
+malformed-page-total counts: malformed optional values remain absent on an otherwise
+usable position, while a position lacking a usable required instrument or aggregate
+quantity is skipped. Valid portfolio totals remain available when a malformed sibling
+is counted and omitted.
 Optional 90A/90B diagnostics report only structural categories and validation
 booleans; per-position diagnostics add only the one-based source ordinal, disposition,
 and static failure site. The probe prints all caller-visible bank response texts,
@@ -308,8 +314,10 @@ which may reference the owner's accounts or orders.
 
 `FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
 credential-bearing request and response payloads to stdout as hexadecimal and escaped
-Latin-1 text. Use it only in an owner-controlled terminal; never redirect it to a file,
-paste its output into an issue or agent conversation, or enable it in normal consumers.
+Latin-1 text. Use it only in an owner-controlled terminal. For structural capture,
+redirect it only to an ignored ephemeral file, render that file through `tools/`, and
+delete it immediately; never paste the raw output into an issue or agent conversation
+or enable it in normal consumers.
 
 ### Supported diagnostics
 

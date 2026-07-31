@@ -277,11 +277,12 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
     match result? {
         DepotPositionRequest::Complete(result) => {
             println!(
-                "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={}",
+                "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={} malformed_page_totals={}",
                 result.positions().len(),
                 result.total_values().len(),
                 result.parse_counts().degraded(),
-                result.parse_counts().skipped()
+                result.parse_counts().skipped(),
+                result.parse_counts().malformed_page_totals()
             )
         }
         DepotPositionRequest::Challenge(continuation) => {
@@ -298,11 +299,12 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
             match submitted? {
                 DepotPositionRequest::Complete(result) => {
                     println!(
-                        "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={}",
+                        "probe operation=depot_positions status=complete positions={} page_totals={} degraded_positions={} skipped_positions={} malformed_page_totals={}",
                         result.positions().len(),
                         result.total_values().len(),
                         result.parse_counts().degraded(),
-                        result.parse_counts().skipped()
+                        result.parse_counts().skipped(),
+                        result.parse_counts().malformed_page_totals()
                     )
                 }
                 DepotPositionRequest::Challenge(_) => {

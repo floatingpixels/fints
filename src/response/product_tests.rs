@@ -116,6 +116,38 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     }
 }
 
+// DK Anlage 3 v3.9 4.3 ADDINFO: each optional 19A::HOLP reports one
+// institution-supplied portfolio total. A malformed total must not discard its
+// well-formed siblings, and its omission must remain observable.
+#[test]
+fn mt535_malformed_page_total_is_counted_without_losing_valid_totals() {
+    let payload = concat!(
+        "\r\n",
+        ":16R:GENL\r\n",
+        ":28E:1/ONLY\r\n",
+        ":97A::SAFE//12345678/300001\r\n",
+        ":17B::ACTI//N\r\n",
+        ":16S:GENL\r\n",
+        ":16R:ADDINFO\r\n",
+        ":19A::HOLP//EUR125,50\r\n",
+        ":19A::HOLP//EU112,00\r\n",
+        ":19A::HOLP//USD75,25\r\n",
+        ":16S:ADDINFO\r\n",
+        "-"
+    )
+    .as_bytes();
+    let response = Response::parse(&message_with_binary("HIWPD", 6, payload)).unwrap();
+    let page = response.depot_positions(6).unwrap().unwrap();
+
+    assert!(page.positions.is_empty());
+    assert_eq!(page.total_values.len(), 2);
+    assert_eq!(page.total_values[0].amount().currency(), "EUR");
+    assert_eq!(page.total_values[1].amount().currency(), "USD");
+    assert_eq!(page.parse_counts.degraded(), 0);
+    assert_eq!(page.parse_counts.skipped(), 0);
+    assert_eq!(page.parse_counts.malformed_page_totals(), 1);
+}
+
 // DK Anlage 3 v3.9 4.3 pages 402 and 406 and HBCI 2.2 IX.2.4:
 // 90B is optional, but a supplied ACTU price requires an `a 3` currency.
 // 94B and its final free-text component are optional. This independently
@@ -905,12 +937,11 @@ fn malformed_securities_structure_fails_while_bad_positions_are_skipped() {
         inactive_with_position.as_bytes(),
     ))
     .unwrap();
-    let page = response.depot_positions(6).unwrap().unwrap();
-    assert_eq!(page.positions.len(), 1);
-    assert_eq!(
-        page.parse_counts,
-        crate::DepotPositionParseCounts::default()
-    );
+    let inactive_site = match response.depot_positions(6) {
+        Err(Error::MalformedSecuritiesData { site }) => site,
+        _ => panic!("expected contradictory MT535 ACTI/FIN structure to fail"),
+    };
+    assert!(inactive_site.contains("MT535/GENL/17B:ACTI"));
 
     let invalid_indicator = concat!(
         "\r\n",

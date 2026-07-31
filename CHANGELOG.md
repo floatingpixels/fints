@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Counted malformed MT535 page totals alongside position losses,
+  restored `ACTI`/`FIN` consistency, and documented the format-specific boundary.
+
 - **2026-07-31** — Isolated malformed MT535 position fields, returning usable
   siblings with redacted degraded/skipped counts and value-free failure sites.
 

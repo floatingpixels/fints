@@ -53,6 +53,7 @@ struct PositionState {
     total_values: Vec<crate::model::SecuritiesAmount>,
     degraded_positions: usize,
     skipped_positions: usize,
+    malformed_page_totals: usize,
 }
 
 struct SecuritiesState {
@@ -164,6 +165,7 @@ impl Engine {
             total_values: Vec::new(),
             degraded_positions: 0,
             skipped_positions: 0,
+            malformed_page_totals: 0,
         });
         Ok(message)
     }
@@ -332,6 +334,7 @@ impl Engine {
         }
         state.degraded_positions += page.parse_counts.degraded();
         state.skipped_positions += page.parse_counts.skipped();
+        state.malformed_page_totals += page.parse_counts.malformed_page_totals();
         state.positions.extend(page.positions);
         state.total_values.extend(page.total_values);
         self.continuation_active = false;
@@ -354,6 +357,7 @@ impl Engine {
             parse_counts: DepotPositionParseCounts::new(
                 state.degraded_positions,
                 state.skipped_positions,
+                state.malformed_page_totals,
             ),
         })))
     }
@@ -372,6 +376,7 @@ impl Engine {
             parse_counts: DepotPositionParseCounts::new(
                 state.degraded_positions,
                 state.skipped_positions,
+                state.malformed_page_totals,
             ),
         })))
     }
