@@ -78,15 +78,28 @@ committed path dependency.
 
 The owner performs live verification through Finanzplaner or through the crate's own
 owner-run probe example. Both are opt-in, never part of the default verification stack,
-and never persist captures. Report only generic protocol behavior: advertised segment
-versions, TAN flow class, or a rounded/non-identifying result. Never commit or paste
-authenticated wire messages, challenges, credentials, account identifiers, or balances
-into Codex context, issues, commits, or fixtures.
+and never retain captures. Consumers are expected to provide an owner-attended trace
+capability; Finanzplaner has a double-gated trace-to-file path, while the crate probe
+uses `FINTS_LIVE_TRACE=1`. Only value-free structural facts cross back into this
+repository.
 
-When a live exchange fails, work in this order before forming any protocol hypothesis:
-(a) rule out non-protocol causes—product-registration propagation, changed endpoints,
-and institute maintenance; the bank's response text usually states these plainly;
-(b) capture the structural skeleton of the offending message—component counts, occupied
-slots, and block and tag inventory—which is redaction-safe and takes seconds; (c) only
-then reason from the specification. Deducing intent before observing structure has
-produced every misdiagnosis so far.
+Use this complete loop before forming a protocol hypothesis:
+
+1. Rule out non-protocol causes—product-registration propagation, endpoint changes,
+   and institute maintenance. The bank's response text usually states these plainly.
+2. Capture one ephemeral raw trace through the caller's opt-in trace hook.
+3. Render it locally with the scripts in `tools/`. Never read, share, paste, or commit
+   the raw trace: it contains credentials and financial data. Delete it after rendering.
+4. Read the structure of the complete payload at once, including its well-formed
+   siblings. Uniformity identifies the outlier and also proves that no second anomaly
+   is hiding elsewhere in the same payload.
+5. Only then reason from the registered specification and derive any implementation
+   from that authority.
+
+The rendered skeleton—component counts, occupied slots, block paths, tag ordinals, and
+character-class patterns—is redaction-safe. Slice-by-slice diagnostics that add one fact
+per revision cost a full owner round trip for every hypothesis; this has twice been
+slower than one structural capture. Report only the rendered generic structure and
+other non-identifying protocol facts. Never place authenticated messages, challenges,
+credentials, account identifiers, balances, or raw traces in Codex context, issues,
+commits, or fixtures.
