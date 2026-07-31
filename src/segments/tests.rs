@@ -306,7 +306,7 @@ fn synchronization_and_hktan_shapes_match_independent_wire_fixtures() {
         next_poll_delay_seconds: Some(3),
         manual_polling_allowed: true,
         automatic_polling_allowed: true,
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         development_medium_requirement: None,
     };
 
@@ -402,7 +402,7 @@ fn tan_submission_places_pin_and_tan_in_hnsha_fixture() {
         next_poll_delay_seconds: None,
         manual_polling_allowed: false,
         automatic_polling_allowed: false,
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         development_medium_requirement: None,
     };
     let encoded = tan_submission(&context, &method, "fictional-reference", "123456").unwrap();

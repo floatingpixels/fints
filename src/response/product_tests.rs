@@ -85,7 +85,7 @@ fn mt535_position_fixture_preserves_only_explicit_values() {
     assert_eq!(position.market_values[0].amount().coefficient(), 123_450);
     assert_eq!(position.cost_basis.as_ref().unwrap().coefficient(), 12_000);
     assert_eq!(page.total_values[0].amount().coefficient(), 123_450);
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     {
         use crate::DepotBlockKind;
 
@@ -296,7 +296,7 @@ fn mt535_price_options_accept_the_complete_official_matrix() {
     assert_eq!(prices[2].quality(), Some(crate::PriceQuality::Market));
     assert_eq!(prices[3].currency(), Some("USD"));
     assert_eq!(prices[3].quality(), Some(crate::PriceQuality::Indicative));
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     {
         let shapes = page.development_facts.price_shapes();
         assert_eq!(shapes.len(), 4);
@@ -432,7 +432,7 @@ fn mt536_transaction_fixture_preserves_reference_amounts_and_dates() {
         Some(NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
     );
     assert_eq!(entry.free_text(), &["Fictional purchase"]);
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     {
         use crate::DepotBlockKind;
 
@@ -509,7 +509,7 @@ fn mt536_official_example_price_shape_remains_accepted() {
     assert!(price.is_percentage());
     assert_eq!(price.coefficient(), 105);
     assert_eq!(price.currency(), None);
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     {
         let shape = page.development_facts.price_shapes()[0];
         assert_eq!(shape.tag(), crate::DepotPriceTagKind::Amount90B);

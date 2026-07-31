@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Renamed the permanent, opt-in structural diagnostics feature
+  to `diagnostics` and documented its value-free but intentionally unstable fact API.
+
 - **2026-07-31** — Preserved value-free depot block inventories across field
   errors and added redacted 90A/90B shape facts with exact official choice checks.
 
@@ -93,7 +96,7 @@
   securities, and generic response parsing plus isolated owner-run parser fuzz targets.
 
 - **2026-07-30** — Kept chrono clock support dev-only for the owner-run probe and
-  documented the pre-snapshot transaction-capability caveat and diagnostics sunset.
+  documented the pre-snapshot transaction-capability caveat and permanent diagnostics.
 
 - **2026-07-30** — Added the gated owner-run live probe, an explicit per-client raw
   transport trace sink, and one derived redacted BPD capability snapshot. Default
@@ -109,8 +112,8 @@
 - **2026-07-30** — Preserved a pending parameter refresh when its open function-999 discovery ends with the exact validated global 9050/9800/unpublished-9952 HKEND response.
   Normal termination errors stay fatal; independent profile-1 HKEND and two-response fixtures cover envelope, numbering, lifecycle, adjacent published errors, and redaction.
 
-- **2026-07-30** — Added explicitly opt-in, boolean-only development diagnostics for the bounded initialization-recovery decision.
-  Normal builds contain neither the temporary public API nor its storage; fictional feature-enabled tests preserve redaction and existing protocol behavior.
+- **2026-07-30** — Added explicitly opt-in, boolean-only structural diagnostics for the bounded initialization-recovery decision.
+  Normal builds contain neither the gated public API nor its storage; fictional feature-enabled tests preserve redaction and existing protocol behavior.
 
 - **2026-07-30** — Exposed the last initialization request stage as a typed, process-memory-only diagnostic for owner-run compatibility checks.
   The four fixed stage values contain no credentials, identifiers, response values, or wire data; fictional tests cover initial, anonymous-refresh, and rediscovery failures.

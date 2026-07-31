@@ -6,8 +6,8 @@
 
 mod capabilities;
 mod client;
-#[cfg(feature = "development-diagnostics")]
-mod development_diagnostics;
+#[cfg(feature = "diagnostics")]
+mod diagnostics;
 mod engine;
 mod error;
 #[cfg(feature = "fuzzing")]
@@ -30,8 +30,8 @@ pub use client::{
     PollingMode, SecuritiesTransactionContinuation, SecuritiesTransactionRequest, Synchronization,
     SynchronizationContinuation,
 };
-#[cfg(feature = "development-diagnostics")]
-pub use development_diagnostics::{
+#[cfg(feature = "diagnostics")]
+pub use diagnostics::{
     DepotBlockFact, DepotBlockKind, DepotDocumentKind, DepotPositionPresenceFact,
     DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,
     DepotResponseFacts, DepotTagFact, DepotTagKind, HitansMediumRequirementFact, HktabRequestFact,

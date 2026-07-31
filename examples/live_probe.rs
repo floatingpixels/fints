@@ -181,7 +181,7 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
                 .map(|version| version.to_string())
                 .unwrap_or_else(|| "none".to_owned())
         );
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         print_tan_media_discovery_facts(client);
         discovery?;
         print_tan_media(client);
@@ -272,7 +272,7 @@ fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
 fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()> {
     let result = client.depot_positions(account, now());
     print_bank_responses(client, "depot_positions");
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     print_depot_response_facts(client);
     match result? {
         DepotPositionRequest::Complete(result) => {
@@ -291,7 +291,7 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
             let tan = require_tan(continuation.kind())?;
             let submitted = client.submit_depot_position_tan(*continuation, &tan, now());
             print_bank_responses(client, "submit_depot_position_tan");
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             print_depot_response_facts(client);
             match submitted? {
                 DepotPositionRequest::Complete(result) => {
@@ -315,7 +315,7 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
 fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
     let result = client.securities_transactions(account, None, None, now());
     print_bank_responses(client, "depot_transactions");
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     print_depot_response_facts(client);
     match result? {
         SecuritiesTransactionRequest::Complete(result) => {
@@ -333,7 +333,7 @@ fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<
             let tan = require_tan(continuation.kind())?;
             let submitted = client.submit_securities_transaction_tan(*continuation, &tan, now());
             print_bank_responses(client, "submit_securities_transaction_tan");
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             print_depot_response_facts(client);
             match submitted? {
                 SecuritiesTransactionRequest::Complete(result) => {
@@ -472,7 +472,7 @@ fn print_tan_methods(client: &Client) {
             method.display_name(),
             method.medium_name_required()
         );
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         if let Some(requirement) = method.development_medium_requirement() {
             println!(
                 "tan_method_hitans index={index} hktan={} requirement_code={} requirement_field={} requirement_index={} active_count={} active_count_field={} active_count_index={} medium_name_required={}",
@@ -505,7 +505,7 @@ fn print_tan_media(client: &Client) {
     }
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 fn print_tan_media_discovery_facts(client: &Client) {
     let Some(facts) = client.development_tan_media_discovery() else {
         println!("tan_media_diagnostics available=false");
@@ -569,7 +569,7 @@ fn print_tan_media_discovery_facts(client: &Client) {
     }
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 fn print_depot_response_facts(client: &Client) {
     let Some(facts) = client.development_depot_response() else {
         println!("depot_diagnostics available=false");

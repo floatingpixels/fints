@@ -1,13 +1,19 @@
-//! Supported, opt-in structural diagnostics for owner-attended interoperability work.
+//! Supported, opt-in structural diagnostics for interoperability work.
 //!
-//! This module is compiled only with the `development-diagnostics` feature. It exposes
+//! This module is compiled only with the `diagnostics` feature. It exposes
 //! decision booleans and bounded segment code/version facts only: no raw wire values,
 //! response text, credentials, identifiers, medium names, or financial data. Default
 //! builds contain none of this module's code or storage.
+//!
+//! Every public fact in this module describes internal parsing or negotiation
+//! structure. Its shape may change in any revision and is not a stable API contract.
+//! Callers may render or log these facts for humans but must never branch on them;
+//! control flow uses typed limitations, errors, and capability snapshots.
 
 use crate::{TanMedium, TanMediumClass, TanMediumStatus};
 
 /// The SWIFT document carried by the latest depot response.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotDocumentKind {
     Mt535,
@@ -17,6 +23,7 @@ pub enum DepotDocumentKind {
 /// A redacted MT535/MT536 block name.
 ///
 /// Unknown block names are collapsed to `Other`; no received block text is retained.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotBlockKind {
     General,
@@ -30,6 +37,7 @@ pub enum DepotBlockKind {
 }
 
 /// A redacted MT535/MT536 field tag.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotTagKind {
     StatementNumber13A,
@@ -86,6 +94,7 @@ impl DepotTagKind {
 }
 
 /// One field tag occurrence, without its qualifier or value.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepotTagFact {
     kind: DepotTagKind,
@@ -116,6 +125,7 @@ impl DepotTagFact {
 }
 
 /// Which optional MT535/MT536 price tag was structurally present.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotPriceTagKind {
     Percentage90A,
@@ -123,6 +133,7 @@ pub enum DepotPriceTagKind {
 }
 
 /// Value-free classification of the price qualifier.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotPriceQualifierKind {
     Market,
@@ -131,6 +142,7 @@ pub enum DepotPriceQualifierKind {
 }
 
 /// Value-free classification of the price-unit code.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepotPriceUnitKind {
     Percentage,
@@ -143,6 +155,7 @@ pub enum DepotPriceUnitKind {
 /// This fact retains only enum classifications and component-presence booleans.
 /// It never contains the qualifier, unit, currency, price, instrument identity,
 /// or raw field.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepotPriceShapeFact {
     tag: DepotPriceTagKind,
@@ -214,6 +227,7 @@ impl DepotBlockKind {
 }
 
 /// One block opening in document order, without received values.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepotBlockFact {
     kind: DepotBlockKind,
@@ -245,6 +259,7 @@ impl DepotBlockFact {
 }
 
 /// Value-free occupancy facts for one parsed MT535 position.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepotPositionPresenceFact {
     isin: bool,
@@ -293,6 +308,7 @@ impl DepotPositionPresenceFact {
 }
 
 /// Value-free occupancy facts for one parsed MT536 transaction.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SecuritiesTransactionPresenceFact {
     isin: bool,
@@ -381,6 +397,7 @@ impl SecuritiesTransactionPresenceFact {
 /// occurrence counts. Price shapes contain only enum classifications and presence
 /// booleans; entry facts contain booleans only. This type never contains securities
 /// identifiers, currencies, amounts, references, dates, free text, or raw wire data.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepotResponseFacts {
     document_kind: DepotDocumentKind,
@@ -485,6 +502,7 @@ impl DepotResponseFacts {
 /// The field numbers are one-based Data Dictionary positions; the component
 /// indices are the corresponding zero-based parser positions. No method
 /// identifier, name, or other HITANS value is retained.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HitansMediumRequirementFact {
     hktan_version: u16,
@@ -553,6 +571,7 @@ impl HitansMediumRequirementFact {
 ///
 /// `medium_name_field_present` records only the HKTAB segment shape. HKTAB
 /// 2-5 has no TAN-medium designation field, so valid requests report `false`.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HktabRequestFact {
     version: u16,
@@ -591,6 +610,7 @@ impl HktabRequestFact {
 /// Redacted occupancy and classification facts for one parsed HITAB medium.
 ///
 /// This type never retains or exposes the medium name or generator-card values.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReturnedTanMediumFact {
     class: TanMediumClass,
@@ -637,6 +657,7 @@ impl ReturnedTanMediumFact {
 /// Positions are one-based flat wire-component positions after nested DEGs are
 /// expanded, not Data Dictionary field numbers. Only the component count and
 /// occupied positions are retained; no values or identifiers are exposed.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TanMediumElementShapeFact {
     component_count: usize,
@@ -664,6 +685,7 @@ impl TanMediumElementShapeFact {
 ///
 /// Segment codes and versions are generic protocol facts. This type contains no segment
 /// contents and deliberately does not implement serialization.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReceivedSegmentFact {
     code: String,
@@ -689,6 +711,7 @@ impl ReceivedSegmentFact {
 /// The code and optional request-segment reference are generic protocol facts. This
 /// type contains no response text, parameters, data-element references, or wire data
 /// and deliberately does not implement serialization.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReceivedResponseFact {
     code: u16,
@@ -719,6 +742,7 @@ impl ReceivedResponseFact {
 /// Advertised and selected HKTAB/HITAB versions are generic BPD facts.
 /// `discovered_medium_count` is `None` only when medium parsing failed before a complete
 /// list could be established.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TanMediaDiscoveryFacts {
     received_segments: Vec<ReceivedSegmentFact>,
@@ -844,6 +868,7 @@ impl TanMediaDiscoveryFacts {
 /// anonymous-BPD repair.
 ///
 /// The value is process-memory only and deliberately does not implement serialization.
+#[doc = "Unstable diagnostic shape for human-readable/loggable output only; never branch on it."]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InitializationRecoveryFacts {
     usable_selected_method_present: bool,

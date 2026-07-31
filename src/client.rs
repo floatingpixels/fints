@@ -243,8 +243,9 @@ impl Client {
 
     /// Opt-in redacted initialization-decision facts for owner-attended diagnostics.
     ///
-    /// This API exists only with the opt-in `development-diagnostics` feature.
-    #[cfg(feature = "development-diagnostics")]
+    /// This API exists only with the opt-in `diagnostics` feature. Its fact shape is
+    /// unstable and must not drive caller control flow.
+    #[cfg(feature = "diagnostics")]
     pub fn development_initialization_recovery(
         &self,
     ) -> Option<crate::InitializationRecoveryFacts> {
@@ -259,7 +260,8 @@ impl Client {
     /// references, the safe HITANS/HKTAB decision fields, and returned-medium
     /// classification/occupancy booleans. It never contains medium identifiers,
     /// response text/parameters, or segment contents.
-    #[cfg(feature = "development-diagnostics")]
+    /// Its fact shape is unstable and must not drive caller control flow.
+    #[cfg(feature = "diagnostics")]
     pub fn development_tan_media_discovery(&self) -> Option<&crate::TanMediaDiscoveryFacts> {
         self.engine.development_tan_media_discovery()
     }
@@ -271,7 +273,8 @@ impl Client {
     /// identifiers, amounts, references, dates, free text, or wire data are retained.
     /// Once the document block tree is valid, its inventories and redacted price shapes
     /// remain available even when a later field parser rejects the page.
-    #[cfg(feature = "development-diagnostics")]
+    /// Its fact shape is unstable and must not drive caller control flow.
+    #[cfg(feature = "diagnostics")]
     pub fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {
         self.engine.development_depot_response()
     }
@@ -1318,7 +1321,7 @@ mod tests {
             next_poll_delay_seconds: None,
             manual_polling_allowed: false,
             automatic_polling_allowed: false,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_medium_requirement: None,
         });
         state.selected_tan_method = Some("942".to_owned());
@@ -1361,7 +1364,7 @@ mod tests {
             next_poll_delay_seconds: (process == TanProcess::Decoupled).then_some(3),
             manual_polling_allowed: process == TanProcess::Decoupled,
             automatic_polling_allowed: process == TanProcess::Decoupled,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_medium_requirement: None,
         });
         state
@@ -1683,7 +1686,7 @@ mod tests {
                     [100]
                 );
 
-                #[cfg(feature = "development-diagnostics")]
+                #[cfg(feature = "diagnostics")]
                 {
                     let facts = client.development_tan_media_discovery().unwrap();
                     assert_eq!(
@@ -1798,7 +1801,7 @@ mod tests {
                 assert_eq!(client.transport.fixture_requests().len(), 3);
                 assert_eq!(client.last_responses()[0].code(), 100);
 
-                #[cfg(feature = "development-diagnostics")]
+                #[cfg(feature = "diagnostics")]
                 {
                     let facts = client.development_tan_media_discovery().unwrap();
                     let requirement = facts.hitans_requirement().unwrap();
@@ -1926,7 +1929,7 @@ mod tests {
             assert!(!rendered.contains("fictional"));
             assert!(!rendered.contains("private-parameter"));
 
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             {
                 let facts = client.development_tan_media_discovery().unwrap();
                 assert_eq!(
@@ -2010,7 +2013,7 @@ mod tests {
         ));
         assert_eq!(client.transport.fixture_requests().len(), 3);
 
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = client.development_tan_media_discovery().unwrap();
             assert_eq!(
@@ -2480,7 +2483,7 @@ mod tests {
             format!("{:?}", client.last_initialization_stage()),
             "Some(AnonymousBpdRefresh)"
         );
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = client.development_initialization_recovery().unwrap();
             assert!(!facts.usable_selected_method_present());
@@ -2719,7 +2722,7 @@ mod tests {
         );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(client.transport.fixture_requests().len(), 1);
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = client.development_initialization_recovery().unwrap();
             assert!(!facts.global_abort_shape());
@@ -2740,7 +2743,7 @@ mod tests {
             Some(InitializationStage::InitialDiscovery)
         );
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = selected.development_initialization_recovery().unwrap();
             assert!(facts.usable_selected_method_present());
@@ -2919,7 +2922,7 @@ mod tests {
             payload[2].elements()[1].components()[0].as_text().unwrap(),
             "2"
         );
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = client.development_initialization_recovery().unwrap();
             assert!(facts.has_tan_method_response());

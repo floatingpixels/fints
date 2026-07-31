@@ -78,7 +78,7 @@ impl Engine {
         self.tan_media.clear();
         self.selected_tan_media_version = None;
         self.tan_media_discovery_responses.clear();
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_tan_media_discovery = None;
             self.development_tan_media_initialization_name_supplied = None;
@@ -108,7 +108,7 @@ impl Engine {
             "HKTAB",
             medium_name,
         )?;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_tan_media_initialization_name_supplied = Some(medium_name.is_some());
         }
@@ -159,14 +159,14 @@ impl Engine {
         self.selected_tan_media_version = None;
         let media_version = self.negotiated_tan_media_version()?;
         self.selected_tan_media_version = Some(media_version);
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let hitans_requirement = self
                 .selected_method()
                 .ok()
                 .and_then(|method| method.development_medium_requirement);
             self.development_tan_media_discovery =
-                Some(crate::development_diagnostics::TanMediaDiscoveryFacts::new(
+                Some(crate::diagnostics::TanMediaDiscoveryFacts::new(
                     response.development_segment_facts(),
                     response.development_response_facts(),
                     self.advertised_tan_media_versions(),
@@ -186,7 +186,7 @@ impl Engine {
             }
         }
         let tan_media = response.tan_media(media_version, None);
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = self
                 .development_tan_media_discovery
@@ -226,11 +226,9 @@ impl Engine {
             let context = self.context(date, time)?;
             segments::tan_media_request(&context, version)?
         };
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         if let Some(facts) = self.development_tan_media_discovery.as_mut() {
-            facts.set_hktab_request(crate::development_diagnostics::HktabRequestFact::all_media(
-                version,
-            ));
+            facts.set_hktab_request(crate::diagnostics::HktabRequestFact::all_media(version));
         }
         Ok(request)
     }
@@ -250,7 +248,7 @@ impl Engine {
         };
         self.tan_media_discovery_responses
             .extend_from_slice(response.responses());
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = self
                 .development_tan_media_discovery
@@ -269,7 +267,7 @@ impl Engine {
             .ok_or(Error::MissingValue {
                 field: "HITAB TAN media response",
             })?;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             let facts = self
                 .development_tan_media_discovery
@@ -311,7 +309,7 @@ impl Engine {
         input: &[u8],
         received_at: NaiveDateTime,
     ) -> Result<InitializationResult, Error> {
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_initialization_recovery = None;
         }
@@ -325,7 +323,7 @@ impl Engine {
         let bpd_zero = self.state.bpd_version == 0;
         let upd_zero = self.state.upd_version == 0;
         let tan_parameters_empty = self.parameters().tan_methods.is_empty();
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         let has_tan_method_response = response.has_tan_method_response();
         let global_abort_shape = response.is_global_bpdless_tan_method_discovery_abort();
         let refresh_before_rediscovery = !usable_selected_method_present
@@ -333,10 +331,10 @@ impl Engine {
             && upd_zero
             && tan_parameters_empty
             && global_abort_shape;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
-            self.development_initialization_recovery = Some(
-                crate::development_diagnostics::InitializationRecoveryFacts::new(
+            self.development_initialization_recovery =
+                Some(crate::diagnostics::InitializationRecoveryFacts::new(
                     usable_selected_method_present,
                     bpd_zero,
                     upd_zero,
@@ -344,8 +342,7 @@ impl Engine {
                     has_tan_method_response,
                     global_abort_shape,
                     refresh_before_rediscovery,
-                ),
-            );
+                ));
         }
         let bank_terminated_discovery =
             requested_method.is_none() && response.is_bank_terminated_tan_method_discovery();

@@ -20,7 +20,7 @@ pub(crate) struct DepotPositionPage {
     pub(crate) account_number: String,
     pub(crate) positions: Vec<DepotPosition>,
     pub(crate) total_values: Vec<SecuritiesAmount>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) development_facts: crate::DepotResponseFacts,
 }
 
@@ -29,7 +29,7 @@ pub(crate) struct SecuritiesTransactionPage {
     pub(crate) institute_code: String,
     pub(crate) account_number: String,
     pub(crate) entries: Vec<SecuritiesTransaction>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) development_facts: crate::DepotResponseFacts,
 }
 
@@ -47,7 +47,7 @@ pub(super) fn positions(
     payload.map(parse_positions).transpose()
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 pub(super) fn position_structure(
     segments: &[Segment],
     version: u16,
@@ -72,7 +72,7 @@ pub(super) fn transactions(
     payload.map(parse_transactions).transpose()
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 pub(super) fn transaction_structure(
     segments: &[Segment],
 ) -> Result<Option<crate::DepotResponseFacts>, Error> {
@@ -281,7 +281,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         })
         .transpose()?
         .unwrap_or_default();
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     let development_facts = crate::DepotResponseFacts::for_positions(
         block_inventory(&root),
         tag_inventory(&root),
@@ -294,7 +294,7 @@ fn parse_positions(input: &[u8]) -> Result<DepotPositionPage, Error> {
         account_number,
         positions,
         total_values,
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         development_facts,
     })
 }
@@ -334,7 +334,7 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
     if !active && !entries.is_empty() {
         return Err(malformed_securities_data!("MT536/GENL/17B:ACTI"));
     }
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     let development_facts = crate::DepotResponseFacts::for_transactions(
         block_inventory(&root),
         tag_inventory(&root),
@@ -346,12 +346,12 @@ fn parse_transactions(input: &[u8]) -> Result<SecuritiesTransactionPage, Error> 
         institute_code,
         account_number,
         entries,
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         development_facts,
     })
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 fn block_inventory(root: &Block) -> Vec<crate::DepotBlockFact> {
     fn visit(
         block: &Block,
@@ -388,7 +388,7 @@ fn block_inventory(root: &Block) -> Vec<crate::DepotBlockFact> {
     facts
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 fn tag_inventory(root: &Block) -> Vec<crate::DepotTagFact> {
     fn kind(tag: &str) -> crate::DepotTagKind {
         match tag {
@@ -441,7 +441,7 @@ fn tag_inventory(root: &Block) -> Vec<crate::DepotTagFact> {
     facts
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 fn price_shapes(root: &Block) -> Vec<crate::DepotPriceShapeFact> {
     use crate::{
         DepotPriceQualifierKind, DepotPriceShapeFact, DepotPriceTagKind, DepotPriceUnitKind,

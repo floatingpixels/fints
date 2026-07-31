@@ -111,7 +111,7 @@ impl Engine {
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_product_idle()?;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_depot_response = None;
         }
@@ -257,7 +257,7 @@ impl Engine {
             .as_ref()
             .ok_or(Error::InconsistentState)?
             .version;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             // Parse and retain the value-free block tree before any position
             // field can fail. A later typed parse error must not erase the
@@ -293,7 +293,7 @@ impl Engine {
             }
             Err(error) => return self.fail_positions(error),
         };
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_depot_response = Some(page.development_facts.clone());
         }
@@ -369,7 +369,7 @@ impl Engine {
         time: NaiveTime,
     ) -> Result<Vec<u8>, Error> {
         self.ensure_product_idle()?;
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_depot_response = None;
         }
@@ -507,7 +507,7 @@ impl Engine {
         if let Some(challenge) = challenge {
             return Ok(SecuritiesTransactionsResult::Challenge(Box::new(challenge)));
         }
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_depot_response = response
                 .development_securities_transaction_structure()
@@ -551,7 +551,7 @@ impl Engine {
             }
             Err(error) => return self.fail_securities(error),
         };
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         {
             self.development_depot_response = Some(page.development_facts.clone());
         }

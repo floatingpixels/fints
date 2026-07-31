@@ -152,10 +152,10 @@ pub struct TanMethod {
     pub(crate) next_poll_delay_seconds: Option<u16>,
     pub(crate) manual_polling_allowed: bool,
     pub(crate) automatic_polling_allowed: bool,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     #[serde(skip)]
     pub(crate) development_medium_requirement:
-        Option<crate::development_diagnostics::HitansMediumRequirementFact>,
+        Option<crate::diagnostics::HitansMediumRequirementFact>,
 }
 
 impl TanMethod {
@@ -189,8 +189,9 @@ impl TanMethod {
 
     /// Redacted source fields used to compute [`Self::medium_name_required`].
     ///
-    /// This accessor exists only for owner-attended development diagnostics.
-    #[cfg(feature = "development-diagnostics")]
+    /// This accessor exists only with the opt-in `diagnostics` feature. Its fact
+    /// shape is unstable and must not drive caller control flow.
+    #[cfg(feature = "diagnostics")]
     pub fn development_medium_requirement(&self) -> Option<crate::HitansMediumRequirementFact> {
         self.development_medium_requirement
     }
@@ -245,9 +246,9 @@ pub struct TanMedium {
     pub(crate) security_function: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) masked_phone: Option<String>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) development_card_number_present: bool,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) development_card_sequence_present: bool,
 }
 

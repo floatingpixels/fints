@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 
-#[cfg(feature = "development-diagnostics")]
-use crate::development_diagnostics::{InitializationRecoveryFacts, TanMediaDiscoveryFacts};
+#[cfg(feature = "diagnostics")]
+use crate::diagnostics::{InitializationRecoveryFacts, TanMediaDiscoveryFacts};
 use crate::{
     client::PollingMode,
     error::{BankResponse, Error, InputError, Limitation},
@@ -39,13 +39,13 @@ pub(crate) struct Engine {
     transient_accounts: Option<Vec<crate::model::Account>>,
     last_responses: Vec<BankResponse>,
     tan_media_discovery_responses: Vec<BankResponse>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     development_initialization_recovery: Option<InitializationRecoveryFacts>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     development_tan_media_discovery: Option<TanMediaDiscoveryFacts>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     development_tan_media_initialization_name_supplied: Option<bool>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     development_depot_response: Option<crate::DepotResponseFacts>,
     requested_balance: Option<crate::model::Account>,
     transaction: Option<TransactionState>,
@@ -167,13 +167,13 @@ impl Engine {
             transient_accounts: None,
             last_responses: Vec::new(),
             tan_media_discovery_responses: Vec::new(),
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_initialization_recovery: None,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_tan_media_discovery: None,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_tan_media_initialization_name_supplied: None,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_depot_response: None,
             requested_balance: None,
             transaction: None,
@@ -225,19 +225,19 @@ impl Engine {
         &self.tan_media_discovery_responses
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_initialization_recovery(
         &self,
     ) -> Option<InitializationRecoveryFacts> {
         self.development_initialization_recovery
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_tan_media_discovery(&self) -> Option<&TanMediaDiscoveryFacts> {
         self.development_tan_media_discovery.as_ref()
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_depot_response(&self) -> Option<&crate::DepotResponseFacts> {
         self.development_depot_response.as_ref()
     }

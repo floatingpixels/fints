@@ -1,5 +1,5 @@
-#[cfg(feature = "development-diagnostics")]
-use crate::development_diagnostics::{ReceivedResponseFact, ReceivedSegmentFact};
+#[cfg(feature = "diagnostics")]
+use crate::diagnostics::{ReceivedResponseFact, ReceivedSegmentFact};
 use crate::{
     error::{BankResponse, Error, Recovery, ResponseClass},
     model::{Balance, ReusableState, TanMedium, TransactionFormat},
@@ -364,7 +364,7 @@ impl Response {
         parameters::tan_media(&self.segments, expected_version, expected_reference)
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_tan_usage_option(
         &self,
         expected_version: u16,
@@ -377,12 +377,12 @@ impl Response {
         )
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_tan_medium_shapes(
         &self,
         expected_version: u16,
         expected_reference: Option<u16>,
-    ) -> Vec<crate::development_diagnostics::TanMediumElementShapeFact> {
+    ) -> Vec<crate::diagnostics::TanMediumElementShapeFact> {
         parameters::development_tan_medium_shapes(
             &self.segments,
             expected_version,
@@ -390,7 +390,7 @@ impl Response {
         )
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_segment_facts(&self) -> Vec<ReceivedSegmentFact> {
         self.segments
             .iter()
@@ -403,7 +403,7 @@ impl Response {
             .collect()
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_response_facts(&self) -> Vec<ReceivedResponseFact> {
         self.responses
             .iter()
@@ -429,7 +429,7 @@ impl Response {
         securities::positions(&self.segments, version)
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_depot_position_structure(
         &self,
         version: u16,
@@ -443,7 +443,7 @@ impl Response {
         securities::transactions(&self.segments)
     }
 
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     pub(crate) fn development_securities_transaction_structure(
         &self,
     ) -> Result<Option<crate::DepotResponseFacts>, Error> {

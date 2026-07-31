@@ -284,7 +284,7 @@ FINTS_PIN='owner-input' \
 FINTS_PRODUCT_ID='registered-caller-input' \
 FINTS_PRODUCT_VERSION='1.0' \
 FINTS_PROBE_SYNCHRONIZE=1 \
-cargo run --example live_probe
+cargo run --features diagnostics --example live_probe
 ```
 
 `FINTS_CUSTOMER_ID` and `FINTS_COUNTRY_CODE` are optional. Method selection uses
@@ -296,7 +296,7 @@ The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
 `FINTS_PROBE_DEPOT_POSITIONS_ACCOUNT`, `FINTS_PROBE_DEPOT_TRANSACTIONS_ACCOUNT`,
 `FINTS_PROBE_CARD_BALANCE_ACCOUNT`, and `FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT`
 enable the corresponding read. Financial values and identifiers are never printed;
-depot probes report only result counts and, with development diagnostics, value-free
+depot probes report only result counts and, with diagnostics enabled, value-free
 block and field-presence facts. A successfully parsed block tree remains available
 after a later field error; optional 90A/90B price diagnostics report only tag and
 known/unknown shape categories plus presence booleans. The probe prints all
@@ -307,13 +307,18 @@ credential-bearing request and response payloads to stdout as hexadecimal and es
 Latin-1 text. Use it only in an owner-controlled terminal; never redirect it to a file,
 paste its output into an issue or agent conversation, or enable it in normal consumers.
 
-### Gated development diagnostics
+### Supported diagnostics
 
-The non-default `development-diagnostics` feature exposes initialization decision
+The non-default `diagnostics` feature exposes initialization decision
 booleans, TAN-medium-discovery structure, and MT535/MT536 block inventories and
-field-presence booleans for owner-attended interoperability work. This is a supported,
-gated capability that is off by default. It never exposes inspected field values,
-segment contents, response text or parameters, medium names, generator-card values,
-securities identifiers, amounts, references, or dates. Default builds carry no
-diagnostic code or storage; the public API and its storage fields exist only when the
-feature is explicitly enabled.
+field-presence booleans for interoperability work. It is supported, opt-in, and safe to
+enable in a shipped build when diagnosing a failing connection. It never exposes
+inspected field values, segment contents, response text or parameters, medium names,
+generator-card values, securities identifiers, amounts, references, or dates. Default
+builds carry no diagnostic code or storage; the public API and its storage fields exist
+only when the feature is explicitly enabled.
+
+Diagnostic facts describe internal parsing and negotiation structure. Their shape may
+change in any revision and is not a stable API contract: callers may render or log the
+facts for humans, but must never branch on them. Control flow uses typed limitations,
+errors, and advertised-capability snapshots only.

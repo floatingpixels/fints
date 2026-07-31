@@ -465,10 +465,10 @@ pub(super) fn tan_media(
             masked_phone: layout
                 .masked_phone
                 .and_then(|index| optional_component(components, index)),
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_card_number_present: optional_component(components, layout.card_number)
                 .is_some(),
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             development_card_sequence_present: optional_component(components, layout.card_sequence)
                 .is_some(),
         });
@@ -476,7 +476,7 @@ pub(super) fn tan_media(
     Ok(Some(media))
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 pub(super) fn development_tan_usage_option(
     segments: &[Segment],
     expected_version: u16,
@@ -498,12 +498,12 @@ pub(super) fn development_tan_usage_option(
     }
 }
 
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 pub(super) fn development_tan_medium_shapes(
     segments: &[Segment],
     expected_version: u16,
     expected_reference: Option<u16>,
-) -> Vec<crate::development_diagnostics::TanMediumElementShapeFact> {
+) -> Vec<crate::diagnostics::TanMediumElementShapeFact> {
     let Some(segment) = segments.iter().find(|segment| {
         segment.header().is_some_and(|header| {
             header.code == b"HITAB"
@@ -528,10 +528,7 @@ pub(super) fn development_tan_medium_shapes(
                     occupied.then_some(index + 1)
                 })
                 .collect();
-            crate::development_diagnostics::TanMediumElementShapeFact::new(
-                components.len(),
-                occupied,
-            )
+            crate::diagnostics::TanMediumElementShapeFact::new(components.len(), occupied)
         })
         .collect()
 }
@@ -540,9 +537,9 @@ struct TanMediumLayout {
     name: usize,
     masked_phone: Option<usize>,
     security_function: Option<usize>,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     card_number: usize,
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     card_sequence: usize,
 }
 
@@ -562,9 +559,9 @@ impl TanMediumLayout {
             name,
             masked_phone: has_masked_phone.then_some(name + 1),
             security_function: None,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             card_number: 2,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             card_sequence: 3,
         }
     }
@@ -581,9 +578,9 @@ impl TanMediumLayout {
             name,
             masked_phone: Some(name + 1),
             security_function: Some(2),
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             card_number: 3,
-            #[cfg(feature = "development-diagnostics")]
+            #[cfg(feature = "diagnostics")]
             card_sequence: 4,
         }
     }
@@ -934,15 +931,13 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
             .flatten(),
         manual_polling_allowed: version == 7 && optional_yes(components, 24)?,
         automatic_polling_allowed: version == 7 && optional_yes(components, 25)?,
-        #[cfg(feature = "development-diagnostics")]
-        development_medium_requirement: Some(
-            crate::development_diagnostics::HitansMediumRequirementFact::new(
-                version,
-                medium_requirement_code,
-                active_media_count,
-                medium_name_required,
-            ),
-        ),
+        #[cfg(feature = "diagnostics")]
+        development_medium_requirement: Some(crate::diagnostics::HitansMediumRequirementFact::new(
+            version,
+            medium_requirement_code,
+            active_media_count,
+            medium_name_required,
+        )),
     })
 }
 

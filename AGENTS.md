@@ -110,6 +110,11 @@ Keep optional features out until a current gate proves them necessary.
 - Prefer concrete operation types over a universal segment tree in the public API.
 - Missing advertised operations and unsupported parameter combinations are normal typed
   limitations, not guessed fallbacks.
+- The non-default `diagnostics` feature is a supported, opt-in capability for
+  value-free structural facts: enums, counts, boolean presence, and block inventories.
+  It is off by default and adds no diagnostic code or storage when disabled. Its fact
+  shapes may change in any revision and never drive control flow; callers branch only
+  on typed limitations, errors, and advertised-capability snapshots.
 
 ## Security and personal data
 
@@ -134,7 +139,7 @@ Keep optional features out until a current gate proves them necessary.
   process-memory values. Only reusable state explicitly named by `SCOPE.md` may be
   serializable.
 - Owner credentials, account data, and live protocol captures never enter the
-  repository. `local/` is ignored for temporary owner-controlled work.
+  repository. `local/` is ignored for ephemeral owner-controlled work.
 - Fixtures use fictional identities and values. Sanitizing a live capture is not enough
   unless the result is structurally reviewed and contains no owner-derived identifiers
   or values.

@@ -92,7 +92,7 @@ fn tan_method(process: TanProcess) -> TanMethod {
         next_poll_delay_seconds: Some(3),
         manual_polling_allowed: process == TanProcess::Decoupled,
         automatic_polling_allowed: process == TanProcess::Decoupled,
-        #[cfg(feature = "development-diagnostics")]
+        #[cfg(feature = "diagnostics")]
         development_medium_requirement: None,
     }
 }
@@ -2215,7 +2215,7 @@ fn depot_positions_reject_repeated_continuations_without_wedging_dialog() {
         engine.accept_depot_positions(&first, now()).unwrap(),
         DepotPositionsResult::Continue
     ));
-    #[cfg(feature = "development-diagnostics")]
+    #[cfg(feature = "diagnostics")]
     {
         let facts = engine.development_depot_response().unwrap();
         assert_eq!(facts.document_kind(), crate::DepotDocumentKind::Mt535);
@@ -2394,7 +2394,7 @@ fn depot_positions_version_five_rejects_wrong_version_and_identity() {
 // field failures must preserve only its value-free structure. The fictional
 // price deliberately uses unknown qualifier/unit categories so an attended
 // run can distinguish that shape without retaining the price or currency.
-#[cfg(feature = "development-diagnostics")]
+#[cfg(feature = "diagnostics")]
 #[test]
 fn malformed_mt535_price_preserves_redacted_structure_diagnostics() {
     let mut account = transaction_account("DE40123456780000123456", "300001", &[("HKWPD", 1)]);
