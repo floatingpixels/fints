@@ -231,6 +231,14 @@ impl std::fmt::Debug for BankResponse {
 pub enum Error {
     #[error(transparent)]
     Input(#[from] InputError),
+    /// Persisted reusable state was written with an incompatible crate-state format.
+    ///
+    /// The caller must discard the state and re-synchronize. Reusable state is derived
+    /// from bank parameters and is intentionally not migrated or repaired by the crate.
+    #[error(
+        "reusable FinTS state version {found} is incompatible with version {expected}; discard it and re-synchronize"
+    )]
+    ReusableStateVersion { expected: u16, found: u16 },
     #[error(transparent)]
     Wire(#[from] WireError),
     #[error(transparent)]

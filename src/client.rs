@@ -147,6 +147,10 @@ pub struct Client {
 }
 
 impl Client {
+    /// Constructs a client from new or previously serialized reusable state.
+    ///
+    /// [`Error::ReusableStateVersion`] means the caller must discard the supplied
+    /// state and re-synchronize rather than attempting to migrate it.
     pub fn new(
         endpoint: &str,
         institute: InstituteId,
@@ -162,6 +166,8 @@ impl Client {
     /// Trace events carry credential-bearing outgoing and incoming FinTS payloads.
     /// Installing a sink is an explicit per-client decision; the crate never stores,
     /// logs, formats, or otherwise retains those payloads.
+    /// [`Error::ReusableStateVersion`] has the same discard-and-resynchronize contract
+    /// as [`Client::new`].
     pub fn new_with_trace(
         endpoint: &str,
         institute: InstituteId,
@@ -1303,6 +1309,40 @@ mod tests {
         assert_send::<SecuritiesTransactionContinuation>();
         assert_send::<CreditCardTransactionContinuation>();
         assert_send::<CreditCardBalanceContinuation>();
+    }
+
+    #[test]
+    fn public_client_constructors_reject_incompatible_reusable_state_before_transport() {
+        fn incompatible_state() -> ReusableState {
+            let mut state = ReusableState::new();
+            state.version = crate::REUSABLE_STATE_VERSION + 1;
+            state
+        }
+
+        let plain = Client::new(
+            "not a URL",
+            InstituteId::new("280", "12345678").unwrap(),
+            ProductIdentity::new("PROD123", "1.0").unwrap(),
+            Credentials::new("fictional-user", None, "private-pin").unwrap(),
+            incompatible_state(),
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(plain, Error::ReusableStateVersion { .. }));
+
+        let traced = Client::new_with_trace(
+            "not a URL",
+            InstituteId::new("280", "12345678").unwrap(),
+            ProductIdentity::new("PROD123", "1.0").unwrap(),
+            Credentials::new("fictional-user", None, "private-pin").unwrap(),
+            incompatible_state(),
+            Some(Box::new(|_| {
+                panic!("version rejection must not reach transport")
+            })),
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(traced, Error::ReusableStateVersion { .. }));
     }
 
     fn synchronization_engine() -> Engine {

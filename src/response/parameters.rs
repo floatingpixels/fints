@@ -265,7 +265,6 @@ pub(super) fn apply(
         state.camt_requires_tan = camt_requires_tan;
         state.legacy_transactions_require_tan = legacy_transactions_require_tan;
         state.depot_positions_advertised = depot_positions_advertised;
-        state.legacy_depot_positions_supported = false;
         received_depot_position_versions.sort_unstable_by(|a, b| b.cmp(a));
         state.depot_position_versions = received_depot_position_versions;
         state.depot_positions_requires_tan = depot_positions_requires_tan;

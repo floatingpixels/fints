@@ -138,6 +138,12 @@ Keep optional features out until a current gate proves them necessary.
 - One-time TANs, challenges, dialog identifiers, tokens, and live sessions remain
   process-memory values. Only reusable state explicitly named by `SCOPE.md` may be
   serializable.
+- Reusable state carries an explicit version. State written by a different version is
+  rejected with a typed error instructing the caller to discard it and re-synchronize;
+  the crate ships no per-field migration or defaulting whose purpose is to read an
+  older shape. This is possible because the state is derived, not authored: discarding
+  it costs one synchronization. Protocol tolerance—accepting the shapes institutions
+  legitimately vary—is a separate concern and is unaffected.
 - Owner credentials, account data, and live protocol captures never enter the
   repository. `local/` is ignored for ephemeral owner-controlled work.
 - Fixtures use fictional identities and values. Sanitizing a live capture is not enough

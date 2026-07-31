@@ -9,8 +9,8 @@ use crate::{
     error::{BankResponse, Error, InputError, Limitation},
     model::{
         Balance, BookedEntry, BookedTransactions, Challenge, Credentials, InstituteId,
-        ProductIdentity, ReusableState, Tan, TanMedium, TanMethod, TanProcess, TransactionFormat,
-        valid_latin1_length,
+        ProductIdentity, REUSABLE_STATE_VERSION, ReusableState, Tan, TanMedium, TanMethod,
+        TanProcess, TransactionFormat, valid_latin1_length,
     },
     response::Response,
     segments::{self, SecurityContext},
@@ -135,20 +135,12 @@ impl Engine {
         credentials: Credentials,
         mut state: ReusableState,
     ) -> Result<Self, Error> {
-        if !state.advertised_balance_versions.is_empty() {
-            state.balance_versions = state
-                .advertised_balance_versions
-                .iter()
-                .copied()
-                .filter(|version| (5..=8).contains(version))
-                .collect();
-            state.balance_versions.sort_unstable_by(|a, b| b.cmp(a));
-            state.balance_versions.dedup();
+        if state.version() != REUSABLE_STATE_VERSION {
+            return Err(Error::ReusableStateVersion {
+                expected: REUSABLE_STATE_VERSION,
+                found: state.version(),
+            });
         }
-        if state.depot_position_versions.is_empty() && state.legacy_depot_positions_supported {
-            state.depot_position_versions.push(6);
-        }
-        state.legacy_depot_positions_supported = false;
         state
             .depot_position_versions
             .sort_unstable_by(|a, b| b.cmp(a));

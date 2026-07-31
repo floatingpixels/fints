@@ -29,6 +29,12 @@ built-in registration ID and is not itself the registered customer application.
 `ReusableState` derives Serde traits so the caller can choose its own encrypted
 persistence format. Credentials are never serializable.
 
+Reusable state has an explicit serialized-format version. State written by an
+incompatible crate revision is rejected as `Error::ReusableStateVersion`; the caller
+must discard it and re-synchronize instead of attempting migration or repair. A crate
+upgrade may therefore require one additional synchronization dialog and, depending on
+the institution, a TAN.
+
 A new connection follows this bounded sequence:
 
 1. Call `initialize`. With neither a system ID nor a selected method, the client opens

@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-07-31** — Versioned serialized reusable state and reject incompatible shapes;
+  consumers must discard mismatched state and re-synchronize, which may require a TAN.
+
 - **2026-07-31** — Counted malformed MT535 page totals alongside position losses,
   restored `ACTI`/`FIN` consistency, and documented the format-specific boundary.
 

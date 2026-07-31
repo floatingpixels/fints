@@ -46,10 +46,10 @@ pub use model::{
     Account, Amount, Balance, BookedEntry, BookedTransactionDetail, BookedTransactions, Challenge,
     Credentials, CreditCardAmount, CreditCardBalance, CreditCardCurrentBalance, CreditCardEntry,
     CreditCardTransactions, CreditDebit, DepotPosition, DepotPositionParseCounts, DepotPositions,
-    InstituteId, PriceQuality, ProductIdentity, QuantityUnit, ReusableState, SecuritiesAmount,
-    SecuritiesMovement, SecuritiesQuantity, SecuritiesTransaction, SecuritiesTransactions,
-    SecurityInstrument, SecurityPrice, SignedAmount, StatementPosition, Tan, TanMedium,
-    TanMediumClass, TanMediumStatus, TanMethod, TanProcess, Timestamp,
+    InstituteId, PriceQuality, ProductIdentity, QuantityUnit, REUSABLE_STATE_VERSION,
+    ReusableState, SecuritiesAmount, SecuritiesMovement, SecuritiesQuantity, SecuritiesTransaction,
+    SecuritiesTransactions, SecurityInstrument, SecurityPrice, SignedAmount, StatementPosition,
+    Tan, TanMedium, TanMediumClass, TanMediumStatus, TanMethod, TanProcess, Timestamp,
 };
 pub use transport::{TraceDirection, TraceEvent, TraceSink, TransportError};
 pub use wire::WireError;

@@ -205,60 +205,37 @@ fn malformed_reusable_state_is_rejected_before_transport_use() {
     assert!(matches!(error, Error::Input(InputError::ReusableState)));
 }
 
-// Gate 4.6 persisted version 5 as an advertised generic fact before it became
-// implemented. Reconstruct supported versions from that retained fact when the
-// state enters the newer engine.
 #[test]
-fn gate46_state_reclassifies_advertised_balance_five_as_supported() {
+fn incompatible_reusable_state_version_is_rejected_without_mutating_source_state() {
     let mut state = ReusableState::new();
     state.bpd_version = 57;
-    state.advertised_balance_versions = vec![5];
-    assert!(state.balance_versions.is_empty());
-    assert!(
-        state
-            .advertised_capabilities()
-            .balance()
-            .supports_version(5)
-    );
+    state.version = crate::REUSABLE_STATE_VERSION + 1;
+    let persisted = state.clone();
 
-    let engine = Engine::new(
+    let error = Engine::new(
         InstituteId::new("280", "12345678").unwrap(),
         ProductIdentity::new("PROD123", "1.0").unwrap(),
         Credentials::new("fictional-user", None, "private-pin").unwrap(),
         state,
     )
+    .err()
     .unwrap();
 
-    assert_eq!(engine.state.balance_versions, [5]);
-    assert_eq!(
-        engine
-            .state()
-            .advertised_capabilities()
-            .balance()
-            .advertised_versions(),
-        [5]
-    );
+    assert!(matches!(
+        error,
+        Error::ReusableStateVersion {
+            expected: crate::REUSABLE_STATE_VERSION,
+            found
+        } if found == crate::REUSABLE_STATE_VERSION + 1
+    ));
+    assert_eq!(persisted.version(), crate::REUSABLE_STATE_VERSION + 1);
+    assert_eq!(persisted.bpd_version(), 57);
 }
 
-// ReusableState before HKWPD 5 support retained only the Gate-4
-// depot_positions_supported boolean, whose implemented meaning was version 6.
-// Preserve that migration while rejecting invented serialized version numbers.
 #[test]
-fn legacy_depot_position_state_migrates_to_six_and_invalid_versions_fail() {
+fn invalid_depot_position_state_version_fails() {
     let institute = InstituteId::new("280", "12345678").unwrap();
     let product = ProductIdentity::new("PROD123", "1.0").unwrap();
-    let mut legacy = ReusableState::new();
-    legacy.legacy_depot_positions_supported = true;
-
-    let engine = Engine::new(
-        institute.clone(),
-        product.clone(),
-        Credentials::new("fictional-user", None, "private-pin").unwrap(),
-        legacy,
-    )
-    .unwrap();
-    assert_eq!(engine.state.depot_position_versions, [6]);
-
     let mut malformed = ReusableState::new();
     malformed.depot_position_versions = vec![7];
     assert!(matches!(

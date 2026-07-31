@@ -97,10 +97,9 @@ impl OperationCapabilitySnapshot {
 /// Redacted read model derived from the currently retained BPD capability facts.
 ///
 /// The snapshot contains no account or personal data and is not serialized. The
-/// generic parameter-segment list is complete for BPD acquired in this process;
-/// older deserialized state can expose only the operation facts it already retained.
-/// In particular, operation-specific transaction `advertised()` facts can under-report
-/// after deserializing state created before capability snapshots, until BPD is refreshed.
+/// generic parameter-segment list is complete for BPD acquired in this process. After
+/// deserialization it is rebuilt on the next BPD refresh; operation-specific retained
+/// facts remain available in the meantime.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdvertisedCapabilitySnapshot {
     balance: OperationCapabilitySnapshot,
@@ -165,16 +164,8 @@ impl ReusableState {
             },
         );
         let mt940_versions = self.parameter_versions("HIKAZS", &self.legacy_transaction_versions);
-        let depot_position_versions = self.parameter_versions(
-            "HIWPDS",
-            if !self.depot_position_versions.is_empty() {
-                &self.depot_position_versions
-            } else if self.legacy_depot_positions_supported {
-                &[6]
-            } else {
-                &[]
-            },
-        );
+        let depot_position_versions =
+            self.parameter_versions("HIWPDS", &self.depot_position_versions);
         let depot_transaction_versions = self.parameter_versions(
             "HIWDUS",
             if self.securities_transactions_supported {
@@ -231,14 +222,7 @@ impl ReusableState {
             depot_positions: OperationCapabilitySnapshot::new(
                 self.depot_positions_advertised || !depot_position_versions.is_empty(),
                 depot_position_versions,
-                if !self.depot_position_versions.is_empty() {
-                    self.depot_position_versions.clone()
-                } else {
-                    self.legacy_depot_positions_supported
-                        .then_some(6)
-                        .into_iter()
-                        .collect()
-                },
+                self.depot_position_versions.clone(),
                 self.depot_positions_requires_tan,
                 Vec::new(),
                 None,
@@ -282,8 +266,8 @@ impl ReusableState {
     /// Advertised HKTAB/HITAB media-discovery versions, highest first.
     ///
     /// Segment versions are generic protocol facts and contain no account or
-    /// personal data. Older deserialized state may not retain this derived BPD fact
-    /// until parameters are refreshed.
+    /// personal data. The process-derived generic segment index is rebuilt when BPD is
+    /// refreshed after deserialization.
     pub fn advertised_tan_media_versions(&self) -> Vec<u16> {
         self.parameter_versions("HITABS", &self.advertised_tan_media_versions)
     }

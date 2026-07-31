@@ -292,7 +292,6 @@ pub struct Account {
     pub(crate) owner_name_2: Option<String>,
     pub(crate) product_name: Option<String>,
     pub(crate) allowed_operations: Vec<OperationPermission>,
-    #[serde(default)]
     pub(crate) unlisted_operations_unknown: bool,
 }
 
@@ -415,6 +414,9 @@ pub(crate) struct CreditCardCapability {
     pub(crate) date_range_allowed: bool,
 }
 
+/// Serialized format version accepted for [`ReusableState`].
+pub const REUSABLE_STATE_VERSION: u16 = 1;
+
 #[derive(Clone)]
 pub(crate) enum TransactionFormat {
     Camt { descriptor: String },
@@ -430,71 +432,92 @@ pub(crate) enum TransactionFormat {
 ///
 /// This state deliberately never contains credentials, PINs, TANs, challenges, dialog
 /// identifiers, or live session state.
-#[derive(Clone, Default, Deserialize, Serialize)]
+///
+/// The serialized form is bound to [`REUSABLE_STATE_VERSION`]. A different version is
+/// expected after incompatible crate upgrades; callers must discard that state and
+/// re-synchronize instead of attempting to repair or migrate it.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReusableState {
+    pub(crate) version: u16,
     pub(crate) system_id: Option<String>,
     pub(crate) bpd_version: u16,
     pub(crate) upd_version: u16,
     pub(crate) balance_versions: Vec<u16>,
-    #[serde(default)]
     pub(crate) advertised_balance_versions: Vec<u16>,
-    #[serde(default)]
     pub(crate) advertised_tan_media_versions: Vec<u16>,
-    #[serde(default)]
     pub(crate) balance_capability_advertised: bool,
     pub(crate) balance_requires_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) transaction_capability_advertised: bool,
-    #[serde(default)]
     pub(crate) camt_capability: Option<CamtCapability>,
-    #[serde(default)]
     pub(crate) advertised_camt_descriptors: Vec<String>,
-    #[serde(default)]
     pub(crate) camt_storage_period_days: Option<u16>,
-    #[serde(default)]
     pub(crate) legacy_transaction_versions: Vec<u16>,
-    #[serde(default)]
     pub(crate) camt_requires_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) legacy_transactions_require_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) depot_positions_advertised: bool,
-    // Deserialize the pre-gate-4.38 support flag only to migrate it into the
-    // explicit version list in Engine::new. New state never serializes both.
-    #[serde(default, rename = "depot_positions_supported", skip_serializing)]
-    pub(crate) legacy_depot_positions_supported: bool,
-    #[serde(default)]
     pub(crate) depot_position_versions: Vec<u16>,
-    #[serde(default)]
     pub(crate) depot_positions_requires_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) securities_transactions_advertised: bool,
-    #[serde(default)]
     pub(crate) securities_transactions_supported: bool,
-    #[serde(default)]
     pub(crate) securities_transactions_storage_period_days: Option<u16>,
-    #[serde(default)]
     pub(crate) securities_transactions_requires_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) credit_card_transactions_advertised: bool,
-    #[serde(default)]
     pub(crate) credit_card_transactions: Option<CreditCardCapability>,
-    #[serde(default)]
     pub(crate) credit_card_transactions_storage_period_days: Option<u16>,
-    #[serde(default)]
     pub(crate) credit_card_transactions_requires_tan: Option<bool>,
-    #[serde(default)]
     pub(crate) credit_card_balance_advertised: bool,
-    #[serde(default)]
     pub(crate) credit_card_balance_account_required: Option<bool>,
-    #[serde(default)]
     pub(crate) credit_card_balance_requires_tan: Option<bool>,
+    // Derived from the current BPD in process and deliberately absent from persistence.
     #[serde(skip)]
     pub(crate) advertised_parameter_segments: Vec<ParameterSegmentAdvertisement>,
     pub(crate) tan_methods: Vec<TanMethod>,
     pub(crate) accounts: Vec<Account>,
     pub(crate) selected_tan_method: Option<String>,
     pub(crate) selected_tan_medium: Option<String>,
+}
+
+impl Default for ReusableState {
+    fn default() -> Self {
+        Self {
+            version: REUSABLE_STATE_VERSION,
+            system_id: None,
+            bpd_version: 0,
+            upd_version: 0,
+            balance_versions: Vec::new(),
+            advertised_balance_versions: Vec::new(),
+            advertised_tan_media_versions: Vec::new(),
+            balance_capability_advertised: false,
+            balance_requires_tan: None,
+            transaction_capability_advertised: false,
+            camt_capability: None,
+            advertised_camt_descriptors: Vec::new(),
+            camt_storage_period_days: None,
+            legacy_transaction_versions: Vec::new(),
+            camt_requires_tan: None,
+            legacy_transactions_require_tan: None,
+            depot_positions_advertised: false,
+            depot_position_versions: Vec::new(),
+            depot_positions_requires_tan: None,
+            securities_transactions_advertised: false,
+            securities_transactions_supported: false,
+            securities_transactions_storage_period_days: None,
+            securities_transactions_requires_tan: None,
+            credit_card_transactions_advertised: false,
+            credit_card_transactions: None,
+            credit_card_transactions_storage_period_days: None,
+            credit_card_transactions_requires_tan: None,
+            credit_card_balance_advertised: false,
+            credit_card_balance_account_required: None,
+            credit_card_balance_requires_tan: None,
+            advertised_parameter_segments: Vec::new(),
+            tan_methods: Vec::new(),
+            accounts: Vec::new(),
+            selected_tan_method: None,
+            selected_tan_medium: None,
+        }
+    }
 }
 
 impl ReusableState {
@@ -504,6 +527,11 @@ impl ReusableState {
 
     pub fn system_id(&self) -> Option<&str> {
         self.system_id.as_deref()
+    }
+
+    /// The serialized reusable-state format version.
+    pub fn version(&self) -> u16 {
+        self.version
     }
 
     pub fn bpd_version(&self) -> u16 {
@@ -1446,15 +1474,14 @@ mod tests {
 
     use super::*;
 
-    enum PreviousValue {
+    enum StateValue {
         Bool(bool),
         U16(u16),
         None,
-        EmptySequence,
-        Sequence(Vec<PreviousValue>),
+        Sequence(Vec<StateValue>),
     }
 
-    impl<'de> IntoDeserializer<'de, ValueError> for PreviousValue {
+    impl<'de> IntoDeserializer<'de, ValueError> for StateValue {
         type Deserializer = Self;
 
         fn into_deserializer(self) -> Self::Deserializer {
@@ -1462,7 +1489,7 @@ mod tests {
         }
     }
 
-    impl<'de> de::Deserializer<'de> for PreviousValue {
+    impl<'de> de::Deserializer<'de> for StateValue {
         type Error = ValueError;
 
         fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -1473,12 +1500,6 @@ mod tests {
                 Self::Bool(value) => visitor.visit_bool(value),
                 Self::U16(value) => visitor.visit_u16(value),
                 Self::None => visitor.visit_none(),
-                Self::EmptySequence => {
-                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(std::iter::empty::<
-                        PreviousValue,
-                    >(
-                    )))
-                }
                 Self::Sequence(values) => {
                     visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(values.into_iter()))
                 }
@@ -1500,16 +1521,10 @@ mod tests {
             V: Visitor<'de>,
         {
             match self {
-                Self::EmptySequence => {
-                    visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(std::iter::empty::<
-                        PreviousValue,
-                    >(
-                    )))
-                }
                 Self::Sequence(values) => {
                     visitor.visit_seq(SeqDeserializer::<_, ValueError>::new(values.into_iter()))
                 }
-                _ => Err(de::Error::custom("expected previous-state sequence")),
+                _ => Err(de::Error::custom("expected state sequence")),
             }
         }
 
@@ -1518,73 +1533,6 @@ mod tests {
             string bytes byte_buf unit unit_struct newtype_struct tuple tuple_struct
             map struct enum identifier ignored_any
         }
-    }
-
-    // The added advertised-version field did not exist in gate-4.5 state.
-    // Its serde default keeps that previously serialized shape readable.
-    #[test]
-    fn previous_reusable_state_shape_defaults_advertised_balance_versions() {
-        let fields = [
-            ("system_id", PreviousValue::None),
-            ("bpd_version", PreviousValue::U16(57)),
-            ("upd_version", PreviousValue::U16(1)),
-            ("balance_versions", PreviousValue::EmptySequence),
-            ("balance_requires_tan", PreviousValue::None),
-            ("depot_positions_supported", PreviousValue::Bool(true)),
-            ("tan_methods", PreviousValue::EmptySequence),
-            ("accounts", PreviousValue::EmptySequence),
-            ("selected_tan_method", PreviousValue::None),
-            ("selected_tan_medium", PreviousValue::None),
-        ];
-        let state =
-            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
-                .unwrap();
-
-        assert_eq!(state.bpd_version(), 57);
-        assert_eq!(state.upd_version(), 1);
-        assert!(state.advertised_tan_media_versions().is_empty());
-        assert!(
-            state
-                .advertised_capabilities()
-                .balance()
-                .advertised_versions()
-                .is_empty()
-        );
-        assert!(
-            state
-                .advertised_capabilities()
-                .camt_cash_transactions()
-                .descriptors()
-                .is_empty()
-        );
-        assert_eq!(
-            state
-                .advertised_capabilities()
-                .depot_positions()
-                .advertised_versions(),
-            [6]
-        );
-        assert_eq!(
-            state
-                .advertised_capabilities()
-                .camt_cash_transactions()
-                .storage_period_days(),
-            None
-        );
-        assert_eq!(
-            state
-                .advertised_capabilities()
-                .depot_transactions()
-                .storage_period_days(),
-            None
-        );
-        assert_eq!(
-            state
-                .advertised_capabilities()
-                .credit_card_transactions()
-                .storage_period_days(),
-            None
-        );
     }
 
     #[derive(Debug)]
@@ -1610,7 +1558,7 @@ mod tests {
     struct ProjectionSerializer;
 
     impl ser::Serializer for ProjectionSerializer {
-        type Ok = Vec<(String, PreviousValue)>;
+        type Ok = Vec<(String, StateValue)>;
         type Error = ProjectionError;
         type SerializeSeq = Impossible<Self::Ok, Self::Error>;
         type SerializeTuple = Impossible<Self::Ok, Self::Error>;
@@ -1778,33 +1726,19 @@ mod tests {
     }
 
     struct ProjectionFields {
-        fields: Vec<(String, PreviousValue)>,
+        fields: Vec<(String, StateValue)>,
     }
 
     impl SerializeStruct for ProjectionFields {
-        type Ok = Vec<(String, PreviousValue)>;
+        type Ok = Vec<(String, StateValue)>;
         type Error = ProjectionError;
 
         fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
         where
             T: ?Sized + Serialize,
         {
-            if matches!(
-                key,
-                "bpd_version"
-                    | "upd_version"
-                    | "balance_versions"
-                    | "advertised_balance_versions"
-                    | "advertised_tan_media_versions"
-                    | "depot_positions_supported"
-                    | "depot_position_versions"
-                    | "camt_storage_period_days"
-                    | "securities_transactions_storage_period_days"
-                    | "credit_card_transactions_storage_period_days"
-            ) {
-                self.fields
-                    .push((key.to_owned(), value.serialize(PreviousValueSerializer)?));
-            }
+            self.fields
+                .push((key.to_owned(), value.serialize(StateValueSerializer)?));
             Ok(())
         }
 
@@ -1813,12 +1747,12 @@ mod tests {
         }
     }
 
-    struct PreviousValueSerializer;
+    struct StateValueSerializer;
 
-    impl ser::Serializer for PreviousValueSerializer {
-        type Ok = PreviousValue;
+    impl ser::Serializer for StateValueSerializer {
+        type Ok = StateValue;
         type Error = ProjectionError;
-        type SerializeSeq = PreviousSequence;
+        type SerializeSeq = StateSequence;
         type SerializeTuple = Impossible<Self::Ok, Self::Error>;
         type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
         type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
@@ -1827,17 +1761,17 @@ mod tests {
         type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
 
         fn serialize_u16(self, value: u16) -> Result<Self::Ok, Self::Error> {
-            Ok(PreviousValue::U16(value))
+            Ok(StateValue::U16(value))
         }
 
         fn serialize_seq(self, length: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-            Ok(PreviousSequence {
+            Ok(StateSequence {
                 values: Vec::with_capacity(length.unwrap_or(0)),
             })
         }
 
-        fn serialize_bool(self, _value: bool) -> Result<Self::Ok, Self::Error> {
-            Err(ProjectionError)
+        fn serialize_bool(self, value: bool) -> Result<Self::Ok, Self::Error> {
+            Ok(StateValue::Bool(value))
         }
 
         fn serialize_i8(self, _value: i8) -> Result<Self::Ok, Self::Error> {
@@ -1889,7 +1823,7 @@ mod tests {
         }
 
         fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-            Ok(PreviousValue::None)
+            Ok(StateValue::None)
         }
 
         fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
@@ -1985,32 +1919,32 @@ mod tests {
         }
     }
 
-    struct PreviousSequence {
-        values: Vec<PreviousValue>,
+    struct StateSequence {
+        values: Vec<StateValue>,
     }
 
-    impl SerializeSeq for PreviousSequence {
-        type Ok = PreviousValue;
+    impl SerializeSeq for StateSequence {
+        type Ok = StateValue;
         type Error = ProjectionError;
 
         fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
         where
             T: ?Sized + Serialize,
         {
-            self.values.push(value.serialize(PreviousValueSerializer)?);
+            self.values.push(value.serialize(StateValueSerializer)?);
             Ok(())
         }
 
         fn end(self) -> Result<Self::Ok, Self::Error> {
-            Ok(PreviousValue::Sequence(self.values))
+            Ok(StateValue::Sequence(self.values))
         }
     }
 
     // Serde is caller-format-neutral, so this focused test format projects the
-    // persisted version fields through the actual derived Serialize/Deserialize
-    // implementations without adding a direct dev dependency.
+    // complete empty-current shape plus selected scalar and version-vector values
+    // through the actual derives without adding a direct dev dependency.
     #[test]
-    fn advertised_versions_survive_serde_round_trip() {
+    fn current_reusable_state_shape_survives_serde_round_trip() {
         let mut original = ReusableState::new();
         original.bpd_version = 57;
         original.upd_version = 1;
@@ -2030,24 +1964,14 @@ mod tests {
                 .iter()
                 .any(|(field, _)| field == "advertised_parameter_segments")
         );
-        assert!(
-            !projected
-                .iter()
-                .any(|(field, _)| field == "depot_positions_supported")
-        );
-        let mut fields = vec![
-            ("system_id".to_owned(), PreviousValue::None),
-            ("balance_requires_tan".to_owned(), PreviousValue::None),
-            ("tan_methods".to_owned(), PreviousValue::EmptySequence),
-            ("accounts".to_owned(), PreviousValue::EmptySequence),
-            ("selected_tan_method".to_owned(), PreviousValue::None),
-            ("selected_tan_medium".to_owned(), PreviousValue::None),
-        ];
-        fields.extend(projected);
-        let restored =
-            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
-                .unwrap();
+        assert!(projected.iter().any(|(field, value)| field == "version"
+            && matches!(value, StateValue::U16(REUSABLE_STATE_VERSION))));
+        let restored = ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(
+            projected.into_iter(),
+        ))
+        .unwrap();
 
+        assert_eq!(restored.version(), REUSABLE_STATE_VERSION);
         assert_eq!(restored.bpd_version(), 57);
         assert_eq!(restored.upd_version(), 1);
         assert!(restored.balance_versions.is_empty());
@@ -2085,34 +2009,65 @@ mod tests {
         assert!(capabilities.parameter_segments().is_empty());
     }
 
-    // Gate 4.38 briefly serialized both a support boolean and explicit
-    // versions. Raw caller-owned deserialization may observe that state before
-    // Engine::new; the version list is authoritative whenever it is present.
     #[test]
-    fn raw_deserialized_depot_capability_is_derived_from_versions() {
-        let fields = [
-            ("system_id", PreviousValue::None),
-            ("bpd_version", PreviousValue::U16(57)),
-            ("upd_version", PreviousValue::U16(1)),
-            ("balance_versions", PreviousValue::EmptySequence),
-            ("balance_requires_tan", PreviousValue::None),
-            ("depot_positions_supported", PreviousValue::Bool(true)),
-            (
-                "depot_position_versions",
-                PreviousValue::Sequence(vec![PreviousValue::U16(5)]),
-            ),
-            ("tan_methods", PreviousValue::EmptySequence),
-            ("accounts", PreviousValue::EmptySequence),
-            ("selected_tan_method", PreviousValue::None),
-            ("selected_tan_medium", PreviousValue::None),
-        ];
-        let state =
-            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
-                .unwrap();
-        let capability = state.advertised_capabilities().depot_positions().clone();
+    fn reusable_state_rejects_unknown_serialized_fields() {
+        let mut fields = ReusableState::new()
+            .serialize(ProjectionSerializer)
+            .unwrap();
+        fields.push(("future_field".to_owned(), StateValue::Bool(false)));
 
-        assert_eq!(capability.advertised_versions(), [5]);
-        assert!(capability.supports_version(5));
-        assert!(!capability.supports_version(6));
+        assert!(
+            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn current_reusable_state_requires_formerly_defaulted_fields() {
+        let mut fields = ReusableState::new()
+            .serialize(ProjectionSerializer)
+            .unwrap();
+        fields.retain(|(field, _)| field != "advertised_balance_versions");
+
+        assert!(
+            ReusableState::deserialize(MapDeserializer::<_, ValueError>::new(fields.into_iter()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn current_account_shape_requires_upd_usage_semantics() {
+        fn fields(include_usage: bool) -> Vec<(&'static str, StateValue)> {
+            let mut fields = vec![
+                ("iban", StateValue::None),
+                ("bic", StateValue::None),
+                ("account_number", StateValue::None),
+                ("subaccount", StateValue::None),
+                ("institute", StateValue::None),
+                ("currency", StateValue::None),
+                ("account_type", StateValue::None),
+                ("owner_name_1", StateValue::None),
+                ("owner_name_2", StateValue::None),
+                ("product_name", StateValue::None),
+                ("allowed_operations", StateValue::Sequence(Vec::new())),
+            ];
+            if include_usage {
+                fields.push(("unlisted_operations_unknown", StateValue::Bool(false)));
+            }
+            fields
+        }
+
+        assert!(
+            Account::deserialize(MapDeserializer::<_, ValueError>::new(
+                fields(true).into_iter()
+            ))
+            .is_ok()
+        );
+        assert!(
+            Account::deserialize(MapDeserializer::<_, ValueError>::new(
+                fields(false).into_iter()
+            ))
+            .is_err()
+        );
     }
 }
