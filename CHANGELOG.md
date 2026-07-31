@@ -1,5 +1,9 @@
 # Changelog
 
+- **0.2.0 — 2026-07-31** — Four owner-reviewed gates: registered connection/balances;
+  booked cash via camt/MT940; multibank official variations; depot positions, securities
+  transactions, and credit cards. All but Depotumsätze are live-verified; state is version-bound.
+
 - **2026-07-31** — Versioned serialized reusable state and reject incompatible shapes;
   consumers must discard mismatched state and re-synchronize, which may require a TAN.
 

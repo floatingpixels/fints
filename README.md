@@ -3,6 +3,21 @@
 Product-neutral Rust client for the bounded, read-only FinTS 3.0 PIN/TAN operations in
 `SCOPE.md`.
 
+## Status
+
+Version 0.2.0 completes the four owner-reviewed gates. Registered connections and
+synchronization, balances, booked cash transactions through camt and MT940, multibank
+official variations, depot positions, and credit-card balances and transactions have
+been verified against live institutions. Booked securities transactions
+(`Depotumsätze`, `HKWDU`) are implemented but not live-verified because no available
+institution advertises `HIWDUS`.
+
+The crate is consumed at exact pinned revisions and is not published. Serialized
+`ReusableState` is version-bound; after an incompatible upgrade the caller discards it
+and re-synchronizes. Version 1.0.0 remains reserved until every target institution,
+including Commerzbank, is verified and the crate has completed a period of stability
+without continued live-compatibility findings.
+
 - `SCOPE.md` — supported protocol surface, gates, and explicit exclusions.
 - `AGENTS.md` — implementation, dependency, security, and verification rules.
 - `BRIEFING.md` — non-normative Finanzplaner integration and agent handoff context.
