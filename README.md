@@ -46,7 +46,7 @@ hooks, but shows the complete control flow. A real UI should let the user choose
 the intersection of `allowed_tan_methods()` and `tan_methods()` rather than selecting
 the first one.
 
-```no_run
+```rust
 use chrono::NaiveDateTime;
 use fints::{
     Balance, BalanceRequest, Challenge, Client, ContinuationKind, Credentials, Error,
