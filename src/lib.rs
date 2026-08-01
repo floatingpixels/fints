@@ -1,7 +1,4 @@
-//! Product-neutral FinTS 3.0 PIN/TAN client.
-//!
-//! The supported protocol surface is deliberately bounded by `SCOPE.md`.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod capabilities;

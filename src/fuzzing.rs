@@ -1,4 +1,4 @@
-//! Internal owner-run fuzz harnesses.
+//! Internal parser fuzz harnesses.
 //!
 //! This module is available only with the non-default `fuzzing` feature. It exposes no
 //! parsed values and exists solely for the separate `fuzz/` package.

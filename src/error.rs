@@ -35,7 +35,7 @@ pub enum ResponseClass {
     Error,
 }
 
-/// A protocol capability that the current gate deliberately cannot use.
+/// A protocol capability that the client deliberately cannot use.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum Limitation {
     #[error("the institution does not advertise a supported balance operation")]
@@ -226,7 +226,7 @@ impl std::fmt::Debug for BankResponse {
     }
 }
 
-/// Failures exposed by the bounded supported-gate protocol engine.
+/// Failures exposed by the bounded FinTS protocol engine.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]

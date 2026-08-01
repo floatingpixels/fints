@@ -1,265 +1,262 @@
 # FinTS
 
-Product-neutral Rust client for the bounded, read-only FinTS 3.0 PIN/TAN operations in
-`SCOPE.md`.
+`fints` is a synchronous, read-only FinTS 3.0 PIN/TAN client for German banks. It
+retrieves account balances, booked cash transactions, securities positions and
+transactions, and credit-card balances and transactions. Payment initiation and every
+other state-changing banking operation are deliberately excluded.
 
-## Status
+## Support
 
-Version 0.2.0 completes the four owner-reviewed gates. Registered connections and
-synchronization, balances, booked cash transactions through camt and MT940, multibank
-official variations, depot positions, and credit-card balances and transactions have
-been verified against live institutions. Booked securities transactions
-(`Depotumsätze`, `HKWDU`) are implemented but not live-verified because no available
-institution advertises `HIWDUS`.
+Support is negotiated from the institution's live BPD/UPD. An operation is available
+only when the institution advertises a segment version implemented by the crate and the
+user's account is authorized for it.
 
-The crate is consumed at exact pinned revisions and is not published. Serialized
-`ReusableState` is version-bound. After an upgrade, stored state may fail to deserialize
-or return `Error::ReusableStateVersion`; callers treat both identically by discarding
-the derived state and re-synchronizing. Version 1.0.0 remains reserved until every
-target institution, including Commerzbank, is verified and the crate has completed a
-period of stability without continued live-compatibility findings.
+| Operation | FinTS segments | Response format | Live verification |
+| --- | --- | --- | --- |
+| Dialog, synchronization, TAN methods and media | `HKSYN`/`HISYN`; `HKTAN`/`HITAN` 6-7; `HKTAB`/`HITAB` 2-5 | FinTS PIN/TAN | Verified against multiple institutions |
+| Cash-account balance | `HKSAL`/`HISAL` 5-8 | FinTS segment data | Verified |
+| Booked cash transactions | `HKCAZ`/`HICAZ` 1; `HKKAZ`/`HIKAZ` 6-7 | camt.052.001.08 or MT940 | Both formats verified |
+| Securities positions | `HKWPD`/`HIWPD` 5-6 | MT535 | Verified |
+| Booked securities transactions | `HKWDU`/`HIWDU` 5 | MT536 | Implemented, but not live-verified because no available institution advertises `HIWDUS` |
+| Credit-card balance | `HKKKS`/`HIKKS` 1 | G112 FinTS segment data | Verified |
+| Booked credit-card transactions | `HKKKU`/`HIKKU` 1 | G112 FinTS segment data | Verified |
 
-- `SCOPE.md` — supported protocol surface, gates, and explicit exclusions.
-- `AGENTS.md` — implementation, dependency, security, and verification rules.
-- `BRIEFING.md` — non-normative Finanzplaner integration and agent handoff context.
-- `docs/SPECIFICATIONS.md` — exact official specification source register.
-- `CHANGELOG.md` — completed progress, at most three lines per entry.
+Live verification demonstrates operation families and deployed variations; it is not a
+claim that every listed version is available at every institution. Unsupported,
+unadvertised, and unauthorized combinations return typed `Limitation` values instead of
+guessed fallbacks.
 
-The crate is intentionally independent of Finanzplaner, Tauri, persistence, UI, and
-institution directories. Consumers provide their own endpoint, registered product
-identity, credentials, and durable storage.
+The crate is currently consumed through exact Git revisions and is not published on
+crates.io:
 
-## Gate 1 through Gate 4 API
+```toml
+[dependencies]
+fints = { git = "https://github.com/floatingpixels/fints.git", rev = "<immutable-commit>" }
+```
 
-`Client` is a concrete synchronous HTTPS client for one institute and one user. The
-caller supplies:
+## Quick start
 
-- an HTTPS FinTS PIN/TAN endpoint;
-- an `InstituteId`;
-- the registered customer application's `ProductIdentity`;
-- `Credentials`; and
-- a new or previously serialized `ReusableState`.
+FinTS is a dialog protocol. Initialization may require parameter refresh, TAN-method and
+medium selection, synchronization, a typed TAN, or decoupled approval. Operations use
+their own continuation types; do not discard a continuation and retry the original
+request inside the same dialog.
 
-The product identity is sent in `HKVVB` on every initialization. This crate has no
-built-in registration ID and is not itself the registered customer application.
-`ReusableState` derives Serde traits so the caller can choose its own encrypted
-persistence format. Credentials are never serializable.
+The example below leaves user input, waiting, and encrypted persistence as caller
+hooks, but shows the complete control flow. A real UI should let the user choose among
+the intersection of `allowed_tan_methods()` and `tan_methods()` rather than selecting
+the first one.
 
-Reusable state has an explicit serialized-format version and a required current shape.
-After a crate upgrade, stored state may fail to deserialize or may deserialize and then
-be rejected as `Error::ReusableStateVersion`. Both outcomes are expected and use one
-caller recovery path: discard the state and re-synchronize instead of attempting
-migration or repair. This is safe because the state is derived from bank parameters. A
-crate upgrade may therefore require one additional synchronization dialog and,
-depending on the institution, a TAN.
+```no_run
+use chrono::NaiveDateTime;
+use fints::{
+    Balance, BalanceRequest, Challenge, Client, ContinuationKind, Credentials, Error,
+    Initialization, InstituteId, Limitation, PollingMode, ProductIdentity, ReusableState,
+    Synchronization, Tan,
+};
 
-A new connection follows this bounded sequence:
+fn read_balance(
+    endpoint: &str,
+    bank_code: &str,
+    product_id: &str,
+    credentials: Credentials,
+    state: ReusableState,
+    mut now: impl FnMut() -> NaiveDateTime,
+    mut collect_tan: impl FnMut(&Challenge) -> Result<Tan, Error>,
+    mut wait_until: impl FnMut(NaiveDateTime),
+) -> Result<(Box<Balance>, ReusableState), Error> {
+    let mut client = Client::new(
+        endpoint,
+        InstituteId::new("280", bank_code)?,
+        ProductIdentity::new(product_id, "1.0")?,
+        credentials,
+        state,
+    )?;
 
-1. Call `initialize`. With neither a system ID nor a selected method, the client opens
-   the required function-999 synchronization dialog, sends HKSYN, retains the HISYN
-   system ID, obtains response code 3920, and closes any open dialog. It returns
-   `Initialization::ChooseTanMethod` when matching BPD method descriptions are usable.
-   If that response supplies usable BPD and method parameters but omits mandatory
-   HISYN, initialization returns `MissingValue("assigned system ID")` while retaining
-   those parameters. The caller may select from the retained allowed-method
-   intersection; the client then performs the required fresh synchronization when no
-   system ID exists, or ordinary initialization when one is already retained.
-2. If it instead returns `Initialization::RefreshParameters`, call
-   `refresh_parameters` once. Then offer only `tan_methods()` whose identifiers also
-   occur in `allowed_tan_methods()`; never construct a method from a 3920 identifier.
-   If the institution terminates that anonymous BPD-zero request without complete BPD,
-   the crate returns `Limitation::TanMethodParametersUnavailable`; there is no
-   specification-defined alternate bootstrap or automatic retry.
-3. Call `select_tan_method` for that intersection. `medium_name_required()` is true
-   only when HITANS advertises requirement code 2 and more than one active medium.
-   If the method requires a named medium, call `discover_tan_media` and
-   `select_tan_medium`. A missing HITAB response fails as a typed missing value;
-   an empty or non-selectable required list returns
-   `Limitation::TanMediumUnavailable`. The accepted discovery dialog is still
-   closed exactly once. A process-4 HITAN acknowledges the embedded HKTAN; when
-   that initialization response does not already contain HITAB, the client sends
-   the separate HKTAB order in the same dialog using the highest mutually
-   supported advertised version (2, 3, 4, or 5). No common version returns
-   `Limitation::TanMediumVersion` before network I/O.
-   A sole unnamed generator record is not an implicit selection: when HKTAN
-   requires DE 12, only the HITAB medium designation supplies that value, so an
-   unnamed list returns `Limitation::TanMediumUnavailable`.
-   UPD is not a prerequisite for this first-access flow, and the HKTAB filler is
-   not a substitute for a real medium in an ordinary initialization.
-4. Call `initialize` again. Once it returns `Connected`, call only an advertised
-   operation authorized for an account discovered through `accounts()`, then call
-   `terminate`.
+    let mut initialization = client.initialize(now())?;
+    loop {
+        initialization = match initialization {
+            Initialization::Connected => break,
+            Initialization::RefreshParameters => {
+                client.refresh_parameters(now())?;
+                client.initialize(now())?
+            }
+            Initialization::ChooseTanMethod => {
+                let (security_function, medium_required) = {
+                    let method = client
+                        .tan_methods()
+                        .iter()
+                        .find(|method| {
+                            client
+                                .allowed_tan_methods()
+                                .iter()
+                                .any(|allowed| allowed == method.security_function())
+                        })
+                        .ok_or(Limitation::TanMethodParametersUnavailable)?;
+                    (
+                        method.security_function().to_owned(),
+                        method.medium_name_required(),
+                    )
+                };
+                client.select_tan_method(&security_function)?;
 
-`synchronize` remains available for an explicit bank-directed resynchronization after
-a method has been selected; ordinary first contact obtains the system ID through the
-initial `initialize` call.
+                if medium_required {
+                    let medium_name = client
+                        .discover_tan_media(now())?
+                        .iter()
+                        .find_map(|medium| medium.name())
+                        .ok_or(Limitation::TanMediumUnavailable)?
+                        .to_owned();
+                    client.select_tan_medium(&medium_name)?;
+                }
 
-`refresh_parameters` actively requests current BPD with client BPD version zero,
-atomically applies the complete response, and closes its anonymous dialog. It is the
-recovery path when 3920 supplies no usable method; the client does not silently guess a
-method. `last_initialization_stage()` reports whether this direct refresh last reached
-anonymous initialization or termination. Allowed 3920 identifiers remain process-memory
-response state and are not added to serialized `ReusableState`.
+                // First contact normally receives a system ID during initialize().
+                // If the institution omitted it, synchronize after method selection.
+                if client.state().system_id().is_none() {
+                    let mut synchronization = client.synchronize(now())?;
+                    loop {
+                        synchronization = match synchronization {
+                            Synchronization::Complete => break,
+                            Synchronization::Challenge(continuation) => {
+                                match continuation.kind() {
+                                    ContinuationKind::Tan => {
+                                        let tan = collect_tan(continuation.challenge())?;
+                                        client.submit_synchronization_tan(
+                                            *continuation,
+                                            &tan,
+                                            now(),
+                                        )?
+                                    }
+                                    ContinuationKind::DecoupledApproval => {
+                                        let poll_at = continuation
+                                            .earliest_poll_at()
+                                            .ok_or(Error::InconsistentState)?;
+                                        wait_until(poll_at);
+                                        client.poll_synchronization(
+                                            *continuation,
+                                            PollingMode::Manual,
+                                            poll_at,
+                                        )?
+                                    }
+                                }
+                            }
+                        };
+                    }
+                }
 
-Typed TAN and decoupled approval challenges are operation-specific, process-memory
-continuations. A continuation reports `ContinuationKind`, the challenge, and the
-earliest permitted poll time. Submit a `Tan` only through the matching
-`submit_*_tan` method. For a decoupled challenge, pass `PollingMode::Manual` or
-`PollingMode::Automatic` to the matching `poll_*` method; an unadvertised mode,
-early poll, expired challenge, or exhausted poll bound fails explicitly. Dropping a
-continuation does not serialize it; call `terminate` to cancel the active dialog.
-A rejected TAN deliberately ends the Gate 1 flow: terminate when possible, then
-restart the complete dialog instead of retrying the TAN inside the existing dialog.
-The same operation-bound continuation contract applies to every Gate 2 and Gate 4
-read. After a TAN or decoupled approval completes, the client automatically exhausts
-any remaining same-dialog pages before returning the result.
+                client.initialize(now())?
+            }
+            Initialization::Challenge(continuation) => match continuation.kind() {
+                ContinuationKind::Tan => {
+                    let tan = collect_tan(continuation.challenge())?;
+                    client.submit_initialization_tan(*continuation, &tan, now())?
+                }
+                ContinuationKind::DecoupledApproval => {
+                    let poll_at = continuation
+                        .earliest_poll_at()
+                        .ok_or(Error::InconsistentState)?;
+                    wait_until(poll_at);
+                    client.poll_initialization(
+                        *continuation,
+                        PollingMode::Manual,
+                        poll_at,
+                    )?
+                }
+            },
+        };
+    }
 
-The most recently parsed bank response codes are available through
-`last_responses()`. Alongside the numeric code, optional segment reference, response
-class, and bounded recovery category, they retain the bank-authored free text,
-data-element reference, and parameters through explicit accessors. The caller owns
-display and logging policy for that diagnostic text; crate error messages and `Debug`
-output omit it. `last_tan_media_discovery_responses()` separately preserves the
-discovery operation's responses across its internal HKEND cleanup without changing
-`last_responses()` semantics. Raw authenticated messages are not retained.
+    let mut request = client.balance(0, now())?;
+    let balance = loop {
+        request = match request {
+            BalanceRequest::Complete(balance) => break balance,
+            BalanceRequest::Challenge(continuation) => match continuation.kind() {
+                ContinuationKind::Tan => {
+                    let tan = collect_tan(continuation.challenge())?;
+                    client.submit_balance_tan(*continuation, &tan, now())?
+                }
+                ContinuationKind::DecoupledApproval => {
+                    let poll_at = continuation
+                        .earliest_poll_at()
+                        .ok_or(Error::InconsistentState)?;
+                    wait_until(poll_at);
+                    client.poll_balance(*continuation, PollingMode::Manual, poll_at)?
+                }
+            },
+        };
+    };
 
-`Client::new_with_trace` optionally accepts a per-client `TraceSink`. It receives raw
-outgoing and Base64-decoded incoming FinTS payloads with a monotonically increasing
-exchange index. These payloads can contain credentials and all private protocol data;
-installing a sink explicitly makes the caller responsible for its handling. `Client::new`
-has no trace path, and the crate never logs or stores traced payloads itself.
+    client.terminate(now())?;
+    Ok((balance, client.into_state()))
+}
+```
 
-## Supported Gate 1 profile
+The selected account index comes from `client.accounts()`. Each other read operation
+has the same shape: an initial method returns either a complete typed result or an
+operation-specific challenge, and the matching `submit_*_tan` or `poll_*` method
+consumes that challenge.
 
-- FinTS 3.0 delimiter syntax using the Latin-1 code set, strict byte lengths,
-  escaping, binary values, ordering, and numbering.
-- PIN/TAN security envelopes `HNSHK` 4, `HNSHA` 2, `HNVSK` 3, and `HNVSD` 1.
-- `HKTAN`/`HITAN` 6 for typed process-variant-2 TANs and version 7 for typed or
-  decoupled approval; process variant 1 and required HHD responses are typed
-  limitations.
-- BPD/UPD, system-ID synchronization, TAN-method selection, and negotiated
-  `HKTAB`/`HITAB` 2-5 medium discovery.
-- Advertised `HKSAL`/`HISAL` versions 5-8 for one UPD-authorized cash account.
-  Version 5 uses its archived HBCI-defined national-account and legacy response
-  layout. The client obeys `HIPINS` instead of assuming that balance retrieval is
-  TAN-free.
+## Key concepts
 
-Missing capabilities, unsupported parameter combinations, and multiple required
-signers return `Limitation`; the client never invents account or balance data.
-Redirects are disabled, response size is bounded, and complete HTTPS bodies use the
-officially inherited MIME Base64 mapping. Bounded MIME folding whitespace is accepted;
-malformed Base64, HTML, non-whitespace transport garbage, and raw FinTS remain
-transport errors. Any transport failure discards the uncertain local dialog; the
-caller starts a fresh initialization instead of replaying a message number.
-Authenticated institute responses accept only the specified HNVSK/HNVSD envelope and
-an optional matched HNSHK/HNSHA control pair around HIRMG and response data; arbitrary
-prefix segments and incomplete security framing remain typed response errors. FinTS
-filler values are format-checked but not semantically interpreted; structural failures
-expose only stable field categories, never received values.
+- **Live capability negotiation.** BPD describes institution-wide segment versions and
+  PIN/TAN rules; UPD describes the user's accounts and allowed operations. Checking both
+  prevents a request from being inferred from an endpoint or account type alone.
+- **Typed limitations.** Missing advertisements, unsupported versions, multiple required
+  signers, and unsupported TAN combinations are normal `Limitation` results. The client
+  does not retry a different format after failure or fabricate missing data.
+- **Process-memory continuations.** TAN challenges, decoupled approvals, pagination
+  points, dialog identifiers, and one-time TANs are never serializable. The continuation
+  binds the next action to its operation and dialog and carries the earliest legal poll
+  time.
+- **Version-bound reusable state.** `ReusableState` contains the assigned system ID,
+  selected TAN settings, and retained BPD/UPD, including account identifiers and owner
+  names. Store it only in encrypted storage. After a crate upgrade it may fail to
+  deserialize or return `Error::ReusableStateVersion`; both mean discard it and
+  re-synchronize. The state is derived from bank parameters and is not migrated.
+- **Redaction by default.** Credentials, PINs, TANs, challenges, raw messages, account
+  identifiers, balances, positions, and transactions never enter crate-owned logs,
+  panic messages, or ordinary `Debug` output. Bank response text is available only
+  through explicit `BankResponse` accessors, so its display and logging policy belongs
+  to the caller. Installing a `TraceSink` is an explicit exception that delivers raw,
+  credential-bearing payloads directly to the caller.
+- **Bounded parsing and transport.** HTTPS redirects are disabled; response size,
+  message structure, XML depth, pagination, continuation count, and aggregate results
+  are bounded. Invalid transport Base64, malformed messages, and repeated continuation
+  points fail explicitly.
 
-Secret-bearing and private-data-bearing types intentionally omit `Debug`. Callers
-must not log credentials, continuations, challenges, accounts, balances, endpoints
-containing private query data, or serialized reusable state.
+## Caller responsibilities
 
-## Supported Gate 2 profile
+A caller supplies:
 
-- `booked_transactions` prefers advertised and UPD-authorized `HKCAZ`/`HICAZ` 1
-  with `camt.052.001.08`, then falls back only to advertised `HKKAZ`/`HIKAZ` 7
-  or 6.
-  This deterministic fallback also applies when `HIPINS` is silent on advertised
-  `HKCAZ`, or when `HKCAZ` requires multiple signatures while `HKKAZ` requires one;
-  a failed request never triggers fallback.
-- Only `BOOK` entries are returned. Pending camt entries and MT942 data are outside
-  Gate 2; unsupported descriptors, segment versions, and missing account permission
-  are typed limitations.
-- FinTS response-code 3040 pagination is exhausted in the active dialog. Opaque
-  continuation points are never persisted; repeated points, more than 100 pages,
-  or more than 10,000 aggregate entries fail explicitly without a partial result.
-- camt XML is parsed as bounded, namespace-aware UTF-8. The legacy MT940 fallback
-  uses its specified Latin-1 form and preserves either the supplied bank reference
-  or the exact statement number, page number, and entry position. Gate 2 does not
-  compare MT940 `:25:` with the requested UPD account because deployed formats vary;
-  the result remains bound to the UPD account used for the request. This limitation
-  remains deliberate after the Gate 3 fictional profile review.
-- Amounts, directions, dates, reversal status, references, transaction codes,
-  counterpart data, and remittance information are returned only where the
-  institution supplies them. No transaction fingerprint is synthesized.
+- the institution's HTTPS FinTS PIN/TAN endpoint and German bank code;
+- a product registration ID and application version for `HKVVB`;
+- the user ID, optional customer ID, and PIN;
+- user interaction for TAN-method and medium selection, TAN entry, and decoupled
+  approval timing; and
+- encrypted durable storage for serialized `ReusableState`.
 
-`BookedTransactions`, `BookedEntry`, `BookedTransactionDetail`, and
-`StatementPosition` contain private financial data and deliberately omit `Debug`.
-They are process results, not serializable reusable state, and callers must never
-log them.
+Deutsche Kreditwirtschaft requires client applications to identify themselves with a
+registered product identity. The application using this crate—not the crate itself—is
+the registered product. See the official
+[FinTS product-registration page](https://www.fints.org/de/hersteller/produktregistrierung).
 
-## Supported Gate 3 compatibility
+The caller also owns endpoint discovery, credential storage, result persistence,
+logging policy, retries between user actions, and UI. Live BPD/UPD—not an institute
+directory—remains authoritative for supported operations and security methods.
 
-- Four independently written fictional profiles cover the advertised combinations
-  demonstrated by one Atruvia institution, one Finanz Informatik institution, and
-  two independently operated institutions. Names never select protocol behavior.
-- BPD capabilities are replaced as a complete set and supported versions are
-  selected deterministically. An advertised but unsupported balance version differs
-  from an operation that was never advertised.
-- A same-version HIBPA does not erase retained capabilities when business
-  parameter segments are omitted; a changed BPD version replaces the complete set.
-- `advertised_capabilities()` derives one redacted snapshot for balance, camt and MT940
-  cash transactions, depot positions and transactions, and credit-card reads. It
-  includes advertised and supported versions, HIPINS TAN facts, camt descriptors,
-  advertised retention windows, and every safe parameter-segment code/version observed
-  in the current BPD.
-- Non-account-bound HIUPD records are accepted without fabricating accounts, and the
-  official HIUPD 6 correction for an erroneous 35-character IBAN is applied exactly.
-- HIBPA parameters whose institute identity differs from the configured institute
-  fail before reusable state changes. Codes such as 9075 and 9185 retain distinct
-  actionable recovery categories without interpreting bank free text.
+## Deliberate exclusions
 
-Gate 3 adds no institution registry, provider abstraction, endpoint discovery, new
-operation, or dependency. Stale or wrong endpoint selection remains caller-owned;
-the crate reports the typed protocol or transport evidence it can verify.
+The crate does not implement:
 
-## Supported Gate 4 products
+- transfers, direct debits, payment initiation, or any other state-changing operation;
+- FinTS 4.x;
+- HBCI card or key-file security;
+- institute or endpoint directories;
+- credential or result storage; or
+- background synchronization, scheduling, UI, or retry orchestration.
 
-- `depot_positions` uses only advertised and UPD-authorized `HKWPD`/`HIWPD` 5-6.
-  Its bounded MT535 parser preserves supplied
-  instrument identifiers, quantities and signs, market or indicative prices,
-  currencies, dates, market values, and amount- or percentage-denominated cost
-  basis. Malformed optional position values and portfolio page totals remain
-  absent with typed degraded/skipped/malformed-total counts; an unusable required
-  position is skipped without hiding that loss.
-- `securities_transactions` uses only advertised and UPD-authorized
-  `HKWDU`/`HIWDU` 5. Its bounded MT536 parser preserves
-  supplied references, instruments, quantities, prices, amounts, accrued
-  interest, movement types, dates, reversal status, and free text. The protocol
-  sentinel `NONREF` and an omitted optional transaction-detail block remain
-  missing values. MT536 has no typed fee field, so free text is never interpreted
-  as a fee or transaction identity. The MT535 loss-isolation counters do not apply
-  to MT536 transactions or credit-card entries: their malformed consumed fields
-  still fail the complete typed page/response.
-- `credit_card_transactions` and `credit_card_balance` use G112
-  `HKKKU`/`HIKKU`/`HIKKUS` 1 and `HKKKS`/`HIKKS`/`HIKKSS` 1. The conditional
-  international account binding and optional date range come exclusively from
-  BPD; UPD must independently authorize the operation. Institution-defined
-  card-number masking is preserved as returned, and current-balance dates and
-  optional times are preserved exactly. A card balance is neither derived from
-  nor reconciled to returned entries.
-- UPD `Kontoart` remains optional descriptive metadata for caller-side routing.
-  It never vetoes an operation that the account's allowed-operation list
-  explicitly authorizes; `UPD-Verwendung` still governs unlisted operations.
-- FinTS continuation points are exhausted in the active dialog with the same
-  repeated-point, 100-page, and 10,000-entry bounds as Gate 2. `HIPINS` decides
-  whether each operation requires TAN handling.
-- Unsupported versions and unadvertised or unauthorized operations are typed
-  `Limitation` values. The crate never derives securities transactions from
-  position snapshots and never fills an absent response field from request data.
-- An IBAN-only depot without a UPD account number cannot pass strict MT535/MT536
-  `:97A:` identity verification and returns a typed error. This deliberate
-  limitation is revisited only if live findings justify a bounded protocol rule.
+## Development and verification
 
-All Gate 4 position, transaction, card, balance, and continuation types contain
-private financial data, deliberately omit `Debug`, remain process-memory values,
-and must never be logged or serialized as reusable state.
-
-## Development
-
-The repository uses an exact Rust toolchain through a Nix flake and nix-direnv:
+The exact Rust toolchain is supplied by the Nix flake and nix-direnv:
 
 ```sh
 direnv allow
@@ -267,10 +264,7 @@ direnv allow
 nix develop
 ```
 
-The shell supplies `rustc`, Cargo, Clippy, rustfmt, rust-analyzer, and Rust sources from
-the toolchain pinned by `rust-toolchain.toml` and `flake.lock`.
-
-Run the full verification stack before every gate handoff:
+Run the complete verification stack from that environment:
 
 ```sh
 cargo test --all-targets
@@ -279,82 +273,33 @@ cargo fmt --all --check
 cargo doc --no-deps
 ```
 
-Live bank access is never part of the default test suite. Owner credentials and captures
-must stay outside the repository.
+Network-independent fixtures are the primary evidence. `examples/live_probe.rs` is an
+explicitly enabled, non-persisting live client for attended interoperability checks; it
+requires `FINTS_LIVE_PROBE=1` and the endpoint, bank code, user, PIN, and registered
+product identity environment variables. Its output includes bank-authored response
+text, which may mention private account or order information.
 
-### Owner-run parser fuzzing
+`FINTS_LIVE_TRACE=1` additionally enables raw credential-bearing trace output. Keep any
+capture in an ignored ephemeral file, render only its structure with
+`tools/fints_segment_shape.sh` or `tools/swift_shape.sh`, and delete the raw file. The
+scripts expose component occupancy and character-class patterns without exposing field
+values. The optional `diagnostics` feature similarly exposes only value-free structural
+facts; those facts are intended for human diagnosis and are not a stable control-flow
+API.
 
-The separate `fuzz/` crate contains bounded cargo-fuzz targets for the wire, camt,
-MT940, securities-document, and credit-card-entry parsers. It is not a workspace member
-and is never part of CI or the default verification stack. Its committed seed corpora
-come only from the repository's fictional specification fixtures.
+The separate `fuzz/` package contains manually run cargo-fuzz targets for the FinTS wire,
+camt, MT940, MT535/MT536, and credit-card parsers. It is not a workspace member and does
+not run in the default verification stack.
 
-Run a target explicitly with nightly Rust, for example:
+## Project documents
 
-```sh
-cargo +nightly fuzz run message
-```
-
-Typed parser errors are expected; the target succeeds while parsing remains panic- and
-OOM-free. Generated corpora, crashes, and artifacts stay ignored under `fuzz/`.
-
-### Owner-run live probe
-
-`examples/live_probe.rs` is an opt-in diagnostic caller and persists nothing. It refuses
-to run unless `FINTS_LIVE_PROBE=1` is set:
-
-```sh
-FINTS_LIVE_PROBE=1 \
-FINTS_ENDPOINT='https://bank.example/fints' \
-FINTS_BLZ='12345678' \
-FINTS_USER_ID='owner-input' \
-FINTS_PIN='owner-input' \
-FINTS_PRODUCT_ID='registered-caller-input' \
-FINTS_PRODUCT_VERSION='1.0' \
-FINTS_PROBE_SYNCHRONIZE=1 \
-cargo run --features diagnostics --example live_probe
-```
-
-`FINTS_CUSTOMER_ID` and `FINTS_COUNTRY_CODE` are optional. Method selection uses
-`FINTS_TAN_METHOD` or `FINTS_TAN_METHOD_INDEX`; a required medium uses
-`FINTS_TAN_MEDIUM_INDEX`. Each one-time TAN is read interactively from stdin and the
-terminal may echo it.
-
-The optional account-index flags `FINTS_PROBE_BALANCE_ACCOUNT`,
-`FINTS_PROBE_DEPOT_POSITIONS_ACCOUNT`, `FINTS_PROBE_DEPOT_TRANSACTIONS_ACCOUNT`,
-`FINTS_PROBE_CARD_BALANCE_ACCOUNT`, and `FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT`
-enable the corresponding read. Financial values and identifiers are never printed;
-depot probes report only result counts and, with diagnostics enabled, value-free
-block and field-presence facts. A successfully parsed block tree remains available
-after a later field error. Depot-position results report typed degraded, skipped, and
-malformed-page-total counts: malformed optional values remain absent on an otherwise
-usable position, while a position lacking a usable required instrument or aggregate
-quantity is skipped. Valid portfolio totals remain available when a malformed sibling
-is counted and omitted.
-Optional 90A/90B diagnostics report only structural categories and validation
-booleans; per-position diagnostics add only the one-based source ordinal, disposition,
-and static failure site. The probe prints all caller-visible bank response texts,
-which may reference the owner's accounts or orders.
-
-`FINTS_LIVE_TRACE=1` additionally installs the raw trace sink and writes complete
-credential-bearing request and response payloads to stdout as hexadecimal and escaped
-Latin-1 text. Use it only in an owner-controlled terminal. For structural capture,
-redirect it only to an ignored ephemeral file, render that file through `tools/`, and
-delete it immediately; never paste the raw output into an issue or agent conversation
-or enable it in normal consumers.
-
-### Supported diagnostics
-
-The non-default `diagnostics` feature exposes initialization decision
-booleans, TAN-medium-discovery structure, and MT535/MT536 block inventories and
-field-presence booleans for interoperability work. It is supported, opt-in, and safe to
-enable in a shipped build when diagnosing a failing connection. It never exposes
-inspected field values, segment contents, response text or parameters, medium names,
-generator-card values, securities identifiers, amounts, references, or dates. Default
-builds carry no diagnostic code or storage; the public API and its storage fields exist
-only when the feature is explicitly enabled.
-
-Diagnostic facts describe internal parsing and negotiation structure. Their shape may
-change in any revision and is not a stable API contract: callers may render or log the
-facts for humans, but must never branch on them. Control flow uses typed limitations,
-errors, and advertised-capability snapshots only.
+- [`docs/SPECIFICATIONS.md`](docs/SPECIFICATIONS.md) registers the exact official
+  documents, sections, hashes, corrections, and implementation authority behind the
+  protocol behavior.
+- [`SCOPE.md`](SCOPE.md) records the supported product boundary and explicit exclusions.
+- [`AGENTS.md`](AGENTS.md) records the repository's contribution, security, dependency,
+  and verification rules.
+- [`docs/BRIEFING.md`](docs/BRIEFING.md) contains Finanzplaner-specific integration and
+  live-verification context.
+- [`CHANGELOG.md`](CHANGELOG.md) is the chronological implementation and
+  interoperability record.

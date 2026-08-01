@@ -136,7 +136,7 @@ pub struct CreditCardBalanceContinuation {
     pending: PendingChallenge,
 }
 
-/// Concrete synchronous FinTS client for the operations supported through Gate 4.
+/// Concrete synchronous client for the supported read-only FinTS operations.
 ///
 /// The client deliberately has no `Debug` implementation because it owns credentials,
 /// dialog state, challenges, and authenticated protocol messages.
@@ -250,7 +250,7 @@ impl Client {
         self.last_initialization_stage
     }
 
-    /// Opt-in redacted initialization-decision facts for owner-attended diagnostics.
+    /// Opt-in redacted initialization-decision facts for attended diagnostics.
     ///
     /// This API exists only with the opt-in `diagnostics` feature. Its fact shape is
     /// unstable and must not drive caller control flow.

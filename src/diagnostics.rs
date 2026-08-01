@@ -902,7 +902,7 @@ impl TanMediumElementShapeFact {
     }
 }
 
-/// One validated response/business segment observed during an owner-attended diagnostic.
+/// One validated response/business segment observed during an attended diagnostic.
 ///
 /// Segment codes and versions are generic protocol facts. This type contains no segment
 /// contents and deliberately does not implement serialization.

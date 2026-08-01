@@ -1,7 +1,7 @@
 # FinTS Client Briefing
 
-This document is non-normative handoff context. `SCOPE.md` and `AGENTS.md` remain the
-authorities.
+This document is non-normative handoff context. [`SCOPE.md`](../SCOPE.md) and
+[`AGENTS.md`](../AGENTS.md) remain the authorities.
 
 ## Why this repository exists
 
