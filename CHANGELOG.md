@@ -1,5 +1,9 @@
 # Changelog
 
+- **0.3.0 — 2026-08-03** — Gate 5: all IO-performing operations become `async fn` on the
+  async reqwest transport (tokio dev-dependency only); cancelled in-flight exchanges abort
+  the dialog into typed errors. Wire behavior, bounds, state shapes, and results unchanged.
+
 - **0.2.0 — 2026-07-31** — Four owner-reviewed gates: registered connection/balances;
   booked cash via camt/MT940; multibank official variations; depot positions, securities
   transactions, and credit cards. All but Depotumsätze are live-verified; state is version-bound.
