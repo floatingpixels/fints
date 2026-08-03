@@ -21,8 +21,6 @@ pub(crate) use initialization::TanMediaInitializationResult;
 
 const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
 const LOCAL_CONTINUATION_LIMIT: u16 = 20;
-const LOCAL_TRANSACTION_PAGE_LIMIT: u16 = 100;
-const LOCAL_TRANSACTION_ENTRY_LIMIT: usize = 10_000;
 
 pub(crate) struct Engine {
     institute: InstituteId,

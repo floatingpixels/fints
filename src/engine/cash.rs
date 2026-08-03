@@ -15,10 +15,12 @@ use crate::{
 };
 
 use super::{
-    Engine, LOCAL_TRANSACTION_ENTRY_LIMIT, LOCAL_TRANSACTION_PAGE_LIMIT, PendingChallenge,
-    PendingOperation, continued_challenge, pending_challenge, validate_continuation_process,
-    validate_tan_process,
+    Engine, PendingChallenge, PendingOperation, continued_challenge, pending_challenge,
+    validate_continuation_process, validate_tan_process,
 };
+
+pub(super) const LOCAL_TRANSACTION_PAGE_LIMIT: u16 = 100;
+const LOCAL_TRANSACTION_ENTRY_LIMIT: usize = 10_000;
 
 pub(super) struct TransactionState {
     pub(super) account: crate::model::Account,

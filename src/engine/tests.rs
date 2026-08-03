@@ -2113,7 +2113,7 @@ fn transaction_pagination_rejects_repeated_points_and_page_overflow() {
         .transaction_request(0, None, None, now().date(), now().time())
         .unwrap();
     bounded.accept_transactions(&first, now()).unwrap();
-    bounded.transaction.as_mut().unwrap().pages_requested = LOCAL_TRANSACTION_PAGE_LIMIT;
+    bounded.transaction.as_mut().unwrap().pages_requested = cash::LOCAL_TRANSACTION_PAGE_LIMIT;
     assert!(matches!(
         bounded.next_transaction_page_request(now().date(), now().time()),
         Err(Error::PaginationLimitReached)
