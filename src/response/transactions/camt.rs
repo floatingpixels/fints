@@ -23,11 +23,44 @@ pub(super) struct CamtPayload {
     pub(super) entries: Vec<BookedEntry>,
 }
 
+/// Enforces the node-count and nesting-depth bounds of one camt document.
+///
+/// Every accepted element passes through these checks, so the limits hold
+/// regardless of which parsing branch consumes the event.
+struct XmlBounds {
+    nodes: usize,
+}
+
+impl XmlBounds {
+    fn new() -> Self {
+        Self { nodes: 0 }
+    }
+
+    /// Counts one element start or empty element against [`MAX_XML_NODES`].
+    fn count_node(&mut self) -> Result<(), Error> {
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .filter(|count| *count <= MAX_XML_NODES)
+            .ok_or(malformed_transaction_data!())?;
+        Ok(())
+    }
+
+    /// Rejects a child of an element at `parent_depth` that would exceed
+    /// [`MAX_XML_DEPTH`].
+    fn check_depth(&self, parent_depth: usize) -> Result<(), Error> {
+        if parent_depth >= MAX_XML_DEPTH {
+            return Err(malformed_transaction_data!());
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     let mut reader = NsReader::from_reader(input);
     let mut stack = Vec::new();
     let mut state = CamtState::default();
-    let mut nodes: usize = 0;
+    let mut bounds = XmlBounds::new();
     let mut saw_declaration = false;
     let mut supplementary_depth = 0_usize;
 
@@ -38,21 +71,11 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
         if supplementary_depth > 0 {
             match event {
                 Event::Start(_) => {
-                    nodes = nodes
-                        .checked_add(1)
-                        .filter(|count| *count <= MAX_XML_NODES)
-                        .ok_or(malformed_transaction_data!())?;
-                    supplementary_depth = supplementary_depth
-                        .checked_add(1)
-                        .filter(|depth| *depth <= MAX_XML_DEPTH)
-                        .ok_or(malformed_transaction_data!())?;
+                    bounds.count_node()?;
+                    bounds.check_depth(supplementary_depth)?;
+                    supplementary_depth += 1;
                 }
-                Event::Empty(_) => {
-                    nodes = nodes
-                        .checked_add(1)
-                        .filter(|count| *count <= MAX_XML_NODES)
-                        .ok_or(malformed_transaction_data!())?;
-                }
+                Event::Empty(_) => bounds.count_node()?,
                 Event::End(_) => supplementary_depth -= 1,
                 Event::DocType(_) | Event::Eof => return Err(malformed_transaction_data!()),
                 _ => {}
@@ -65,13 +88,8 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                     && stack.is_empty()
                     && start.local_name().as_ref() == b"Document";
                 require_camt_namespace(namespace, document_root)?;
-                nodes = nodes
-                    .checked_add(1)
-                    .filter(|count| *count <= MAX_XML_NODES)
-                    .ok_or(malformed_transaction_data!())?;
-                if stack.len() >= MAX_XML_DEPTH {
-                    return Err(malformed_transaction_data!());
-                }
+                bounds.count_node()?;
+                bounds.check_depth(stack.len())?;
                 let local = std::str::from_utf8(start.local_name().as_ref())
                     .map_err(|_| malformed_transaction_data!())?
                     .to_owned();
@@ -126,10 +144,7 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                     && stack.is_empty()
                     && start.local_name().as_ref() == b"Document";
                 require_camt_namespace(namespace, document_root)?;
-                nodes = nodes
-                    .checked_add(1)
-                    .filter(|count| *count <= MAX_XML_NODES)
-                    .ok_or(malformed_transaction_data!())?;
+                bounds.count_node()?;
                 if matches!(
                     start.local_name().as_ref(),
                     b"Document" | b"BkToCstmrAcctRpt" | b"Rpt" | b"Ntry" | b"TxDtls"
@@ -702,4 +717,22 @@ fn ends_with(stack: &[Node], expected: &[&str]) -> bool {
             .iter()
             .map(|node| node.local.as_str())
             .eq(expected.iter().copied())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_bounds_reject_excess_nodes_and_depth() {
+        let mut bounds = XmlBounds::new();
+        for _ in 0..MAX_XML_NODES {
+            bounds.count_node().expect("nodes within the bound");
+        }
+        assert!(bounds.count_node().is_err());
+
+        let bounds = XmlBounds::new();
+        assert!(bounds.check_depth(MAX_XML_DEPTH - 1).is_ok());
+        assert!(bounds.check_depth(MAX_XML_DEPTH).is_err());
+    }
 }
