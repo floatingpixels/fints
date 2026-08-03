@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verification stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The flake pins the exact toolchain from rust-toolchain.toml, so CI,
+      # agents, and local development share one toolchain.
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: nix develop -c cargo test --all-targets
+
+      - name: Doctests
+        run: nix develop -c cargo test --doc
+
+      - name: Clippy
+        run: nix develop -c cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Formatting
+        run: nix develop -c cargo fmt --all --check
+
+      - name: Documentation
+        run: nix develop -c cargo doc --no-deps
+
+      # The fuzz harness is owner-run and outside the default verification
+      # stack, but it must keep compiling against the library.
+      - name: Fuzz crate builds
+        run: nix develop -c cargo check --manifest-path fuzz/Cargo.toml
