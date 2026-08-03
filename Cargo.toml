@@ -4,7 +4,10 @@ version = "0.3.1"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Product-neutral FinTS 3.0 PIN/TAN client"
-publish = false
+# Restricted to a non-configured registry: cargo publish cannot succeed, but the
+# package stays releasable for release-plz git tagging (publish = false would
+# exclude it from the release step entirely).
+publish = ["fints-internal"]
 
 [lib]
 path = "src/lib.rs"
