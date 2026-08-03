@@ -140,6 +140,16 @@ pub struct CreditCardBalanceContinuation {
 ///
 /// The client deliberately has no `Debug` implementation because it owns credentials,
 /// dialog state, challenges, and authenticated protocol messages.
+///
+/// # Cancellation
+///
+/// Operation futures are not cancel-safe: dropping one at its transport exchange
+/// (for example via a timeout or `select!`) leaves the bank-side dialog state
+/// unknown. The client stays memory-safe and detects the dropped exchange on the
+/// next operation, aborting the local dialog first. Continuations belonging to the
+/// cancelled dialog then fail with [`Error::StaleContinuation`]; dialog-opening
+/// operations such as [`Client::initialize`] start cleanly. Do not retry a
+/// cancelled operation inside the same dialog.
 pub struct Client {
     engine: Engine,
     transport: Transport,
@@ -299,7 +309,8 @@ impl Client {
     }
 
     /// Refreshes anonymous BPD and closes any dialog the institution leaves open.
-    pub fn refresh_parameters(&mut self, now: NaiveDateTime) -> Result<(), Error> {
+    pub async fn refresh_parameters(&mut self, now: NaiveDateTime) -> Result<(), Error> {
+        self.recover_cancellation();
         let Self {
             engine,
             transport,
@@ -309,30 +320,26 @@ impl Client {
         let stage = last_initialization_stage
             .as_mut()
             .expect("parameter refresh stage was set");
-        refresh_parameters_with_send(engine, now, stage, |request| {
-            transport.send(request).map_err(Error::from)
-        })
+        refresh_parameters_with_send(engine, transport, now, stage).await
     }
 
     /// Obtains a new assigned system ID and closes the synchronization dialog.
-    pub fn synchronize(&mut self, now: NaiveDateTime) -> Result<Synchronization, Error> {
+    pub async fn synchronize(&mut self, now: NaiveDateTime) -> Result<Synchronization, Error> {
+        self.recover_cancellation();
         let Self {
             engine, transport, ..
         } = self;
-        synchronize_with_send(engine, now, |request| {
-            transport.send(request).map_err(Error::from)
-        })
+        synchronize_with_send(engine, transport, now).await
     }
 
     /// Discovers TAN media using the dedicated process-4 initialization and the
     /// highest mutually supported HKTAB/HITAB version, then closes the dialog.
-    pub fn discover_tan_media(&mut self, now: NaiveDateTime) -> Result<&[TanMedium], Error> {
+    pub async fn discover_tan_media(&mut self, now: NaiveDateTime) -> Result<&[TanMedium], Error> {
+        self.recover_cancellation();
         let Self {
             engine, transport, ..
         } = self;
-        discover_tan_media_with_send(engine, now, |request| {
-            transport.send(request).map_err(Error::from)
-        })?;
+        discover_tan_media_with_send(engine, transport, now).await?;
         Ok(self.engine.tan_media())
     }
 
@@ -345,7 +352,8 @@ impl Client {
     /// terminated without mandatory response 3920, the client performs one anonymous
     /// BPD-zero refresh and one fresh discovery attempt. A repeated omission fails
     /// explicitly and is never retried in a loop.
-    pub fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
+    pub async fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
+        self.recover_cancellation();
         self.last_initialization_stage = Some(InitializationStage::InitialDiscovery);
         let Self {
             engine,
@@ -355,20 +363,19 @@ impl Client {
         let stage = last_initialization_stage
             .as_mut()
             .expect("initialization stage was set");
-        initialize_with_send(engine, now, stage, |request| {
-            transport.send(request).map_err(Error::from)
-        })
+        initialize_with_send(engine, transport, now, stage).await
     }
 
-    pub fn balance(
+    pub async fn balance(
         &mut self,
         account_index: usize,
         now: NaiveDateTime,
     ) -> Result<BalanceRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .balance_request(account_index, now.date(), now.time())?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_balance(self.engine.accept_balance(&response, now)?)
     }
 
@@ -376,45 +383,48 @@ impl Client {
     ///
     /// `from` and `to` are optional inclusive protocol dates. Returned data remains
     /// grouped with the requested account and must never be logged.
-    pub fn booked_transactions(
+    pub async fn booked_transactions(
         &mut self,
         account_index: usize,
         from: Option<chrono::NaiveDate>,
         to: Option<chrono::NaiveDate>,
         now: NaiveDateTime,
     ) -> Result<BookedTransactionRequest, Error> {
+        self.recover_cancellation();
         let request =
             self.engine
                 .transaction_request(account_index, from, to, now.date(), now.time())?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_transactions(&response, now)?;
-        self.finish_transactions(result, now)
+        self.finish_transactions(result, now).await
     }
 
     /// Retrieves advertised depot positions and exhausts same-dialog pagination.
     ///
     /// Positions and all account-bound values are private and must never be logged.
-    pub fn depot_positions(
+    pub async fn depot_positions(
         &mut self,
         account_index: usize,
         now: NaiveDateTime,
     ) -> Result<DepotPositionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .depot_positions_request(account_index, now.date(), now.time())?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_depot_positions(&response, now)?;
-        self.finish_depot_positions(result, now)
+        self.finish_depot_positions(result, now).await
     }
 
     /// Retrieves advertised booked securities transactions with optional inclusive dates.
-    pub fn securities_transactions(
+    pub async fn securities_transactions(
         &mut self,
         account_index: usize,
         from: Option<chrono::NaiveDate>,
         to: Option<chrono::NaiveDate>,
         now: NaiveDateTime,
     ) -> Result<SecuritiesTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self.engine.securities_transactions_request(
             account_index,
             from,
@@ -422,19 +432,20 @@ impl Client {
             now.date(),
             now.time(),
         )?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_securities_transactions(&response, now)?;
-        self.finish_securities_transactions(result, now)
+        self.finish_securities_transactions(result, now).await
     }
 
     /// Retrieves advertised booked credit-card transactions with optional inclusive dates.
-    pub fn credit_card_transactions(
+    pub async fn credit_card_transactions(
         &mut self,
         account_index: usize,
         from: Option<chrono::NaiveDate>,
         to: Option<chrono::NaiveDate>,
         now: NaiveDateTime,
     ) -> Result<CreditCardTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self.engine.credit_card_transactions_request(
             account_index,
             from,
@@ -442,266 +453,284 @@ impl Client {
             now.date(),
             now.time(),
         )?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self
             .engine
             .accept_credit_card_transactions(&response, now)?;
-        self.finish_credit_card_transactions(result, now)
+        self.finish_credit_card_transactions(result, now).await
     }
 
     /// Retrieves the independently reported G112 credit-card balance components.
-    pub fn credit_card_balance(
+    pub async fn credit_card_balance(
         &mut self,
         account_index: usize,
         now: NaiveDateTime,
     ) -> Result<CreditCardBalanceRequest, Error> {
+        self.recover_cancellation();
         let request =
             self.engine
                 .credit_card_balance_request(account_index, now.date(), now.time())?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_credit_card_balance(self.engine.accept_credit_card_balance(&response, now)?)
     }
 
-    pub fn submit_initialization_tan(
+    pub async fn submit_initialization_tan(
         &mut self,
         continuation: InitializationContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<Initialization, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_initialization(
             self.engine
                 .accept_initialization_continuation(&response, continuation.pending)?,
         )
     }
 
-    pub fn poll_initialization(
+    pub async fn poll_initialization(
         &mut self,
         mut continuation: InitializationContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<Initialization, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_initialization(
             self.engine
                 .accept_initialization_continuation(&response, continuation.pending)?,
         )
     }
 
-    pub fn submit_synchronization_tan(
+    pub async fn submit_synchronization_tan(
         &mut self,
         continuation: SynchronizationContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<Synchronization, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         self.finish_synchronization(response, continuation.pending, now)
+            .await
     }
 
-    pub fn poll_synchronization(
+    pub async fn poll_synchronization(
         &mut self,
         mut continuation: SynchronizationContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<Synchronization, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         self.finish_synchronization(response, continuation.pending, now)
+            .await
     }
 
-    pub fn submit_balance_tan(
+    pub async fn submit_balance_tan(
         &mut self,
         continuation: BalanceContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<BalanceRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_balance(
             self.engine
                 .accept_balance_continuation(&response, continuation.pending)?,
         )
     }
 
-    pub fn poll_balance(
+    pub async fn poll_balance(
         &mut self,
         mut continuation: BalanceContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<BalanceRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_balance(
             self.engine
                 .accept_balance_continuation(&response, continuation.pending)?,
         )
     }
 
-    pub fn submit_booked_transaction_tan(
+    pub async fn submit_booked_transaction_tan(
         &mut self,
         continuation: BookedTransactionContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<BookedTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result =
             self.engine
                 .accept_transactions_continuation(&response, continuation.pending, now)?;
-        self.finish_transactions(result, now)
+        self.finish_transactions(result, now).await
     }
 
-    pub fn poll_booked_transactions(
+    pub async fn poll_booked_transactions(
         &mut self,
         mut continuation: BookedTransactionContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<BookedTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result =
             self.engine
                 .accept_transactions_continuation(&response, continuation.pending, now)?;
-        self.finish_transactions(result, now)
+        self.finish_transactions(result, now).await
     }
 
-    pub fn submit_depot_position_tan(
+    pub async fn submit_depot_position_tan(
         &mut self,
         continuation: DepotPositionContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<DepotPositionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_depot_positions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_depot_positions(result, now)
+        self.finish_depot_positions(result, now).await
     }
 
-    pub fn poll_depot_positions(
+    pub async fn poll_depot_positions(
         &mut self,
         mut continuation: DepotPositionContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<DepotPositionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_depot_positions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_depot_positions(result, now)
+        self.finish_depot_positions(result, now).await
     }
 
-    pub fn submit_securities_transaction_tan(
+    pub async fn submit_securities_transaction_tan(
         &mut self,
         continuation: SecuritiesTransactionContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<SecuritiesTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_securities_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_securities_transactions(result, now)
+        self.finish_securities_transactions(result, now).await
     }
 
-    pub fn poll_securities_transactions(
+    pub async fn poll_securities_transactions(
         &mut self,
         mut continuation: SecuritiesTransactionContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<SecuritiesTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_securities_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_securities_transactions(result, now)
+        self.finish_securities_transactions(result, now).await
     }
 
-    pub fn submit_credit_card_transaction_tan(
+    pub async fn submit_credit_card_transaction_tan(
         &mut self,
         continuation: CreditCardTransactionContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<CreditCardTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_credit_card_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_credit_card_transactions(result, now)
+        self.finish_credit_card_transactions(result, now).await
     }
 
-    pub fn poll_credit_card_transactions(
+    pub async fn poll_credit_card_transactions(
         &mut self,
         mut continuation: CreditCardTransactionContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<CreditCardTransactionRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         let result = self.engine.accept_credit_card_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_credit_card_transactions(result, now)
+        self.finish_credit_card_transactions(result, now).await
     }
 
-    pub fn submit_credit_card_balance_tan(
+    pub async fn submit_credit_card_balance_tan(
         &mut self,
         continuation: CreditCardBalanceContinuation,
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<CreditCardBalanceRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_credit_card_balance(self.engine.accept_credit_card_balance_continuation(
             &response,
             continuation.pending,
@@ -709,16 +738,17 @@ impl Client {
         )?)
     }
 
-    pub fn poll_credit_card_balance(
+    pub async fn poll_credit_card_balance(
         &mut self,
         mut continuation: CreditCardBalanceContinuation,
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<CreditCardBalanceRequest, Error> {
+        self.recover_cancellation();
         let request = self
             .engine
             .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         map_credit_card_balance(self.engine.accept_credit_card_balance_continuation(
             &response,
             continuation.pending,
@@ -727,13 +757,14 @@ impl Client {
     }
 
     /// Explicitly closes the active dialog. This also cancels a dropped continuation.
-    pub fn terminate(&mut self, now: NaiveDateTime) -> Result<(), Error> {
+    pub async fn terminate(&mut self, now: NaiveDateTime) -> Result<(), Error> {
+        self.recover_cancellation();
         let request = self.engine.termination_request(now.date(), now.time())?;
-        let response = self.send(&request)?;
+        let response = self.send(&request).await?;
         self.engine.accept_termination(&response)
     }
 
-    fn finish_synchronization(
+    async fn finish_synchronization(
         &mut self,
         response: Vec<u8>,
         pending: PendingChallenge,
@@ -744,7 +775,7 @@ impl Client {
             .accept_synchronization_continuation(&response, pending)?
         {
             SynchronizationResult::Complete => {
-                self.terminate(now)?;
+                self.terminate(now).await?;
                 Ok(Synchronization::Complete)
             }
             SynchronizationResult::Challenge(pending) => Ok(Synchronization::Challenge(Box::new(
@@ -753,7 +784,7 @@ impl Client {
         }
     }
 
-    fn finish_transactions(
+    async fn finish_transactions(
         &mut self,
         mut result: TransactionsResult,
         now: NaiveDateTime,
@@ -772,14 +803,14 @@ impl Client {
                     let request = self
                         .engine
                         .next_transaction_page_request(now.date(), now.time())?;
-                    let response = self.send(&request)?;
+                    let response = self.send(&request).await?;
                     result = self.engine.accept_transactions(&response, now)?;
                 }
             }
         }
     }
 
-    fn finish_depot_positions(
+    async fn finish_depot_positions(
         &mut self,
         mut result: DepotPositionsResult,
         now: NaiveDateTime,
@@ -798,14 +829,14 @@ impl Client {
                     let request = self
                         .engine
                         .next_depot_positions_page_request(now.date(), now.time())?;
-                    let response = self.send(&request)?;
+                    let response = self.send(&request).await?;
                     result = self.engine.accept_depot_positions(&response, now)?;
                 }
             }
         }
     }
 
-    fn finish_securities_transactions(
+    async fn finish_securities_transactions(
         &mut self,
         mut result: SecuritiesTransactionsResult,
         now: NaiveDateTime,
@@ -824,14 +855,14 @@ impl Client {
                     let request = self
                         .engine
                         .next_securities_transactions_page_request(now.date(), now.time())?;
-                    let response = self.send(&request)?;
+                    let response = self.send(&request).await?;
                     result = self.engine.accept_securities_transactions(&response, now)?;
                 }
             }
         }
     }
 
-    fn finish_credit_card_transactions(
+    async fn finish_credit_card_transactions(
         &mut self,
         mut result: CreditCardTransactionsResult,
         now: NaiveDateTime,
@@ -850,7 +881,7 @@ impl Client {
                     let request = self
                         .engine
                         .next_credit_card_transactions_page_request(now.date(), now.time())?;
-                    let response = self.send(&request)?;
+                    let response = self.send(&request).await?;
                     result = self
                         .engine
                         .accept_credit_card_transactions(&response, now)?;
@@ -859,11 +890,27 @@ impl Client {
         }
     }
 
-    fn send(&mut self, request: &[u8]) -> Result<Vec<u8>, Error> {
-        self.transport.send(request).map_err(|error| {
+    async fn send(&mut self, request: &[u8]) -> Result<Vec<u8>, Error> {
+        match self.transport.send(request).await {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                self.engine.abort_dialog();
+                Err(Error::Transport(error))
+            }
+        }
+    }
+
+    /// Restores a usable local state after a cancelled in-flight operation.
+    ///
+    /// Dropping an operation future at its transport await point leaves the
+    /// bank-side dialog state unknown. The next operation detects the dropped
+    /// exchange and aborts the local dialog first: continuations belonging to the
+    /// cancelled dialog then fail with [`Error::StaleContinuation`], while fresh
+    /// dialog-opening operations start cleanly.
+    fn recover_cancellation(&mut self) {
+        if self.transport.take_cancellation() {
             self.engine.abort_dialog();
-            Error::Transport(error)
-        })
+        }
     }
 }
 
@@ -965,20 +1012,24 @@ fn map_initialization(result: InitializationResult) -> Result<Initialization, Er
     }
 }
 
-fn initialize_with_send(
+async fn send_to(transport: &mut Transport, request: &[u8]) -> Result<Vec<u8>, Error> {
+    transport.send(request).await.map_err(Error::from)
+}
+
+async fn initialize_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     now: NaiveDateTime,
     stage: &mut InitializationStage,
-    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<Initialization, Error> {
-    let result = request_initialization_with_send(engine, now, &mut send)?;
+    let result = request_initialization_with_send(engine, transport, now).await?;
     if matches!(result, InitializationResult::RefreshAndRediscover) {
         // PIN/TAN B.4.3.1 requires current anonymous BPD before function-999
         // discovery. Repair the missing prerequisite once, close that anonymous
         // dialog exactly once, and repeat discovery from a fresh dialog.
-        refresh_parameters_with_send(engine, now, stage, &mut send)?;
+        refresh_parameters_with_send(engine, transport, now, stage).await?;
         *stage = InitializationStage::RepeatedDiscovery;
-        let repeated = match request_initialization_with_send(engine, now, &mut send) {
+        let repeated = match request_initialization_with_send(engine, transport, now).await {
             Err(Error::MissingValue {
                 field: "3920 TAN method response",
             }) => {
@@ -993,48 +1044,48 @@ fn initialize_with_send(
                 field: "3920 TAN method response after anonymous BPD refresh",
             });
         }
-        return finish_initialization_with_send(engine, repeated, now, send);
+        return finish_initialization_with_send(engine, transport, repeated, now).await;
     }
-    finish_initialization_with_send(engine, result, now, send)
+    finish_initialization_with_send(engine, transport, result, now).await
 }
 
-fn request_initialization_with_send(
+async fn request_initialization_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     now: NaiveDateTime,
-    send: &mut impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<InitializationResult, Error> {
     let request = engine.initialization_request(now.date(), now.time())?;
-    let response = send(&request).inspect_err(|_error| {
+    let response = send_to(transport, &request).await.inspect_err(|_error| {
         engine.abort_dialog();
     })?;
     engine.accept_initialization(&response, now)
 }
 
-fn refresh_parameters_with_send(
+async fn refresh_parameters_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     now: NaiveDateTime,
     stage: &mut InitializationStage,
-    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<(), Error> {
     *stage = InitializationStage::AnonymousBpdRefresh;
     let request = engine.anonymous_initialization_request()?;
-    let response = send(&request).inspect_err(|_error| {
+    let response = send_to(transport, &request).await.inspect_err(|_error| {
         engine.abort_dialog();
     })?;
     engine.accept_anonymous_initialization(&response)?;
     *stage = InitializationStage::AnonymousTermination;
     let request = engine.termination_request(now.date(), now.time())?;
-    let response = send(&request).inspect_err(|_error| {
+    let response = send_to(transport, &request).await.inspect_err(|_error| {
         engine.abort_dialog();
     })?;
     engine.accept_termination(&response)
 }
 
-fn finish_initialization_with_send(
+async fn finish_initialization_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     result: InitializationResult,
     now: NaiveDateTime,
-    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<Initialization, Error> {
     let preserves_discovery_refresh = matches!(&result, InitializationResult::RefreshParameters);
     let outcome = match result {
@@ -1050,7 +1101,7 @@ fn finish_initialization_with_send(
     };
     if engine.has_active_dialog() {
         let request = engine.termination_request(now.date(), now.time())?;
-        let response = send(&request).inspect_err(|_error| {
+        let response = send_to(transport, &request).await.inspect_err(|_error| {
             engine.abort_dialog();
         })?;
         if preserves_discovery_refresh {
@@ -1062,17 +1113,17 @@ fn finish_initialization_with_send(
     Ok(outcome)
 }
 
-fn synchronize_with_send(
+async fn synchronize_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     now: NaiveDateTime,
-    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<Synchronization, Error> {
     let request = engine.synchronization_request(now.date(), now.time())?;
-    let response = send(&request)?;
+    let response = send_to(transport, &request).await?;
     match engine.accept_synchronization(&response, now)? {
         SynchronizationResult::Complete => {
             let request = engine.termination_request(now.date(), now.time())?;
-            let response = send(&request)?;
+            let response = send_to(transport, &request).await?;
             engine.accept_termination(&response)?;
             Ok(Synchronization::Complete)
         }
@@ -1082,30 +1133,35 @@ fn synchronize_with_send(
     }
 }
 
-fn discover_tan_media_with_send(
+async fn discover_tan_media_with_send(
     engine: &mut Engine,
+    transport: &mut Transport,
     now: NaiveDateTime,
-    mut send: impl FnMut(&[u8]) -> Result<Vec<u8>, Error>,
 ) -> Result<(), Error> {
     let request = engine.tan_media_initialization_request(now.date(), now.time())?;
-    let response = send(&request).inspect_err(|_error| {
+    let response = send_to(transport, &request).await.inspect_err(|_error| {
         engine.abort_dialog();
     })?;
     let discovery = match engine.accept_tan_media_initialization(&response) {
         Ok(TanMediaInitializationResult::Complete) => Ok(()),
-        Ok(TanMediaInitializationResult::OrderRequired) => (|| {
-            let request = engine.tan_media_request(now.date(), now.time())?;
-            let response = send(&request).inspect_err(|_error| {
-                engine.abort_dialog();
-            })?;
-            engine.accept_tan_media_response(&response)
-        })(),
+        Ok(TanMediaInitializationResult::OrderRequired) => {
+            match engine.tan_media_request(now.date(), now.time()) {
+                Ok(request) => match send_to(transport, &request).await {
+                    Ok(response) => engine.accept_tan_media_response(&response),
+                    Err(error) => {
+                        engine.abort_dialog();
+                        Err(error)
+                    }
+                },
+                Err(error) => Err(error),
+            }
+        }
         Err(error) => Err(error),
     };
 
     let termination = if engine.has_active_dialog() {
         let request = engine.termination_request(now.date(), now.time())?;
-        let response = send(&request).inspect_err(|_error| {
+        let response = send_to(transport, &request).await.inspect_err(|_error| {
             engine.abort_dialog();
         })?;
         engine.accept_termination(&response)
@@ -1140,7 +1196,6 @@ fn map_credit_card_balance(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
 
     use chrono::{NaiveDate, NaiveTime};
 
@@ -1157,8 +1212,7 @@ mod tests {
     // initial order plus HKTAN 4, status HKTAN S, and a final response carrying
     // HITAN S with the original order's feedback/result. G112 C.12.1 supplies
     // the independently derived HKKKU/HIKKU 1 field order used below.
-    #[test]
-    fn decoupled_credit_card_poll_accepts_terminal_hitan_and_exhausts_pages() {
+    fn decoupled_credit_card_state() -> ReusableState {
         let mut state = tan_media_state(TanProcess::Decoupled);
         state.selected_tan_medium = Some("Fictional push medium".to_owned());
         state.accounts.push(Account {
@@ -1187,6 +1241,12 @@ mod tests {
             date_range_allowed: true,
         });
         state.credit_card_transactions_requires_tan = Some(true);
+        state
+    }
+
+    #[tokio::test]
+    async fn decoupled_credit_card_poll_accepts_terminal_hitan_and_exhausts_pages() {
+        let state = decoupled_credit_card_state();
 
         let initialization =
             secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
@@ -1230,11 +1290,12 @@ mod tests {
         );
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::Connected
         ));
         let continuation = match client
             .credit_card_transactions(0, None, None, now())
+            .await
             .unwrap()
         {
             CreditCardTransactionRequest::Challenge(continuation) => *continuation,
@@ -1247,6 +1308,7 @@ mod tests {
 
         let result = client
             .poll_credit_card_transactions(continuation, PollingMode::Manual, poll_at)
+            .await
             .unwrap();
         let complete = match result {
             CreditCardTransactionRequest::Complete(result) => result,
@@ -1312,6 +1374,35 @@ mod tests {
         assert_send::<SecuritiesTransactionContinuation>();
         assert_send::<CreditCardTransactionContinuation>();
         assert_send::<CreditCardBalanceContinuation>();
+    }
+
+    // Consumers must be able to drive operations from spawned tasks, so the
+    // operation futures themselves are Send, not just the client and its
+    // continuation types.
+    #[test]
+    fn public_operation_futures_are_send() {
+        fn assert_send_future<F: Future + Send>(_future: F) {}
+
+        // Never called: defining this function is the compile-time assertion.
+        fn assert_all(client: &mut Client, continuation: InitializationContinuation) {
+            assert_send_future(client.initialize(now()));
+            assert_send_future(client.refresh_parameters(now()));
+            assert_send_future(client.synchronize(now()));
+            assert_send_future(client.discover_tan_media(now()));
+            assert_send_future(client.balance(0, now()));
+            assert_send_future(client.booked_transactions(0, None, None, now()));
+            assert_send_future(client.depot_positions(0, now()));
+            assert_send_future(client.securities_transactions(0, None, None, now()));
+            assert_send_future(client.credit_card_transactions(0, None, None, now()));
+            assert_send_future(client.credit_card_balance(0, now()));
+            assert_send_future(client.poll_initialization(
+                continuation,
+                PollingMode::Manual,
+                now(),
+            ));
+            assert_send_future(client.terminate(now()));
+        }
+        let _ = assert_all;
     }
 
     #[test]
@@ -1658,8 +1749,8 @@ mod tests {
     // and Formals C.10: both HKTAN variants initialize process 4; when
     // HITAB is not returned with that response, a separate HKTAB order uses
     // the highest common version and is followed by exactly one HKEND.
-    #[test]
-    fn tan_media_discovery_six_and_seven_negotiate_legacy_and_current_versions() {
+    #[tokio::test]
+    async fn tan_media_discovery_six_and_seven_negotiate_legacy_and_current_versions() {
         for (process, version) in [
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
@@ -1674,7 +1765,7 @@ mod tests {
                     [initialization, operation, termination],
                 );
 
-                let media = client.discover_tan_media(now()).unwrap();
+                let media = client.discover_tan_media(now()).await.unwrap();
                 assert_eq!(media.len(), 1);
                 assert_eq!(media[0].name(), Some("Fictional phone"));
                 assert_eq!(client.advertised_tan_media_versions(), [media_version]);
@@ -1782,8 +1873,8 @@ mod tests {
     // components 6-9, so field 10 (the matching selector) is component 13.
     // One delivered unnamed class-G record neither overrides the BPD condition
     // nor makes card fields HKTAN selectors.
-    #[test]
-    fn hitab_four_generator_name_controls_selection_for_both_hktan_versions() {
+    #[tokio::test]
+    async fn hitab_four_generator_name_controls_selection_for_both_hktan_versions() {
         for (process, hitan_version) in [
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
@@ -1822,6 +1913,7 @@ mod tests {
 
                 let result = client
                     .discover_tan_media(now())
+                    .await
                     .map(|media| media.first().and_then(TanMedium::name));
                 if selectable {
                     assert_eq!(result.unwrap(), expected_name);
@@ -1905,8 +1997,8 @@ mod tests {
     // authorize inventing a version-5 response or a UPD-first bootstrap. A
     // missing HITAB remains distinguishable after the required HKEND response
     // replaces last_responses.
-    #[test]
-    fn missing_hitab_is_typed_and_still_terminates_once_for_both_hktan_versions() {
+    #[tokio::test]
+    async fn missing_hitab_is_typed_and_still_terminates_once_for_both_hktan_versions() {
         for (process, version) in [
             (TanProcess::ProcessVariantTwo, 6),
             (TanProcess::Decoupled, 7),
@@ -1925,7 +2017,7 @@ mod tests {
             );
 
             assert!(matches!(
-                client.discover_tan_media(now()),
+                client.discover_tan_media(now()).await,
                 Err(Error::MissingValue {
                     field: "HITAB TAN media response"
                 })
@@ -2038,8 +2130,8 @@ mod tests {
 
     // A received HITAB with an unsupported version is not skipped. The safe
     // structural diagnostic identifies it without retaining any segment data.
-    #[test]
-    fn unsupported_hitab_version_remains_typed_and_structurally_visible() {
+    #[tokio::test]
+    async fn unsupported_hitab_version_remains_typed_and_structurally_visible() {
         let initialization = tan_media_initialization_response(6);
         let discovery =
             secured_response(b"HIRMG:2:2+0010::fictional accepted'HITAB:3:6:3+1'", 2, 4);
@@ -2050,7 +2142,7 @@ mod tests {
         );
 
         assert!(matches!(
-            client.discover_tan_media(now()),
+            client.discover_tan_media(now()).await,
             Err(Error::UnsupportedSegment {
                 code: "HITAB",
                 version: 6
@@ -2076,8 +2168,8 @@ mod tests {
     // Formals C.10 requires the highest common advertised operation version.
     // An unsupported-only advertisement is a local capability result and must
     // not emit even the process-4 initialization.
-    #[test]
-    fn tan_media_version_selection_is_deterministic_and_fails_before_transport() {
+    #[tokio::test]
+    async fn tan_media_version_selection_is_deterministic_and_fails_before_transport() {
         let initialization = tan_media_initialization_response(6);
         let medium = fictional_tan_medium(4);
         let operation = tan_media_operation_response(4, Some(&medium));
@@ -2086,7 +2178,7 @@ mod tests {
             tan_media_state_with_versions(TanProcess::ProcessVariantTwo, &[2, 4, 2]),
             [initialization, operation, termination],
         );
-        mixed.discover_tan_media(now()).unwrap();
+        mixed.discover_tan_media(now()).await.unwrap();
         assert_eq!(mixed.advertised_tan_media_versions(), [4, 2]);
         assert_eq!(mixed.selected_tan_media_version(), Some(4));
 
@@ -2095,7 +2187,7 @@ mod tests {
             std::iter::empty::<Vec<u8>>(),
         );
         assert!(matches!(
-            unsupported.discover_tan_media(now()),
+            unsupported.discover_tan_media(now()).await,
             Err(Error::Unsupported(Limitation::TanMediumVersion))
         ));
         assert!(unsupported.transport.fixture_requests().is_empty());
@@ -2106,8 +2198,8 @@ mod tests {
     // A successful initialization may atomically replace BPD. The subsequent
     // order must use that response's highest common version, never the stale
     // version that was available before opening the dialog.
-    #[test]
-    fn tan_media_order_renegotiates_after_initialization_replaces_bpd() {
+    #[tokio::test]
+    async fn tan_media_order_renegotiates_after_initialization_replaces_bpd() {
         let initialization = process_four_hitan_without_hitab(6);
         let medium = fictional_tan_medium(4);
         let operation = tan_media_operation_response(4, Some(&medium));
@@ -2117,7 +2209,7 @@ mod tests {
             [initialization, operation, termination],
         );
 
-        client.discover_tan_media(now()).unwrap();
+        client.discover_tan_media(now()).await.unwrap();
         assert_eq!(client.advertised_tan_media_versions(), [4, 2]);
         assert_eq!(client.selected_tan_media_version(), Some(4));
         let request = Message::parse(&client.transport.fixture_requests()[1]).unwrap();
@@ -2155,8 +2247,8 @@ mod tests {
     // system ID is a synchronization initialization containing HKSYN 3 and
     // returning HISYN 4. PIN/TAN B.4.3.1 and correction T2 allow function 999
     // to discover the user-valid method while the same response supplies BPD.
-    #[test]
-    fn first_contact_synchronizes_before_selected_method_initialization() {
+    #[tokio::test]
+    async fn first_contact_synchronizes_before_selected_method_initialization() {
         let synchronization = function_999_response(
             "first-contact",
             concat!(
@@ -2186,7 +2278,7 @@ mod tests {
         ]);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::ChooseTanMethod
         ));
         assert_eq!(client.state().system_id(), Some("fictional-first-system"));
@@ -2229,7 +2321,7 @@ mod tests {
 
         client.select_tan_method("942").unwrap();
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::Connected
         ));
         let requests = client.transport.fixture_requests();
@@ -2257,8 +2349,8 @@ mod tests {
     // the dialog with 9800/9955 while still returning 3920. If that response
     // also completes mandatory HKSYN with HISYN, the assigned ID remains
     // reusable and the client must not send HKEND to the terminated dialog.
-    #[test]
-    fn bank_terminated_first_contact_retains_hisyn_without_hkend() {
+    #[tokio::test]
+    async fn bank_terminated_first_contact_retains_hisyn_without_hkend() {
         let response = function_999_response(
             "terminated-first-contact",
             concat!(
@@ -2277,7 +2369,7 @@ mod tests {
         let mut client = first_contact_client([response]);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::ChooseTanMethod
         ));
         assert_eq!(
@@ -2291,8 +2383,8 @@ mod tests {
     // Formals C.8.2 makes HISYN mandatory in a synchronization response. A
     // successful-looking 3920/BPD response cannot silently complete first
     // contact without the assigned system ID.
-    #[test]
-    fn first_contact_missing_hisyn_retains_parameters_but_not_system_id() {
+    #[tokio::test]
+    async fn first_contact_missing_hisyn_retains_parameters_but_not_system_id() {
         let response = function_999_response(
             "missing-hisyn",
             concat!(
@@ -2309,7 +2401,7 @@ mod tests {
         let mut client = first_contact_client([response]);
 
         assert!(matches!(
-            client.initialize(now()),
+            client.initialize(now()).await,
             Err(Error::MissingValue {
                 field: "assigned system ID"
             })
@@ -2325,8 +2417,8 @@ mod tests {
     // A caller may have a reusable system ID but no retained selected method.
     // In that established-system case, PIN/TAN B.4.3.1 discovery remains the
     // ordinary function-999 initialization and must not request a replacement.
-    #[test]
-    fn established_system_method_discovery_does_not_resynchronize() {
+    #[tokio::test]
+    async fn established_system_method_discovery_does_not_resynchronize() {
         let discovery = function_999_response(
             "existing-system",
             concat!(
@@ -2349,7 +2441,7 @@ mod tests {
         let mut client = discovery_client([discovery, termination]);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::ChooseTanMethod
         ));
         let requests = client.transport.fixture_requests();
@@ -2380,8 +2472,8 @@ mod tests {
     // function-999 discovery and requires 3920 to carry the user methods.
     // T8 repairs missing usable parameters through an active BPD-zero refresh.
     // The no-3920 bank deviation receives one bounded prerequisite repair only.
-    #[test]
-    fn initialize_repairs_bpd_once_before_repeating_global_method_discovery() {
+    #[tokio::test]
+    async fn initialize_repairs_bpd_once_before_repeating_global_method_discovery() {
         let rediscovery = secured_response(
             b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942:943'",
             1,
@@ -2401,7 +2493,7 @@ mod tests {
         let mut client = discovery_client(responses);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::ChooseTanMethod
         ));
         assert_eq!(
@@ -2456,8 +2548,8 @@ mod tests {
 
     // The bounded recovery is not a loop: after a successful anonymous refresh,
     // another global termination without mandatory 3920 is a redacted typed error.
-    #[test]
-    fn initialize_stops_after_second_missing_3920() {
+    #[tokio::test]
+    async fn initialize_stops_after_second_missing_3920() {
         let responses = [
             global_missing_3920_response(),
             anonymous_bpd_response(),
@@ -2470,7 +2562,7 @@ mod tests {
         ];
         let mut client = discovery_client(responses);
 
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
         assert_eq!(
             client.last_initialization_stage(),
             Some(InitializationStage::RepeatedDiscovery)
@@ -2509,14 +2601,14 @@ mod tests {
         assert!(!format!("{:?}", client.last_responses()).contains("fictional"));
     }
 
-    #[test]
-    fn initialization_stage_identifies_anonymous_refresh_failure() {
+    #[tokio::test]
+    async fn initialization_stage_identifies_anonymous_refresh_failure() {
         let mut client = discovery_client([
             global_missing_3920_response(),
             global_missing_3920_response(),
         ]);
 
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
 
         assert_eq!(
             client.last_initialization_stage(),
@@ -2548,8 +2640,8 @@ mod tests {
     // BPD-zero request to receive complete current BPD. If that mandatory
     // source is instead terminated with no BPD, no standardized bootstrap
     // remains and the client must neither retry nor invent a method.
-    #[test]
-    fn sequential_discovery_and_anonymous_bpd_failure_is_a_typed_limitation() {
+    #[tokio::test]
+    async fn sequential_discovery_and_anonymous_bpd_failure_is_a_typed_limitation() {
         let personalized = function_999_response(
             "terminated-discovery",
             concat!(
@@ -2575,7 +2667,7 @@ mod tests {
         let mut client = discovery_client([personalized, anonymous]);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::RefreshParameters
         ));
         assert_eq!(
@@ -2583,7 +2675,7 @@ mod tests {
             Some(InitializationStage::InitialDiscovery)
         );
 
-        let error = client.refresh_parameters(now()).unwrap_err();
+        let error = client.refresh_parameters(now()).await.unwrap_err();
 
         assert!(matches!(
             error,
@@ -2631,8 +2723,8 @@ mod tests {
 
     // The typed limitation is confined to the exact response set. A published
     // credential error in the anonymous response remains a bank rejection.
-    #[test]
-    fn anonymous_bpd_failure_does_not_absorb_published_errors() {
+    #[tokio::test]
+    async fn anonymous_bpd_failure_does_not_absorb_published_errors() {
         let personalized = function_999_response(
             "terminated-discovery",
             concat!(
@@ -2658,11 +2750,11 @@ mod tests {
         );
         let mut client = discovery_client([personalized, anonymous]);
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::RefreshParameters
         ));
 
-        let error = client.refresh_parameters(now()).unwrap_err();
+        let error = client.refresh_parameters(now()).await.unwrap_err();
 
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(
@@ -2684,7 +2776,10 @@ mod tests {
         );
         let mut standalone_client = discovery_client([standalone]);
 
-        let error = standalone_client.refresh_parameters(now()).unwrap_err();
+        let error = standalone_client
+            .refresh_parameters(now())
+            .await
+            .unwrap_err();
 
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(standalone_client.transport.fixture_requests().len(), 1);
@@ -2693,8 +2788,8 @@ mod tests {
 
     // The persistent stage diagnostic distinguishes a successful anonymous
     // initialization from its subsequent HKEND request without wire details.
-    #[test]
-    fn direct_parameter_refresh_records_anonymous_termination_stage() {
+    #[tokio::test]
+    async fn direct_parameter_refresh_records_anonymous_termination_stage() {
         let responses = [
             anonymous_bpd_response(),
             plain_response(
@@ -2705,7 +2800,7 @@ mod tests {
         ];
         let mut client = discovery_client(responses);
 
-        client.refresh_parameters(now()).unwrap();
+        client.refresh_parameters(now()).await.unwrap();
 
         assert_eq!(
             client.last_initialization_stage(),
@@ -2718,8 +2813,8 @@ mod tests {
     // Placement is part of the narrow classification. A segment-referenced
     // unpublished companion without 3920 is not the exact global prerequisite
     // failure and therefore does not start an anonymous network sequence.
-    #[test]
-    fn initialize_does_not_refresh_for_segment_referenced_missing_3920() {
+    #[tokio::test]
+    async fn initialize_does_not_refresh_for_segment_referenced_missing_3920() {
         let response = secured_response(
             concat!(
                 "HIRMG:2:2+9050::fictional summary",
@@ -2732,7 +2827,7 @@ mod tests {
         );
         let mut client = discovery_client([response]);
 
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
         assert!(matches!(
             error,
             Error::MissingValue {
@@ -2746,8 +2841,8 @@ mod tests {
     // Rückmeldungscodes 2026 A/B.4: unpublished 99xx values remain
     // uninterpreted, while published credential errors and selected-method
     // authentication failures are never absorbed by BPD recovery.
-    #[test]
-    fn initialize_recovery_does_not_absorb_fatal_or_selected_method_errors() {
+    #[tokio::test]
+    async fn initialize_recovery_does_not_absorb_fatal_or_selected_method_errors() {
         let fatal = secured_response(
             concat!(
                 "HIRMG:2:2+9050::fictional summary",
@@ -2760,7 +2855,7 @@ mod tests {
             3,
         );
         let mut client = discovery_client([fatal]);
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
         assert_eq!(
             client.last_initialization_stage(),
             Some(InitializationStage::InitialDiscovery)
@@ -2782,7 +2877,7 @@ mod tests {
             transport: Transport::fixture([global_missing_3920_response()]),
             last_initialization_stage: None,
         };
-        let error = initialization_error(selected.initialize(now()));
+        let error = initialization_error(selected.initialize(now()).await);
         assert_eq!(
             selected.last_initialization_stage(),
             Some(InitializationStage::InitialDiscovery)
@@ -2802,8 +2897,8 @@ mod tests {
     // PIN/TAN B.6.1 and correction T8: a bank-terminated function-999
     // refresh outcome receives no HKEND, while an open successful discovery
     // with the same missing method descriptions is closed exactly once.
-    #[test]
-    fn refresh_outcome_closes_only_an_open_discovery_dialog() {
+    #[tokio::test]
+    async fn refresh_outcome_closes_only_an_open_discovery_dialog() {
         let new_engine = || {
             let mut state = ReusableState::new();
             state.system_id = Some("fictional-existing-system".to_owned());
@@ -2827,16 +2922,19 @@ mod tests {
         let result = terminated_engine
             .accept_initialization(&terminated, now())
             .unwrap();
-        let mut sends = 0;
+        let mut refusing_transport = Transport::fixture(std::iter::empty::<Vec<u8>>());
         assert!(matches!(
-            finish_initialization_with_send(&mut terminated_engine, result, now(), |_request| {
-                sends += 1;
-                Err(Error::InconsistentState)
-            })
+            finish_initialization_with_send(
+                &mut terminated_engine,
+                &mut refusing_transport,
+                result,
+                now()
+            )
+            .await
             .unwrap(),
             Initialization::RefreshParameters
         ));
-        assert_eq!(sends, 0);
+        assert!(refusing_transport.fixture_requests().is_empty());
 
         let mut open_engine = new_engine();
         let open = plain_response(
@@ -2845,28 +2943,91 @@ mod tests {
             1,
         );
         let result = open_engine.accept_initialization(&open, now()).unwrap();
+        let mut closing_transport = Transport::fixture([plain_response(
+            &["HIRMG:2:2+0100::terminated"],
+            "open-discovery",
+            2,
+        )]);
         assert!(matches!(
-            finish_initialization_with_send(&mut open_engine, result, now(), |request| {
-                let payload = Message::parse(request)?.payload_segments()?;
-                assert_eq!(
-                    payload
-                        .iter()
-                        .filter(|segment| segment.header().unwrap().code == b"HKEND")
-                        .count(),
-                    1
-                );
-                sends += 1;
-                Ok(plain_response(
-                    &["HIRMG:2:2+0100::terminated"],
-                    "open-discovery",
-                    2,
-                ))
-            })
+            finish_initialization_with_send(
+                &mut open_engine,
+                &mut closing_transport,
+                result,
+                now()
+            )
+            .await
             .unwrap(),
             Initialization::RefreshParameters
         ));
-        assert_eq!(sends, 1);
+        let requests = closing_transport.fixture_requests();
+        assert_eq!(requests.len(), 1);
+        let payload = Message::parse(&requests[0])
+            .unwrap()
+            .payload_segments()
+            .unwrap();
+        assert_eq!(
+            payload
+                .iter()
+                .filter(|segment| segment.header().unwrap().code == b"HKEND")
+                .count(),
+            1
+        );
         assert!(!open_engine.has_active_dialog());
+    }
+
+    // An operation future dropped at its transport exchange leaves the bank-side
+    // dialog unknown. The next operation must abort the local dialog first, so
+    // continuations of the cancelled dialog fail typed while a fresh
+    // dialog-opening operation starts cleanly.
+    #[tokio::test]
+    async fn cancelled_exchange_aborts_dialog_and_invalidates_continuations() {
+        let initialization =
+            secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
+        let challenge = secured_response(
+            concat!(
+                "HIRMG:2:2+3060::fictional warning'",
+                "HIRMS:3:2:4+3955::approve elsewhere'",
+                "HITAN:4:7:4+4++fictional-card-reference+Approve fictional entries'"
+            )
+            .as_bytes(),
+            2,
+            5,
+        );
+        let fresh_initialization =
+            secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
+        let mut client = client_with_state(
+            decoupled_credit_card_state(),
+            [initialization, challenge, fresh_initialization],
+        );
+
+        assert!(matches!(
+            client.initialize(now()).await.unwrap(),
+            Initialization::Connected
+        ));
+        let continuation = match client
+            .credit_card_transactions(0, None, None, now())
+            .await
+            .unwrap()
+        {
+            CreditCardTransactionRequest::Challenge(continuation) => *continuation,
+            _ => panic!("expected decoupled credit-card approval"),
+        };
+
+        client.transport.fixture_mark_in_flight();
+        let poll_at = continuation.earliest_poll_at().unwrap_or_else(now);
+        let error = match client
+            .poll_credit_card_transactions(continuation, PollingMode::Manual, poll_at)
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("cancelled dialog must invalidate its continuation"),
+        };
+        assert!(matches!(error, Error::StaleContinuation));
+
+        assert!(matches!(
+            client.initialize(now()).await.unwrap(),
+            Initialization::Connected
+        ));
     }
 
     // PIN/TAN B.4.3.1 and F.2.5 require HKEND after an open function-999
@@ -2874,8 +3035,8 @@ mod tests {
     // while the current return-code register gives unpublished 9952 no
     // standalone meaning. Preserve the pending T8 refresh outcome only for
     // this exact, fully validated two-response sequence.
-    #[test]
-    fn open_discovery_refresh_survives_exact_bank_terminated_hkend_response() {
+    #[tokio::test]
+    async fn open_discovery_refresh_survives_exact_bank_terminated_hkend_response() {
         let initial = function_999_response(
             "open-discovery",
             b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942'",
@@ -2896,7 +3057,7 @@ mod tests {
         let mut client = discovery_client([initial, termination]);
 
         assert!(matches!(
-            client.initialize(now()).unwrap(),
+            client.initialize(now()).await.unwrap(),
             Initialization::RefreshParameters
         ));
         assert_eq!(client.transport.fixture_requests().len(), 2);
@@ -2981,8 +3142,8 @@ mod tests {
     // Adjacent termination shapes remain fatal: a published credential error
     // cannot be absorbed by the discovery-refresh outcome, even alongside the
     // three otherwise matching global errors.
-    #[test]
-    fn discovery_refresh_does_not_absorb_published_hkend_error() {
+    #[tokio::test]
+    async fn discovery_refresh_does_not_absorb_published_hkend_error() {
         let initial = function_999_response(
             "open-discovery",
             b"HIRMG:2:2+0010::accepted'HIRMS:3:2:4+3920::methods:942'",
@@ -3003,7 +3164,7 @@ mod tests {
         );
         let mut client = discovery_client([initial, termination]);
 
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
 
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(client.transport.fixture_requests().len(), 2);
@@ -3014,8 +3175,8 @@ mod tests {
     // The same termination response is not generally successful. When the
     // discovery already has a usable HITANS description, the pending outcome
     // is ChooseTanMethod and the ordinary HKEND error remains fatal.
-    #[test]
-    fn exact_hkend_error_is_not_accepted_for_choose_method_outcome() {
+    #[tokio::test]
+    async fn exact_hkend_error_is_not_accepted_for_choose_method_outcome() {
         let initial = function_999_response(
             "open-discovery",
             concat!(
@@ -3042,7 +3203,7 @@ mod tests {
         );
         let mut client = discovery_client([initial, termination]);
 
-        let error = initialization_error(client.initialize(now()));
+        let error = initialization_error(client.initialize(now()).await);
 
         assert!(matches!(&error, Error::Bank(response) if response.code() == 9050));
         assert_eq!(client.transport.fixture_requests().len(), 2);
@@ -3055,8 +3216,8 @@ mod tests {
     // HBCI Security 2024 B.5.1/DD permits HNSHK timestamp type without
     // date/time; PIN/TAN F.2 permits the optional response-side control pair.
     // This exercises the production Client::synchronize orchestration seam.
-    #[test]
-    fn synchronization_sends_one_hkend_and_preserves_assigned_system_id() {
+    #[tokio::test]
+    async fn synchronization_sends_one_hkend_and_preserves_assigned_system_id() {
         let synchronization = concat!(
             "HNSHK:2:4+PIN:2+942+fiction-ref+1+1",
             "+1::fictional-system+1+1+1:999:1+6:10:16",
@@ -3076,16 +3237,22 @@ mod tests {
             "HIRMG:3:2+0100::fictional termination'",
             "HNSHA:4:2+fiction-ref'"
         );
-        let mut responses = VecDeque::from([
+        let mut transport = Transport::fixture([
             secured_response(synchronization.as_bytes(), 1, 9),
             secured_response(termination.as_bytes(), 2, 5),
         ]);
-        let mut operations = Vec::new();
         let mut engine = synchronization_engine();
 
-        let result = synchronize_with_send(&mut engine, now(), |request| {
-            let payload = Message::parse(request)?.payload_segments()?;
-            operations.push(
+        let result = synchronize_with_send(&mut engine, &mut transport, now())
+            .await
+            .unwrap();
+
+        assert!(matches!(result, Synchronization::Complete));
+        let operations = transport
+            .fixture_requests()
+            .iter()
+            .map(|request| {
+                let payload = Message::parse(request).unwrap().payload_segments().unwrap();
                 if payload
                     .iter()
                     .any(|segment| segment.header().unwrap().code == b"HKSYN")
@@ -3098,18 +3265,14 @@ mod tests {
                     "HKEND"
                 } else {
                     "unexpected"
-                },
-            );
-            responses.pop_front().ok_or(Error::InconsistentState)
-        })
-        .unwrap();
-
-        assert!(matches!(result, Synchronization::Complete));
+                }
+            })
+            .collect::<Vec<_>>();
         assert_eq!(operations, ["HKSYN", "HKEND"]);
         assert_eq!(
             engine.state().system_id(),
             Some("fictional-assigned-system")
         );
-        assert!(responses.is_empty());
+        assert_eq!(transport.fixture_responses_remaining(), 0);
     }
 }

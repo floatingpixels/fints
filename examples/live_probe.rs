@@ -17,14 +17,17 @@ use fints::{
 };
 type ProbeResult<T> = Result<T, Box<dyn Error>>;
 
-fn main() {
-    if let Err(error) = run() {
+// The probe is an attended, owner-run tool on a current-thread runtime with
+// nothing else scheduled, so its interactive stdin reads stay synchronous.
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         println!("probe failed: {error}");
         process::exit(1);
     }
 }
 
-fn run() -> ProbeResult<()> {
+async fn run() -> ProbeResult<()> {
     if !enabled("FINTS_LIVE_PROBE") {
         return Err(input_error(
             "refusing to run without the explicit FINTS_LIVE_PROBE=1 gate",
@@ -52,8 +55,8 @@ fn run() -> ProbeResult<()> {
         trace_sink,
     )?;
 
-    let session = probe_session(&mut client);
-    let termination = client.terminate(now());
+    let session = probe_session(&mut client).await;
+    let termination = client.terminate(now()).await;
     print_bank_responses(&client, "terminate");
     session?;
     termination?;
@@ -61,32 +64,32 @@ fn run() -> ProbeResult<()> {
     Ok(())
 }
 
-fn probe_session(client: &mut Client) -> ProbeResult<()> {
-    initialize_until_connected(client)?;
+async fn probe_session(client: &mut Client) -> ProbeResult<()> {
+    initialize_until_connected(client).await?;
     print_capabilities(&client.advertised_capabilities());
 
     if let Some(account) = account_flag("FINTS_PROBE_BALANCE_ACCOUNT")? {
-        probe_balance(client, account)?;
+        probe_balance(client, account).await?;
     }
     if let Some(account) = account_flag("FINTS_PROBE_DEPOT_POSITIONS_ACCOUNT")? {
-        probe_depot_positions(client, account)?;
+        probe_depot_positions(client, account).await?;
     }
     if let Some(account) = account_flag("FINTS_PROBE_DEPOT_TRANSACTIONS_ACCOUNT")? {
-        probe_depot_transactions(client, account)?;
+        probe_depot_transactions(client, account).await?;
     }
     if let Some(account) = account_flag("FINTS_PROBE_CARD_BALANCE_ACCOUNT")? {
-        probe_card_balance(client, account)?;
+        probe_card_balance(client, account).await?;
     }
     if let Some(account) = account_flag("FINTS_PROBE_CARD_TRANSACTIONS_ACCOUNT")? {
-        probe_card_transactions(client, account)?;
+        probe_card_transactions(client, account).await?;
     }
     Ok(())
 }
 
-fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
+async fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
     let mut synchronized = false;
     for _ in 0..3 {
-        let initialization = client.initialize(now());
+        let initialization = client.initialize(now()).await;
         print_bank_responses(client, "initialize");
         match initialization? {
             Initialization::Connected => {
@@ -96,15 +99,15 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
             }
             Initialization::ChooseTanMethod => {
                 print_tan_methods(client);
-                choose_tan_method(client)?;
+                choose_tan_method(client).await?;
             }
             Initialization::RefreshParameters => {
-                let refresh = client.refresh_parameters(now());
+                let refresh = client.refresh_parameters(now()).await;
                 print_bank_responses(client, "refresh_parameters");
                 refresh?;
                 print_capabilities(&client.advertised_capabilities());
                 print_tan_methods(client);
-                choose_tan_method(client)?;
+                choose_tan_method(client).await?;
             }
             Initialization::Challenge(continuation) => {
                 print_challenge(
@@ -113,7 +116,9 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
                     continuation.challenge().medium_name(),
                 );
                 let tan = require_tan(continuation.kind())?;
-                let result = client.submit_initialization_tan(*continuation, &tan, now());
+                let result = client
+                    .submit_initialization_tan(*continuation, &tan, now())
+                    .await;
                 print_bank_responses(client, "submit_initialization_tan");
                 match result? {
                     Initialization::Connected => return Ok(()),
@@ -135,7 +140,7 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
             && enabled("FINTS_PROBE_SYNCHRONIZE")
             && client.state().system_id().is_none()
         {
-            synchronize(client)?;
+            synchronize(client).await?;
             synchronized = true;
         }
     }
@@ -144,7 +149,7 @@ fn initialize_until_connected(client: &mut Client) -> ProbeResult<()> {
     ))
 }
 
-fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
+async fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
     let allowed = client.allowed_tan_methods();
     let candidates = client
         .tan_methods()
@@ -171,7 +176,7 @@ fn choose_tan_method(client: &mut Client) -> ProbeResult<()> {
             "tan_media_versions advertised={:?} selected=none",
             client.advertised_tan_media_versions()
         );
-        let discovery = client.discover_tan_media(now()).map(|_| ());
+        let discovery = client.discover_tan_media(now()).await.map(|_| ());
         print_bank_responses(client, "discover_tan_media");
         println!(
             "tan_media_versions advertised={:?} selected={}",
@@ -216,8 +221,8 @@ fn select_method<'a>(methods: &'a [&TanMethod]) -> ProbeResult<&'a TanMethod> {
     Ok(methods[index])
 }
 
-fn synchronize(client: &mut Client) -> ProbeResult<()> {
-    let result = client.synchronize(now());
+async fn synchronize(client: &mut Client) -> ProbeResult<()> {
+    let result = client.synchronize(now()).await;
     print_bank_responses(client, "synchronize");
     match result? {
         Synchronization::Complete => Ok(()),
@@ -228,7 +233,9 @@ fn synchronize(client: &mut Client) -> ProbeResult<()> {
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_synchronization_tan(*continuation, &tan, now());
+            let submitted = client
+                .submit_synchronization_tan(*continuation, &tan, now())
+                .await;
             print_bank_responses(client, "submit_synchronization_tan");
             match submitted? {
                 Synchronization::Complete => Ok(()),
@@ -240,8 +247,8 @@ fn synchronize(client: &mut Client) -> ProbeResult<()> {
     }
 }
 
-fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
-    let result = client.balance(account, now());
+async fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
+    let result = client.balance(account, now()).await;
     print_bank_responses(client, "balance");
     match result? {
         BalanceRequest::Complete(_) => println!("probe operation=balance status=complete"),
@@ -252,7 +259,7 @@ fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_balance_tan(*continuation, &tan, now());
+            let submitted = client.submit_balance_tan(*continuation, &tan, now()).await;
             print_bank_responses(client, "submit_balance_tan");
             match submitted? {
                 BalanceRequest::Complete(_) => {
@@ -269,8 +276,8 @@ fn probe_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
     Ok(())
 }
 
-fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()> {
-    let result = client.depot_positions(account, now());
+async fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()> {
+    let result = client.depot_positions(account, now()).await;
     print_bank_responses(client, "depot_positions");
     #[cfg(feature = "diagnostics")]
     print_depot_response_facts(client);
@@ -292,7 +299,9 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_depot_position_tan(*continuation, &tan, now());
+            let submitted = client
+                .submit_depot_position_tan(*continuation, &tan, now())
+                .await;
             print_bank_responses(client, "submit_depot_position_tan");
             #[cfg(feature = "diagnostics")]
             print_depot_response_facts(client);
@@ -318,8 +327,10 @@ fn probe_depot_positions(client: &mut Client, account: usize) -> ProbeResult<()>
     Ok(())
 }
 
-fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
-    let result = client.securities_transactions(account, None, None, now());
+async fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
+    let result = client
+        .securities_transactions(account, None, None, now())
+        .await;
     print_bank_responses(client, "depot_transactions");
     #[cfg(feature = "diagnostics")]
     print_depot_response_facts(client);
@@ -337,7 +348,9 @@ fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_securities_transaction_tan(*continuation, &tan, now());
+            let submitted = client
+                .submit_securities_transaction_tan(*continuation, &tan, now())
+                .await;
             print_bank_responses(client, "submit_securities_transaction_tan");
             #[cfg(feature = "diagnostics")]
             print_depot_response_facts(client);
@@ -359,8 +372,8 @@ fn probe_depot_transactions(client: &mut Client, account: usize) -> ProbeResult<
     Ok(())
 }
 
-fn probe_card_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
-    let result = client.credit_card_balance(account, now());
+async fn probe_card_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
+    let result = client.credit_card_balance(account, now()).await;
     print_bank_responses(client, "credit_card_balance");
     match result? {
         CreditCardBalanceRequest::Complete(_) => {
@@ -373,7 +386,9 @@ fn probe_card_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_credit_card_balance_tan(*continuation, &tan, now());
+            let submitted = client
+                .submit_credit_card_balance_tan(*continuation, &tan, now())
+                .await;
             print_bank_responses(client, "submit_credit_card_balance_tan");
             match submitted? {
                 CreditCardBalanceRequest::Complete(_) => {
@@ -390,8 +405,10 @@ fn probe_card_balance(client: &mut Client, account: usize) -> ProbeResult<()> {
     Ok(())
 }
 
-fn probe_card_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
-    let result = client.credit_card_transactions(account, None, None, now());
+async fn probe_card_transactions(client: &mut Client, account: usize) -> ProbeResult<()> {
+    let result = client
+        .credit_card_transactions(account, None, None, now())
+        .await;
     print_bank_responses(client, "credit_card_transactions");
     match result? {
         CreditCardTransactionRequest::Complete(_) => {
@@ -404,7 +421,9 @@ fn probe_card_transactions(client: &mut Client, account: usize) -> ProbeResult<(
                 continuation.challenge().medium_name(),
             );
             let tan = require_tan(continuation.kind())?;
-            let submitted = client.submit_credit_card_transaction_tan(*continuation, &tan, now());
+            let submitted = client
+                .submit_credit_card_transaction_tan(*continuation, &tan, now())
+                .await;
             print_bank_responses(client, "submit_credit_card_transaction_tan");
             match submitted? {
                 CreditCardTransactionRequest::Complete(_) => {

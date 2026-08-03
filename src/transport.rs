@@ -1,14 +1,13 @@
-use std::{cell::Cell, io::Read, time::Duration};
+use std::time::Duration;
 
 #[cfg(test)]
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use reqwest::{Url, blocking::Client, header::CONTENT_TYPE, redirect::Policy};
+use reqwest::{Client, Url, header::CONTENT_TYPE, redirect::Policy};
 use thiserror::Error;
 
 const MAX_DECODED_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -27,15 +26,16 @@ pub(crate) struct Transport {
     endpoint: Url,
     client: Client,
     trace_sink: Option<TraceSink>,
-    next_exchange_index: Cell<u64>,
+    next_exchange_index: u64,
+    in_flight: bool,
     #[cfg(test)]
     fixture: Option<FixtureTransport>,
 }
 
 #[cfg(test)]
 struct FixtureTransport {
-    responses: RefCell<VecDeque<Vec<u8>>>,
-    requests: RefCell<Vec<Vec<u8>>>,
+    responses: VecDeque<Vec<u8>>,
+    requests: Vec<Vec<u8>>,
 }
 
 /// Direction of one raw transport payload delivered to an opt-in trace sink.
@@ -122,26 +122,42 @@ impl Transport {
             endpoint,
             client,
             trace_sink,
-            next_exchange_index: Cell::new(1),
+            next_exchange_index: 1,
+            in_flight: false,
             #[cfg(test)]
             fixture: None,
         })
     }
 
-    pub(crate) fn send(&self, message: &[u8]) -> Result<Vec<u8>, TransportError> {
-        let exchange_index = self.next_exchange_index.get();
-        let next_exchange_index = exchange_index
+    /// Reports and clears whether a previous `send` future was dropped mid-exchange.
+    ///
+    /// A dropped exchange leaves the bank-side dialog state unknown, so the caller
+    /// must abort its local dialog before issuing the next request.
+    pub(crate) fn take_cancellation(&mut self) -> bool {
+        let cancelled = self.in_flight;
+        self.in_flight = false;
+        cancelled
+    }
+
+    pub(crate) async fn send(&mut self, message: &[u8]) -> Result<Vec<u8>, TransportError> {
+        self.in_flight = true;
+        let result = self.exchange(message).await;
+        self.in_flight = false;
+        result
+    }
+
+    async fn exchange(&mut self, message: &[u8]) -> Result<Vec<u8>, TransportError> {
+        let exchange_index = self.next_exchange_index;
+        self.next_exchange_index = exchange_index
             .checked_add(1)
             .ok_or(TransportError::Request)?;
-        self.next_exchange_index.set(next_exchange_index);
         self.trace(TraceDirection::Outgoing, message, exchange_index);
 
         #[cfg(test)]
-        if let Some(fixture) = &self.fixture {
-            fixture.requests.borrow_mut().push(message.to_vec());
+        if let Some(fixture) = &mut self.fixture {
+            fixture.requests.push(message.to_vec());
             let response = fixture
                 .responses
-                .borrow_mut()
                 .pop_front()
                 .ok_or(TransportError::Request)?;
             self.trace(TraceDirection::Incoming, &response, exchange_index);
@@ -155,6 +171,7 @@ impl Transport {
             .header(CONTENT_TYPE, "text/plain")
             .body(body)
             .send()
+            .await
             .map_err(|_| TransportError::Request)?;
         let status = response.status();
         if !status.is_success() {
@@ -168,11 +185,16 @@ impl Transport {
         }
 
         let mut encoded = Vec::new();
-        response
-            .by_ref()
-            .take((MAX_TRANSPORT_RESPONSE_BYTES + 1) as u64)
-            .read_to_end(&mut encoded)
-            .map_err(|_| TransportError::Request)?;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| TransportError::Request)?
+        {
+            if encoded.len() + chunk.len() > MAX_TRANSPORT_RESPONSE_BYTES {
+                return Err(TransportError::ResponseTooLarge);
+            }
+            encoded.extend_from_slice(&chunk);
+        }
         let decoded = decode_body(&encoded)?;
         self.trace(TraceDirection::Incoming, &decoded, exchange_index);
         Ok(decoded)
@@ -193,8 +215,8 @@ impl Transport {
         let mut transport =
             Self::new("https://fictional.invalid/fints").expect("fictional HTTPS endpoint");
         transport.fixture = Some(FixtureTransport {
-            responses: RefCell::new(responses.into_iter().collect()),
-            requests: RefCell::new(Vec::new()),
+            responses: responses.into_iter().collect(),
+            requests: Vec::new(),
         });
         transport
     }
@@ -208,17 +230,23 @@ impl Transport {
             Self::new_with_trace("https://fictional.invalid/fints", Some(trace_sink))
                 .expect("fictional HTTPS endpoint");
         transport.fixture = Some(FixtureTransport {
-            responses: RefCell::new(responses.into_iter().collect()),
-            requests: RefCell::new(Vec::new()),
+            responses: responses.into_iter().collect(),
+            requests: Vec::new(),
         });
         transport
+    }
+
+    /// Simulates an operation future dropped at its transport await point.
+    #[cfg(test)]
+    pub(crate) fn fixture_mark_in_flight(&mut self) {
+        self.in_flight = true;
     }
 
     #[cfg(test)]
     pub(crate) fn fixture_requests(&self) -> Vec<Vec<u8>> {
         self.fixture
             .as_ref()
-            .map(|fixture| fixture.requests.borrow().clone())
+            .map(|fixture| fixture.requests.clone())
             .unwrap_or_default()
     }
 
@@ -226,7 +254,7 @@ impl Transport {
     pub(crate) fn fixture_responses_remaining(&self) -> usize {
         self.fixture
             .as_ref()
-            .map(|fixture| fixture.responses.borrow().len())
+            .map(|fixture| fixture.responses.len())
             .unwrap_or_default()
     }
 }
@@ -340,18 +368,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tracing_exists_only_for_an_explicitly_installed_sink() {
-        let untraced = Transport::fixture([b"fictional response".to_vec()]);
+    #[tokio::test]
+    async fn tracing_exists_only_for_an_explicitly_installed_sink() {
+        let mut untraced = Transport::fixture([b"fictional response".to_vec()]);
         assert!(untraced.trace_sink.is_none());
         assert_eq!(
-            untraced.send(b"fictional request").unwrap(),
+            untraced.send(b"fictional request").await.unwrap(),
             b"fictional response"
         );
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
-        let traced = Transport::fixture_with_trace(
+        let mut traced = Transport::fixture_with_trace(
             [b"first response".to_vec(), b"second response".to_vec()],
             Box::new(move |event| {
                 captured.lock().unwrap().push((
@@ -361,8 +389,8 @@ mod tests {
                 ));
             }),
         );
-        traced.send(b"first request").unwrap();
-        traced.send(b"second request").unwrap();
+        traced.send(b"first request").await.unwrap();
+        traced.send(b"second request").await.unwrap();
 
         assert_eq!(
             *events.lock().unwrap(),
@@ -375,11 +403,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trace_payloads_never_enter_transport_error_formatting() {
+    #[tokio::test]
+    async fn trace_payloads_never_enter_transport_error_formatting() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
-        let transport = Transport::fixture_with_trace(
+        let mut transport = Transport::fixture_with_trace(
             std::iter::empty(),
             Box::new(move |event| {
                 captured.lock().unwrap().push(event.payload().to_vec());
@@ -388,6 +416,7 @@ mod tests {
 
         let error = transport
             .send(b"fictional credential-bearing payload")
+            .await
             .unwrap_err();
         assert_eq!(
             *events.lock().unwrap(),
