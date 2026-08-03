@@ -316,10 +316,7 @@ impl Client {
             transport,
             last_initialization_stage,
         } = self;
-        *last_initialization_stage = Some(InitializationStage::AnonymousBpdRefresh);
-        let stage = last_initialization_stage
-            .as_mut()
-            .expect("parameter refresh stage was set");
+        let stage = last_initialization_stage.insert(InitializationStage::AnonymousBpdRefresh);
         refresh_parameters_with_send(engine, transport, now, stage).await
     }
 
@@ -354,15 +351,12 @@ impl Client {
     /// explicitly and is never retried in a loop.
     pub async fn initialize(&mut self, now: NaiveDateTime) -> Result<Initialization, Error> {
         self.recover_cancellation();
-        self.last_initialization_stage = Some(InitializationStage::InitialDiscovery);
         let Self {
             engine,
             transport,
             last_initialization_stage,
         } = self;
-        let stage = last_initialization_stage
-            .as_mut()
-            .expect("initialization stage was set");
+        let stage = last_initialization_stage.insert(InitializationStage::InitialDiscovery);
         initialize_with_send(engine, transport, now, stage).await
     }
 
