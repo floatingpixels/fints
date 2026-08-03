@@ -3,7 +3,7 @@ use crate::diagnostics::{ReceivedResponseFact, ReceivedSegmentFact};
 use crate::{
     error::{BankResponse, Error, Recovery, ResponseClass},
     model::{Balance, ReusableState, TanMedium, TransactionFormat},
-    wire::{Message, Segment},
+    wire::{Element, Message, Segment, SegmentHeader},
 };
 
 mod balance;
@@ -29,6 +29,140 @@ struct ContinuationPoint {
     value: String,
 }
 
+/// Accumulated HIRMG/HIRMS facts for one response message: ordered bank
+/// responses, TAN-method allowances, and continuation points.
+#[derive(Default)]
+struct ResponseAccumulator {
+    responses: Vec<BankResponse>,
+    allowed_tan_methods: Vec<String>,
+    has_message_response: bool,
+    has_tan_method_response: bool,
+    continuation_points: Vec<ContinuationPoint>,
+}
+
+impl ResponseAccumulator {
+    fn absorb_segment(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        if header.code == b"HIRMG" && self.has_message_response {
+            return Err(Error::InvalidResponse {
+                structure: "response.HIRMG.duplicate",
+            });
+        }
+        if header.version != 2 {
+            return Err(Error::UnsupportedSegment {
+                code: if header.code == b"HIRMG" {
+                    "HIRMG"
+                } else {
+                    "HIRMS"
+                },
+                version: header.version,
+            });
+        }
+        if header.code == b"HIRMG" && segment.elements().len() == 1 {
+            return Err(Error::InvalidResponse {
+                structure: "response.HIRMG.elements",
+            });
+        }
+        self.has_message_response |= header.code == b"HIRMG";
+        let reference = (header.code == b"HIRMS")
+            .then_some(header.reference)
+            .flatten();
+        for element in &segment.elements()[1..] {
+            self.absorb_element(element, reference)?;
+        }
+        Ok(())
+    }
+
+    // Formals B.7.2/B.7.3 and DD `Rückmeldung`: repeated
+    // response DEGs are segment elements. Their scalar
+    // fields map directly to code/reference/text at
+    // components 0/1/2 and parameters from component 3.
+    fn absorb_element(&mut self, element: &Element, reference: Option<u16>) -> Result<(), Error> {
+        let components = element.components();
+        let code = component(components, 0, "response code")?;
+        if code.len() != 4 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(Error::InvalidValue {
+                field: "response code",
+            });
+        }
+        let numeric_code = code.parse().map_err(|_| Error::InvalidValue {
+            field: "response code",
+        })?;
+        let class = match numeric_code / 1000 {
+            0 => ResponseClass::Success,
+            // Rückmeldungscodes 2026-02-03 B.2 defines class-1
+            // notices as non-error diagnostics, while marking them
+            // FinTS-4-only. Owner-observed FinTS 3 interoperability
+            // requires retaining the same bounded, meaning-neutral
+            // shape without changing aggregate result semantics.
+            1 => ResponseClass::Notice,
+            3 => ResponseClass::Warning,
+            9 => ResponseClass::Error,
+            _ => {
+                return Err(Error::InvalidResponseCodeClass { code: numeric_code });
+            }
+        };
+        // Formals 2017-10-06, F "Rückmeldung" defines short
+        // diagnostic fields. They do not affect response
+        // classification or recovery, so interoperability
+        // retains longer or additional bank-supplied values
+        // verbatim under the bounded 1 MiB wire-message limit.
+        let data_element_reference = optional_component(components, 1);
+        let text = component(components, 2, "response text")?;
+        let parameters = components
+            .iter()
+            .skip(3)
+            .map(|value| {
+                value
+                    .as_text()
+                    .map(|value| value.into_owned())
+                    .ok_or(Error::InvalidValue {
+                        field: "response parameter",
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.responses.push(BankResponse::new(
+            numeric_code,
+            class,
+            reference,
+            recovery_for(numeric_code),
+            text,
+            data_element_reference,
+            parameters,
+        ));
+        if numeric_code == 3040 {
+            let segment_number = reference.ok_or(Error::InvalidResponse {
+                structure: "response.3040.segment_reference",
+            })?;
+            let value = component(components, 3, "continuation point")?;
+            if encoding_rs::mem::encode_latin1_lossy(&value).len() > 35 {
+                return Err(Error::InvalidValue {
+                    field: "continuation point",
+                });
+            }
+            self.continuation_points.push(ContinuationPoint {
+                segment_number,
+                value,
+            });
+        }
+        if numeric_code == 3920 {
+            self.has_tan_method_response = true;
+            self.allowed_tan_methods.extend(
+                components
+                    .iter()
+                    .skip(3)
+                    .filter_map(|value| value.as_text())
+                    .filter(|value| is_tan_security_function(value))
+                    .map(|value| value.into_owned()),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl Response {
     pub(crate) fn parse(input: &[u8]) -> Result<Self, Error> {
         let message = Message::parse(input)?;
@@ -51,131 +185,16 @@ impl Response {
                 structure: "response.HIRMG.first",
             });
         }
-        let mut responses = Vec::new();
-        let mut allowed_tan_methods = Vec::new();
-        let mut has_message_response = false;
-        let mut has_tan_method_response = false;
-        let mut continuation_points = Vec::new();
-
+        let mut accumulator = ResponseAccumulator::default();
         for segment in &segments {
             let header = segment.header().ok_or(Error::InvalidResponse {
                 structure: "response.segment_header",
             })?;
-            match header.code {
-                b"HIRMG" | b"HIRMS" => {
-                    if header.code == b"HIRMG" && has_message_response {
-                        return Err(Error::InvalidResponse {
-                            structure: "response.HIRMG.duplicate",
-                        });
-                    }
-                    if header.version != 2 {
-                        return Err(Error::UnsupportedSegment {
-                            code: if header.code == b"HIRMG" {
-                                "HIRMG"
-                            } else {
-                                "HIRMS"
-                            },
-                            version: header.version,
-                        });
-                    }
-                    if header.code == b"HIRMG" && segment.elements().len() == 1 {
-                        return Err(Error::InvalidResponse {
-                            structure: "response.HIRMG.elements",
-                        });
-                    }
-                    has_message_response |= header.code == b"HIRMG";
-                    let reference = (header.code == b"HIRMS")
-                        .then_some(header.reference)
-                        .flatten();
-                    for element in &segment.elements()[1..] {
-                        // Formals B.7.2/B.7.3 and DD `Rückmeldung`: repeated
-                        // response DEGs are segment elements. Their scalar
-                        // fields map directly to code/reference/text at
-                        // components 0/1/2 and parameters from component 3.
-                        let components = element.components();
-                        let code = component(components, 0, "response code")?;
-                        if code.len() != 4 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-                            return Err(Error::InvalidValue {
-                                field: "response code",
-                            });
-                        }
-                        let numeric_code = code.parse().map_err(|_| Error::InvalidValue {
-                            field: "response code",
-                        })?;
-                        let class = match numeric_code / 1000 {
-                            0 => ResponseClass::Success,
-                            // Rückmeldungscodes 2026-02-03 B.2 defines class-1
-                            // notices as non-error diagnostics, while marking them
-                            // FinTS-4-only. Owner-observed FinTS 3 interoperability
-                            // requires retaining the same bounded, meaning-neutral
-                            // shape without changing aggregate result semantics.
-                            1 => ResponseClass::Notice,
-                            3 => ResponseClass::Warning,
-                            9 => ResponseClass::Error,
-                            _ => {
-                                return Err(Error::InvalidResponseCodeClass { code: numeric_code });
-                            }
-                        };
-                        // Formals 2017-10-06, F "Rückmeldung" defines short
-                        // diagnostic fields. They do not affect response
-                        // classification or recovery, so interoperability
-                        // retains longer or additional bank-supplied values
-                        // verbatim under the bounded 1 MiB wire-message limit.
-                        let data_element_reference = optional_component(components, 1);
-                        let text = component(components, 2, "response text")?;
-                        let parameters = components
-                            .iter()
-                            .skip(3)
-                            .map(|value| {
-                                value.as_text().map(|value| value.into_owned()).ok_or(
-                                    Error::InvalidValue {
-                                        field: "response parameter",
-                                    },
-                                )
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        responses.push(BankResponse::new(
-                            numeric_code,
-                            class,
-                            reference,
-                            recovery_for(numeric_code),
-                            text,
-                            data_element_reference,
-                            parameters,
-                        ));
-                        if numeric_code == 3040 {
-                            let segment_number = reference.ok_or(Error::InvalidResponse {
-                                structure: "response.3040.segment_reference",
-                            })?;
-                            let value = component(components, 3, "continuation point")?;
-                            if encoding_rs::mem::encode_latin1_lossy(&value).len() > 35 {
-                                return Err(Error::InvalidValue {
-                                    field: "continuation point",
-                                });
-                            }
-                            continuation_points.push(ContinuationPoint {
-                                segment_number,
-                                value,
-                            });
-                        }
-                        if numeric_code == 3920 {
-                            has_tan_method_response = true;
-                            allowed_tan_methods.extend(
-                                components
-                                    .iter()
-                                    .skip(3)
-                                    .filter_map(|value| value.as_text())
-                                    .filter(|value| is_tan_security_function(value))
-                                    .map(|value| value.into_owned()),
-                            );
-                        }
-                    }
-                }
-                _ => {}
+            if matches!(header.code, b"HIRMG" | b"HIRMS") {
+                accumulator.absorb_segment(segment, &header)?;
             }
         }
-
-        if !has_message_response {
+        if !accumulator.has_message_response {
             return Err(Error::MissingValue {
                 field: "HIRMG response segment",
             });
@@ -187,7 +206,8 @@ impl Response {
             && message.segments().len() == 3
             && segments.len() == 1
             && (dialog_id == "unbekannt" || message_number == 9999)
-            && responses
+            && accumulator
+                .responses
                 .iter()
                 .any(|response| response.class() == ResponseClass::Error);
         Ok(Self {
@@ -195,10 +215,10 @@ impl Response {
             message_number,
             dialog_abort,
             segments,
-            responses,
-            allowed_tan_methods,
-            has_tan_method_response,
-            continuation_points,
+            responses: accumulator.responses,
+            allowed_tan_methods: accumulator.allowed_tan_methods,
+            has_tan_method_response: accumulator.has_tan_method_response,
+            continuation_points: accumulator.continuation_points,
         })
     }
 
