@@ -1,0 +1,36 @@
+name: Release token check
+
+# Manually triggered validation of the RELEASE_PLZ_TOKEN secret: proves the
+# token is non-empty, authenticates, and holds the Contents write grant by
+# creating and deleting a throwaway ref. Secret values are write-only, so this
+# is the only way to inspect the token without exposing it. Re-run after every
+# rotation.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+    steps:
+      - name: Token is present
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::RELEASE_PLZ_TOKEN is empty or unset"
+            exit 1
+          fi
+          echo "token present (${#GH_TOKEN} characters)"
+
+      - name: Token authenticates
+        run: gh api user --jq '"authenticated as " + .login'
+
+      - name: Token can write contents
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          ref="refs/tags/token-check-$GITHUB_RUN_ID"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$ref" -f sha="$sha" >/dev/null
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/$ref"
+          echo "contents write grant confirmed (created and deleted $ref)"
