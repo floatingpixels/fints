@@ -791,13 +791,7 @@ impl Client {
     }
 
     async fn send(&mut self, request: &[u8]) -> Result<Vec<u8>, Error> {
-        match self.transport.send(request).await {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                self.engine.abort_dialog();
-                Err(Error::Transport(error))
-            }
-        }
+        send_to(&mut self.engine, &mut self.transport, request).await
     }
 
     /// Restores a usable local state after a cancelled in-flight operation.
@@ -949,8 +943,21 @@ fn map_initialization(result: InitializationResult) -> Result<Initialization, Er
     }
 }
 
-async fn send_to(transport: &mut Transport, request: &[u8]) -> Result<Vec<u8>, Error> {
-    transport.send(request).await.map_err(Error::from)
+/// The single transport round trip used by every exchange. A transport failure
+/// aborts the local dialog so no later request is built against a dialog the
+/// institution may already have discarded.
+async fn send_to(
+    engine: &mut Engine,
+    transport: &mut Transport,
+    request: &[u8],
+) -> Result<Vec<u8>, Error> {
+    match transport.send(request).await {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            engine.abort_dialog();
+            Err(Error::Transport(error))
+        }
+    }
 }
 
 async fn initialize_with_send(
@@ -992,9 +999,7 @@ async fn request_initialization_with_send(
     now: NaiveDateTime,
 ) -> Result<InitializationResult, Error> {
     let request = engine.initialization_request(now.date(), now.time())?;
-    let response = send_to(transport, &request).await.inspect_err(|_error| {
-        engine.abort_dialog();
-    })?;
+    let response = send_to(engine, transport, &request).await?;
     engine.accept_initialization(&response, now)
 }
 
@@ -1006,15 +1011,11 @@ async fn refresh_parameters_with_send(
 ) -> Result<(), Error> {
     *stage = InitializationStage::AnonymousBpdRefresh;
     let request = engine.anonymous_initialization_request()?;
-    let response = send_to(transport, &request).await.inspect_err(|_error| {
-        engine.abort_dialog();
-    })?;
+    let response = send_to(engine, transport, &request).await?;
     engine.accept_anonymous_initialization(&response)?;
     *stage = InitializationStage::AnonymousTermination;
     let request = engine.termination_request(now.date(), now.time())?;
-    let response = send_to(transport, &request).await.inspect_err(|_error| {
-        engine.abort_dialog();
-    })?;
+    let response = send_to(engine, transport, &request).await?;
     engine.accept_termination(&response)
 }
 
@@ -1038,9 +1039,7 @@ async fn finish_initialization_with_send(
     };
     if engine.has_active_dialog() {
         let request = engine.termination_request(now.date(), now.time())?;
-        let response = send_to(transport, &request).await.inspect_err(|_error| {
-            engine.abort_dialog();
-        })?;
+        let response = send_to(engine, transport, &request).await?;
         if preserves_discovery_refresh {
             engine.accept_discovery_refresh_termination(&response)?;
         } else {
@@ -1056,18 +1055,14 @@ async fn synchronize_with_send(
     now: NaiveDateTime,
 ) -> Result<Synchronization, Error> {
     let request = engine.synchronization_request(now.date(), now.time())?;
-    let response = send_to(transport, &request).await.inspect_err(|_error| {
-        engine.abort_dialog();
-    })?;
+    let response = send_to(engine, transport, &request).await?;
     match engine.accept_synchronization(&response, now)? {
         SynchronizationResult::Complete => {
             // The synchronization response opened a dialog; a failing HKEND
             // exchange must abort it or every later dialog-opening request
             // would fail with InconsistentState.
             let request = engine.termination_request(now.date(), now.time())?;
-            let response = send_to(transport, &request).await.inspect_err(|_error| {
-                engine.abort_dialog();
-            })?;
+            let response = send_to(engine, transport, &request).await?;
             engine.accept_termination(&response)?;
             Ok(Synchronization::Complete)
         }
@@ -1083,19 +1078,14 @@ async fn discover_tan_media_with_send(
     now: NaiveDateTime,
 ) -> Result<(), Error> {
     let request = engine.tan_media_initialization_request(now.date(), now.time())?;
-    let response = send_to(transport, &request).await.inspect_err(|_error| {
-        engine.abort_dialog();
-    })?;
+    let response = send_to(engine, transport, &request).await?;
     let discovery = match engine.accept_tan_media_initialization(&response) {
         Ok(TanMediaInitializationResult::Complete) => Ok(()),
         Ok(TanMediaInitializationResult::OrderRequired) => {
             match engine.tan_media_request(now.date(), now.time()) {
-                Ok(request) => match send_to(transport, &request).await {
+                Ok(request) => match send_to(engine, transport, &request).await {
                     Ok(response) => engine.accept_tan_media_response(&response),
-                    Err(error) => {
-                        engine.abort_dialog();
-                        Err(error)
-                    }
+                    Err(error) => Err(error),
                 },
                 Err(error) => Err(error),
             }
@@ -1105,9 +1095,7 @@ async fn discover_tan_media_with_send(
 
     let termination = if engine.has_active_dialog() {
         let request = engine.termination_request(now.date(), now.time())?;
-        let response = send_to(transport, &request).await.inspect_err(|_error| {
-            engine.abort_dialog();
-        })?;
+        let response = send_to(engine, transport, &request).await?;
         engine.accept_termination(&response)
     } else {
         Ok(())
