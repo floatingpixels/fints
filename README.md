@@ -1,6 +1,6 @@
 # FinTS
 
-`fints` is a synchronous, read-only FinTS 3.0 PIN/TAN client for German banks. It
+`fints` is an asynchronous, read-only FinTS 3.0 PIN/TAN client for German banks. It
 retrieves account balances, booked cash transactions, securities positions and
 transactions, and credit-card balances and transactions. Payment initiation and every
 other state-changing banking operation are deliberately excluded.
@@ -41,6 +41,12 @@ medium selection, synchronization, a typed TAN, or decoupled approval. Operation
 their own continuation types; do not discard a continuation and retry the original
 request inside the same dialog.
 
+All operations are `async` and drive a tokio-compatible HTTPS transport; the crate
+itself never waits, retries, or polls, so the caller schedules decoupled-approval
+polling with its own runtime timer. Dropping an operation future mid-exchange is
+detected: the next operation aborts the dialog, stale continuations fail with
+`Error::StaleContinuation`, and a fresh `initialize` starts cleanly.
+
 The example below leaves user input, waiting, and encrypted persistence as caller
 hooks, but shows the complete control flow. A real UI should let the user choose among
 the intersection of `allowed_tan_methods()` and `tan_methods()` rather than selecting
@@ -54,7 +60,7 @@ use fints::{
     Synchronization, Tan,
 };
 
-fn read_balance(
+async fn read_balance(
     endpoint: &str,
     bank_code: &str,
     product_id: &str,
@@ -62,7 +68,7 @@ fn read_balance(
     state: ReusableState,
     mut now: impl FnMut() -> NaiveDateTime,
     mut collect_tan: impl FnMut(&Challenge) -> Result<Tan, Error>,
-    mut wait_until: impl FnMut(NaiveDateTime),
+    mut wait_until: impl AsyncFnMut(NaiveDateTime),
 ) -> Result<(Box<Balance>, ReusableState), Error> {
     let mut client = Client::new(
         endpoint,
@@ -72,13 +78,13 @@ fn read_balance(
         state,
     )?;
 
-    let mut initialization = client.initialize(now())?;
+    let mut initialization = client.initialize(now()).await?;
     loop {
         initialization = match initialization {
             Initialization::Connected => break,
             Initialization::RefreshParameters => {
-                client.refresh_parameters(now())?;
-                client.initialize(now())?
+                client.refresh_parameters(now()).await?;
+                client.initialize(now()).await?
             }
             Initialization::ChooseTanMethod => {
                 let (security_function, medium_required) = {
@@ -101,7 +107,7 @@ fn read_balance(
 
                 if medium_required {
                     let medium_name = client
-                        .discover_tan_media(now())?
+                        .discover_tan_media(now()).await?
                         .iter()
                         .find_map(|medium| medium.name())
                         .ok_or(Limitation::TanMediumUnavailable)?
@@ -112,7 +118,7 @@ fn read_balance(
                 // First contact normally receives a system ID during initialize().
                 // If the institution omitted it, synchronize after method selection.
                 if client.state().system_id().is_none() {
-                    let mut synchronization = client.synchronize(now())?;
+                    let mut synchronization = client.synchronize(now()).await?;
                     loop {
                         synchronization = match synchronization {
                             Synchronization::Complete => break,
@@ -124,18 +130,18 @@ fn read_balance(
                                             *continuation,
                                             &tan,
                                             now(),
-                                        )?
+                                        ).await?
                                     }
                                     ContinuationKind::DecoupledApproval => {
                                         let poll_at = continuation
                                             .earliest_poll_at()
                                             .ok_or(Error::InconsistentState)?;
-                                        wait_until(poll_at);
+                                        wait_until(poll_at).await;
                                         client.poll_synchronization(
                                             *continuation,
                                             PollingMode::Manual,
                                             poll_at,
-                                        )?
+                                        ).await?
                                     }
                                 }
                             }
@@ -143,49 +149,49 @@ fn read_balance(
                     }
                 }
 
-                client.initialize(now())?
+                client.initialize(now()).await?
             }
             Initialization::Challenge(continuation) => match continuation.kind() {
                 ContinuationKind::Tan => {
                     let tan = collect_tan(continuation.challenge())?;
-                    client.submit_initialization_tan(*continuation, &tan, now())?
+                    client.submit_initialization_tan(*continuation, &tan, now()).await?
                 }
                 ContinuationKind::DecoupledApproval => {
                     let poll_at = continuation
                         .earliest_poll_at()
                         .ok_or(Error::InconsistentState)?;
-                    wait_until(poll_at);
+                    wait_until(poll_at).await;
                     client.poll_initialization(
                         *continuation,
                         PollingMode::Manual,
                         poll_at,
-                    )?
+                    ).await?
                 }
             },
         };
     }
 
-    let mut request = client.balance(0, now())?;
+    let mut request = client.balance(0, now()).await?;
     let balance = loop {
         request = match request {
             BalanceRequest::Complete(balance) => break balance,
             BalanceRequest::Challenge(continuation) => match continuation.kind() {
                 ContinuationKind::Tan => {
                     let tan = collect_tan(continuation.challenge())?;
-                    client.submit_balance_tan(*continuation, &tan, now())?
+                    client.submit_balance_tan(*continuation, &tan, now()).await?
                 }
                 ContinuationKind::DecoupledApproval => {
                     let poll_at = continuation
                         .earliest_poll_at()
                         .ok_or(Error::InconsistentState)?;
-                    wait_until(poll_at);
-                    client.poll_balance(*continuation, PollingMode::Manual, poll_at)?
+                    wait_until(poll_at).await;
+                    client.poll_balance(*continuation, PollingMode::Manual, poll_at).await?
                 }
             },
         };
     };
 
-    client.terminate(now())?;
+    client.terminate(now()).await?;
     Ok((balance, client.into_state()))
 }
 ```

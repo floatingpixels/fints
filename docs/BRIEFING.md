@@ -36,11 +36,26 @@ Finanzplaner owns:
 The crate does not need Finanzplaner's private institute CSV/PDF, source tree, database,
 or actual credentials.
 
+## Consuming the async API
+
+Every IO-performing client operation is `async` (Gate 5) and returns a `Send` future.
+Finanzplaner's Tauri commands run on tokio and call the client with plain `.await`;
+the previous `spawn_blocking` bridge is no longer needed and should be removed on the
+next revision bump. The crate never waits internally: decoupled-approval polling is
+scheduled by the caller from `earliest_poll_at()` with its own runtime timer.
+Cancelling an operation future (timeout, `select!`, task abort) leaves the bank-side
+dialog unknown; the client detects this on the next operation, aborts the local
+dialog, and fails stale continuations with `Error::StaleContinuation` — recover by
+calling `initialize` again, not by retrying inside the dead dialog.
+
 ## Current assignment
 
-Gate 4 is the active owner-review boundary. It adds only the scoped product reads:
-advertised HKWPD 6 depot positions, advertised HKWDU 5 booked securities
-transactions, and G112 HKKKU/HKKKS 1 credit-card transactions and balances.
+Gate 5 (async-first API) is the active owner-review boundary: every IO-performing
+operation becomes `async fn` with unchanged wire behavior, state shapes, and typed
+results, plus the documented cancellation semantic above. Gate 4 closed with 0.2.0
+and added the scoped product reads: advertised HKWPD 6 depot positions, advertised
+HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1 credit-card
+transactions and balances.
 
 The Gate 4 handoff stays narrow:
 

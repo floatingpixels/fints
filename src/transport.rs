@@ -72,7 +72,9 @@ impl<'a> TraceEvent<'a> {
 /// Opt-in callback for credential-bearing raw FinTS transport payloads.
 ///
 /// The sink moves with its owning client and is never invoked concurrently by the
-/// crate, so it must be `Send` but need not be `Sync`.
+/// crate, so it must be `Send` but need not be `Sync`. It is called synchronously
+/// on the async task driving the operation and must not block; hand payloads to a
+/// channel or buffer if processing them takes real time.
 pub type TraceSink = Box<dyn for<'a> Fn(TraceEvent<'a>) + Send + 'static>;
 
 /// Failures in the bounded HTTPS transport.
