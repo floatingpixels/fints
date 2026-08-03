@@ -1,55 +1,48 @@
 name: Release
 
-# Tags and publishes a GitHub release when the version in Cargo.toml has no
-# tag yet. Versions are bumped by hand in a `chore: release version x.y.z`
-# commit and release notes come verbatim from the hand-written CHANGELOG.md
-# entry, so this workflow never generates or rewrites content.
+# release-plz opens and maintains a release PR from Conventional Commits
+# (version bump + changelog). Merging that PR is the owner's release decision;
+# the release job then tags the version and publishes a GitHub release.
+# cargo publish stays disabled (publish = false).
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  tag-and-release:
+  release-plz-release:
+    name: Tag and release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Determine version
-        id: version
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          test -n "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git rev-parse "v$version" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Extract changelog entry
-        if: steps.version.outputs.exists == 'false'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          awk -v ver="$VERSION" '
-            /^- \*\*/ { if (found) exit; if (index($0, "**" ver " ") == 3) found = 1 }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-          test -s release-notes.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create tag and release
-        if: steps.version.outputs.exists == 'false'
+  release-plz-pr:
+    name: Open release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          gh release create "v$VERSION" \
-            --target "$GITHUB_SHA" \
-            --title "v$VERSION" \
-            --notes-file release-notes.md
+          # A RELEASE_PLZ_TOKEN PAT lets CI run on the release PR; the default
+          # token works but GitHub then skips workflows on PRs it creates.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}

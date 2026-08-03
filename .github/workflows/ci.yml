@@ -4,39 +4,56 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly re-run so new security advisories surface without a code change.
+    - cron: "27 6 * * 1"
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verification stack
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Installs the exact toolchain pinned in rust-toolchain.toml (the same
+      # one the local Nix devshell provides) and caches builds.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+
+  lint:
+    name: Lint and docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # The flake pins the exact toolchain from rust-toolchain.toml, so CI,
-      # agents, and local development share one toolchain.
-      - uses: DeterminateSystems/nix-installer-action@v16
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Tests
-        run: nix develop -c cargo test --all-targets
-
-      - name: Doctests
-        run: nix develop -c cargo test --doc
-
-      - name: Clippy
-        run: nix develop -c cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Formatting
-        run: nix develop -c cargo fmt --all --check
-
-      - name: Documentation
-        run: nix develop -c cargo doc --no-deps
-
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo doc --no-deps
       # The fuzz harness is owner-run and outside the default verification
       # stack, but it must keep compiling against the library.
-      - name: Fuzz crate builds
-        run: nix develop -c cargo check --manifest-path fuzz/Cargo.toml
+      - run: cargo check --manifest-path fuzz/Cargo.toml
+
+  stable-preview:
+    name: Latest stable (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-targets
+
+  deny:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

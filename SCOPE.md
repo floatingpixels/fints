@@ -81,9 +81,9 @@ product.
 
 ## Serial gates
 
-Each gate ends with the full verification stack, a maximum-three-line `CHANGELOG.md`
-entry, one immutable commit/revision, and owner review. Work on later gates must not
-start early.
+Each gate ends with the full verification stack, one immutable commit/revision, and
+owner review; version bumps and changelog entries come from the release-plz release
+PR the owner merges. Work on later gates must not start early.
 
 ### Gate 1 — Registered connection and balance
 
