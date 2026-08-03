@@ -1,8 +1,11 @@
 [workspace]
-# Consumed via exact git revisions; never published to crates.io.
-publish = false
+# Consumed via exact git revisions; never published to crates.io. git_only
+# baselines version detection on the latest matching git tag instead of the
+# cargo registry (which would silently report "nothing to release" for a
+# never-published crate).
+git_only = true
 git_tag_name = "v{{ version }}"
 git_release_enable = true
 changelog_update = true
-# cargo-semver-checks needs a crates.io baseline, which publish = false rules out.
+# cargo-semver-checks needs a registry baseline, which git-only rules out.
 semver_check = false
