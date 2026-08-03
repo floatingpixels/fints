@@ -25,6 +25,9 @@ jobs:
       # one the local Nix devshell provides) and caches builds.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo test --all-targets
+      # The diagnostics feature gates additional tests that default-feature
+      # runs never execute; run both configurations.
+      - run: cargo test --all-features --all-targets
       - run: cargo test --doc
 
   lint:
