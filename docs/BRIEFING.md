@@ -50,12 +50,13 @@ calling `initialize` again, not by retrying inside the dead dialog.
 
 ## Current assignment
 
-Gate 5 (async-first API) is the active owner-review boundary: every IO-performing
-operation becomes `async fn` with unchanged wire behavior, state shapes, and typed
-results, plus the documented cancellation semantic above. Gate 4 closed with 0.2.0
-and added the scoped product reads: advertised HKWPD 6 depot positions, advertised
-HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1 credit-card
-transactions and balances.
+All five gates are closed; the crate is between gates. Gate 5 (async-first API)
+closed with 0.3.0: every IO-performing operation became `async fn` with unchanged
+wire behavior, state shapes, and typed results, plus the documented cancellation
+semantic above, owner-live-re-verified against two institutions. Gate 4 closed with
+0.2.0 and added the scoped product reads: advertised HKWPD 6 depot positions,
+advertised HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1
+credit-card transactions and balances.
 
 The Gate 4 handoff stays narrow:
 
