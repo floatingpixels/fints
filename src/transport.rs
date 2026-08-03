@@ -36,6 +36,7 @@ pub(crate) struct Transport {
 struct FixtureTransport {
     responses: VecDeque<Vec<u8>>,
     requests: Vec<Vec<u8>>,
+    pending: bool,
 }
 
 /// Direction of one raw transport payload delivered to an opt-in trace sink.
@@ -157,6 +158,9 @@ impl Transport {
 
         #[cfg(test)]
         if let Some(fixture) = &mut self.fixture {
+            if fixture.pending {
+                std::future::pending::<()>().await;
+            }
             fixture.requests.push(message.to_vec());
             let response = fixture
                 .responses
@@ -219,6 +223,7 @@ impl Transport {
         transport.fixture = Some(FixtureTransport {
             responses: responses.into_iter().collect(),
             requests: Vec::new(),
+            pending: false,
         });
         transport
     }
@@ -234,6 +239,7 @@ impl Transport {
         transport.fixture = Some(FixtureTransport {
             responses: responses.into_iter().collect(),
             requests: Vec::new(),
+            pending: false,
         });
         transport
     }
@@ -242,6 +248,15 @@ impl Transport {
     #[cfg(test)]
     pub(crate) fn fixture_mark_in_flight(&mut self) {
         self.in_flight = true;
+    }
+
+    /// Makes the next fixture exchange suspend forever so a test can poll an
+    /// operation future to its transport await point and then drop it.
+    #[cfg(test)]
+    pub(crate) fn fixture_set_pending(&mut self, pending: bool) {
+        if let Some(fixture) = &mut self.fixture {
+            fixture.pending = pending;
+        }
     }
 
     #[cfg(test)]

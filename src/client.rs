@@ -136,7 +136,7 @@ pub struct CreditCardBalanceContinuation {
     pending: PendingChallenge,
 }
 
-/// Concrete synchronous client for the supported read-only FinTS operations.
+/// Concrete asynchronous client for the supported read-only FinTS operations.
 ///
 /// The client deliberately has no `Debug` implementation because it owns credentials,
 /// dialog state, challenges, and authenticated protocol messages.
@@ -1119,11 +1119,18 @@ async fn synchronize_with_send(
     now: NaiveDateTime,
 ) -> Result<Synchronization, Error> {
     let request = engine.synchronization_request(now.date(), now.time())?;
-    let response = send_to(transport, &request).await?;
+    let response = send_to(transport, &request).await.inspect_err(|_error| {
+        engine.abort_dialog();
+    })?;
     match engine.accept_synchronization(&response, now)? {
         SynchronizationResult::Complete => {
+            // The synchronization response opened a dialog; a failing HKEND
+            // exchange must abort it or every later dialog-opening request
+            // would fail with InconsistentState.
             let request = engine.termination_request(now.date(), now.time())?;
-            let response = send_to(transport, &request).await?;
+            let response = send_to(transport, &request).await.inspect_err(|_error| {
+                engine.abort_dialog();
+            })?;
             engine.accept_termination(&response)?;
             Ok(Synchronization::Complete)
         }
@@ -1384,7 +1391,22 @@ mod tests {
         fn assert_send_future<F: Future + Send>(_future: F) {}
 
         // Never called: defining this function is the compile-time assertion.
-        fn assert_all(client: &mut Client, continuation: InitializationContinuation) {
+        // Every public async method appears because each future captures its own
+        // moved continuation and borrowed inputs, and auto-trait inference is
+        // per-capture, not per-client.
+        #[expect(clippy::too_many_arguments, reason = "one slot per continuation type")]
+        fn assert_all(
+            client: &mut Client,
+            tan: &Tan,
+            initialization: [InitializationContinuation; 2],
+            synchronization: [SynchronizationContinuation; 2],
+            balance: [BalanceContinuation; 2],
+            transactions: [BookedTransactionContinuation; 2],
+            depot: [DepotPositionContinuation; 2],
+            securities: [SecuritiesTransactionContinuation; 2],
+            card_transactions: [CreditCardTransactionContinuation; 2],
+            card_balance: [CreditCardBalanceContinuation; 2],
+        ) {
             assert_send_future(client.initialize(now()));
             assert_send_future(client.refresh_parameters(now()));
             assert_send_future(client.synchronize(now()));
@@ -1395,12 +1417,40 @@ mod tests {
             assert_send_future(client.securities_transactions(0, None, None, now()));
             assert_send_future(client.credit_card_transactions(0, None, None, now()));
             assert_send_future(client.credit_card_balance(0, now()));
-            assert_send_future(client.poll_initialization(
-                continuation,
+            assert_send_future(client.terminate(now()));
+
+            let [submit, poll] = initialization;
+            assert_send_future(client.submit_initialization_tan(submit, tan, now()));
+            assert_send_future(client.poll_initialization(poll, PollingMode::Manual, now()));
+            let [submit, poll] = synchronization;
+            assert_send_future(client.submit_synchronization_tan(submit, tan, now()));
+            assert_send_future(client.poll_synchronization(poll, PollingMode::Manual, now()));
+            let [submit, poll] = balance;
+            assert_send_future(client.submit_balance_tan(submit, tan, now()));
+            assert_send_future(client.poll_balance(poll, PollingMode::Manual, now()));
+            let [submit, poll] = transactions;
+            assert_send_future(client.submit_booked_transaction_tan(submit, tan, now()));
+            assert_send_future(client.poll_booked_transactions(poll, PollingMode::Manual, now()));
+            let [submit, poll] = depot;
+            assert_send_future(client.submit_depot_position_tan(submit, tan, now()));
+            assert_send_future(client.poll_depot_positions(poll, PollingMode::Manual, now()));
+            let [submit, poll] = securities;
+            assert_send_future(client.submit_securities_transaction_tan(submit, tan, now()));
+            assert_send_future(client.poll_securities_transactions(
+                poll,
                 PollingMode::Manual,
                 now(),
             ));
-            assert_send_future(client.terminate(now()));
+            let [submit, poll] = card_transactions;
+            assert_send_future(client.submit_credit_card_transaction_tan(submit, tan, now()));
+            assert_send_future(client.poll_credit_card_transactions(
+                poll,
+                PollingMode::Manual,
+                now(),
+            ));
+            let [submit, poll] = card_balance;
+            assert_send_future(client.submit_credit_card_balance_tan(submit, tan, now()));
+            assert_send_future(client.poll_credit_card_balance(poll, PollingMode::Manual, now()));
         }
         let _ = assert_all;
     }
@@ -2975,6 +3025,58 @@ mod tests {
         assert!(!open_engine.has_active_dialog());
     }
 
+    // Cancellation means dropping the future (as tokio::select! does with the
+    // losing branch). Poll an operation future to its genuinely suspended
+    // transport exchange, drop it there, and require the in-flight marker to be
+    // set — while completed exchanges must leave it clear.
+    #[tokio::test]
+    async fn dropping_a_suspended_operation_future_sets_the_cancellation_marker() {
+        use std::task::{Context, Waker};
+
+        let initialization =
+            secured_response(b"HIRMG:2:2+0010::fictional initialization accepted'", 1, 3);
+        let challenge = secured_response(
+            concat!(
+                "HIRMG:2:2+3060::fictional warning'",
+                "HIRMS:3:2:4+3955::approve elsewhere'",
+                "HITAN:4:7:4+4++fictional-card-reference+Approve fictional entries'"
+            )
+            .as_bytes(),
+            2,
+            5,
+        );
+        let mut client =
+            client_with_state(decoupled_credit_card_state(), [initialization, challenge]);
+
+        assert!(matches!(
+            client.initialize(now()).await.unwrap(),
+            Initialization::Connected
+        ));
+        assert!(!client.transport.take_cancellation());
+        let continuation = match client
+            .credit_card_transactions(0, None, None, now())
+            .await
+            .unwrap()
+        {
+            CreditCardTransactionRequest::Challenge(continuation) => *continuation,
+            _ => panic!("expected decoupled credit-card approval"),
+        };
+        assert!(!client.transport.take_cancellation());
+
+        client.transport.fixture_set_pending(true);
+        let poll_at = continuation.earliest_poll_at().unwrap_or_else(now);
+        {
+            let mut operation = std::pin::pin!(client.poll_credit_card_transactions(
+                continuation,
+                PollingMode::Manual,
+                poll_at,
+            ));
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(operation.as_mut().poll(&mut context).is_pending());
+        }
+        assert!(client.transport.take_cancellation());
+    }
+
     // An operation future dropped at its transport exchange leaves the bank-side
     // dialog unknown. The next operation must abort the local dialog first, so
     // continuations of the cancelled dialog fail typed while a fresh
@@ -3274,5 +3376,42 @@ mod tests {
             Some("fictional-assigned-system")
         );
         assert_eq!(transport.fixture_responses_remaining(), 0);
+    }
+
+    // A transport failure during the synchronization HKEND exchange must abort
+    // the dialog the HISYN response opened; otherwise every later dialog-opening
+    // request fails with InconsistentState and the client is unusable.
+    #[tokio::test]
+    async fn synchronization_termination_transport_failure_aborts_the_dialog() {
+        let synchronization = concat!(
+            "HNSHK:2:4+PIN:2+942+fiction-ref+1+1",
+            "+1::fictional-system+1+1+1:999:1+6:10:16",
+            "+280:12345678:fictional-bank:S:0:0'",
+            "HIRMG:3:2+3060::fictional warning'",
+            "HIRMS:4:2:6+0020::fictional synchronization accepted'",
+            "HIRMS:5:2:4+0020::fictional identity accepted",
+            "+3920::fictional methods:942'",
+            "HIRMS:6:2:5+3076::fictional SCA exemption'",
+            "HISYN:7:4:2+fictional-assigned-system'",
+            "HNSHA:8:2+fiction-ref'"
+        );
+        // Only the HKSYN response is supplied, so the HKEND exchange fails at
+        // the transport.
+        let mut transport =
+            Transport::fixture([secured_response(synchronization.as_bytes(), 1, 9)]);
+        let mut engine = synchronization_engine();
+
+        let error = match synchronize_with_send(&mut engine, &mut transport, now()).await {
+            Err(error) => error,
+            Ok(_) => panic!("a failing HKEND exchange must surface a transport error"),
+        };
+        assert!(matches!(error, Error::Transport(_)));
+        assert!(!engine.has_active_dialog());
+        // A fresh dialog-opening request passes the no-dialog guard again.
+        assert!(
+            engine
+                .synchronization_request(now().date(), now().time())
+                .is_ok()
+        );
     }
 }
