@@ -5,7 +5,7 @@ use crate::{
         Account, CamtCapability, CreditCardCapability, InstituteState, OperationPermission,
         ReusableState, TanMedium, TanMediumClass, TanMediumStatus, TanMethod, TanProcess,
     },
-    wire::{Segment, Value},
+    wire::{Segment, SegmentHeader, Value},
 };
 
 use super::camt_descriptor_matches;
@@ -24,282 +24,443 @@ pub(super) fn apply(
     // a dialog-transient BPD and an explicit refresh may replace same-version BPD.
     let replace_bpd = received_bpd_version
         .is_some_and(|version| version == 0 || version != state.bpd_version || force_bpd_refresh);
-    let mut received_accounts = Vec::new();
-    let mut received_methods = Vec::new();
-    let mut received_balance_versions = Vec::new();
-    let mut advertised_balance_versions = Vec::new();
-    let mut advertised_tan_media_versions = Vec::new();
-    let mut balance_capability_advertised = false;
-    let mut received_camt_descriptors = Vec::new();
-    let mut camt_storage_period_days = None;
-    let mut received_legacy_transaction_versions = Vec::new();
-    let mut transaction_capability_advertised = false;
-    let mut received_upd_version = None;
-    let mut received_upd_usage = None;
-    let mut balance_requires_tan = None;
-    let mut camt_requires_tan = None;
-    let mut legacy_transactions_require_tan = None;
-    let mut depot_positions_advertised = false;
-    let mut received_depot_position_versions = Vec::new();
-    let mut depot_positions_requires_tan = None;
-    let mut securities_transactions_advertised = false;
-    let mut securities_transactions_seen = false;
-    let mut securities_transactions_supported = false;
-    let mut securities_transactions_storage_period_days = None;
-    let mut securities_transactions_requires_tan = None;
-    let mut credit_card_transactions_advertised = false;
-    let mut credit_card_transactions_seen = false;
-    let mut credit_card_transactions = None;
-    let mut credit_card_transactions_storage_period_days = None;
-    let mut credit_card_transactions_requires_tan = None;
-    let mut credit_card_balance_advertised = false;
-    let mut credit_card_balance_account_required = None;
-    let mut credit_card_balance_requires_tan = None;
-    let mut advertised_parameter_segments = Vec::new();
+    let mut params = ParameterAccumulator::default();
 
     for segment in segments {
         let header = segment.header().ok_or(Error::InvalidResponse {
             structure: "parameters.business.segment_header",
         })?;
         if replace_bpd && is_parameter_segment(header.code) {
-            advertised_parameter_segments.push(ParameterSegmentAdvertisement::new(
-                header.code.iter().copied().map(char::from).collect(),
-                header.version,
-            ));
-            if header.code == b"HITABS" {
-                advertised_tan_media_versions.push(header.version);
-            }
+            params.record_advertisement(&header);
         }
         match header.code {
             b"HIBPA" => {}
-            b"HIUPA" => {
-                // Formals E.2, HIUPA 4: segment fields remain separate
-                // elements, so DD fields 3/4 are element indices 2/3.
-                require_version(header.version, 4, "HIUPA")?;
-                let version = parse_element_u16(segment, 2, "UPD version")?;
-                if version > 999 {
-                    return Err(Error::InvalidValue {
-                        field: "UPD version",
-                    });
-                }
-                received_upd_version = Some(version);
-                received_upd_usage = Some(match single_text(segment, 3, "UPD usage")?.as_str() {
-                    "0" => false,
-                    "1" => true,
-                    _ => {
-                        return Err(Error::InvalidValue { field: "UPD usage" });
-                    }
-                });
-            }
-            b"HIUPD" => {
-                // Formals E.3, HIUPD 6: field 2 is one ktv element whose four
-                // components do not shift later segment elements.
-                require_version(header.version, 6, "HIUPD")?;
-                if let Some(account) = parse_account(segment)? {
-                    received_accounts.push(account);
-                }
-            }
-            b"HISALS" if replace_bpd => {
-                // Messages C.2.1.2: HISALS fields 2-4 are segment elements
-                // 1-3; only v8 adds its parameter DEG as element 4.
-                balance_capability_advertised = true;
-                advertised_balance_versions.push(header.version);
-                if header.version == 5 {
-                    // HBCI 2.2 VII.2.2 contains only meaning-neutral order and
-                    // signature limits. A malformed legacy parameter shape is
-                    // retained as advertised-but-unsupported, not fatal to BPD.
-                    if require_legacy_balance_parameters(segment).is_ok() {
-                        received_balance_versions.push(header.version);
-                    }
-                } else if (6..=8).contains(&header.version) {
-                    received_balance_versions.push(header.version);
-                }
-            }
-            b"HICAZS" if replace_bpd => {
-                // Messages C.2.3.1.1.1: HICAZS field 5 is the parameter DEG
-                // at element 4; its own fields are flattened by that helper.
-                transaction_capability_advertised = true;
-                if header.version == 1 {
-                    let (storage_period, descriptors) = parse_camt_parameters(segment);
-                    camt_storage_period_days = camt_storage_period_days.or(storage_period);
-                    received_camt_descriptors.extend(descriptors);
-                }
-            }
-            b"HIKAZS" if replace_bpd => {
-                // Messages C.2.3.1.1 and DD: HIKAZS 6/7 advertise the
-                // segment version in the header. No parameter component is
-                // consumed for version negotiation.
-                transaction_capability_advertised = true;
-                if (6..=7).contains(&header.version) {
-                    received_legacy_transaction_versions.push(header.version);
-                }
-            }
-            b"HIWPDS" if replace_bpd => {
-                // HBCI 2.2 VII.4.3.1/IV.6 and Messages 2022 C.4.3.1:
-                // HIWPDS 5 uses the legacy parameter envelope, whose field 4
-                // parameter DEG is segment element 3. HIWPDS 6 adds the generic
-                // security-class field, shifting its field 5 parameter DEG to
-                // element 4. Both operation-specific DEGs are three flat J/N
-                // fields. Gate 4 consumes only the advertised segment version,
-                // so meaning-neutral parameter values are read past.
-                depot_positions_advertised = true;
-                if (5..=6).contains(&header.version) {
-                    if received_depot_position_versions.contains(&header.version) {
-                        return Err(Error::InvalidResponse {
-                            structure: "duplicate supported HIWPDS version",
-                        });
-                    }
-                    received_depot_position_versions.push(header.version);
-                }
-            }
-            b"HIWDUS" if replace_bpd => {
-                // Messages C.4.3.2: HIWDUS field 5 is the parameter DEG at
-                // element 4; its field 1 is component 0.
-                securities_transactions_advertised = true;
-                if header.version == 5 {
-                    if securities_transactions_seen {
-                        return Err(Error::InvalidResponse {
-                            structure: "duplicate HIWDUS version 5",
-                        });
-                    }
-                    securities_transactions_seen = true;
-                    if let Some(storage_period) = parse_storage_period(segment) {
-                        securities_transactions_storage_period_days = Some(storage_period);
-                        securities_transactions_supported = true;
-                    }
-                }
-            }
-            b"HIKKUS" if replace_bpd => {
-                // G112 C.12.1: HIKKUS field 5 is the parameter DEG at
-                // element 4; all four parameter fields are scalar.
-                credit_card_transactions_advertised = true;
-                if header.version == 1 {
-                    if credit_card_transactions_seen {
-                        return Err(Error::InvalidResponse {
-                            structure: "duplicate HIKKUS version 1",
-                        });
-                    }
-                    credit_card_transactions_seen = true;
-                    if let Some((capability, storage_period)) =
-                        parse_credit_card_parameters(segment)
-                    {
-                        credit_card_transactions = Some(capability);
-                        credit_card_transactions_storage_period_days = Some(storage_period);
-                    }
-                }
-            }
-            b"HIKKSS" if replace_bpd => {
-                // G112 C.12.2: HIKKSS field 5 is the parameter DEG at
-                // element 4 and contains one scalar component.
-                credit_card_balance_advertised = true;
-                if header.version == 1 {
-                    if credit_card_balance_account_required.is_some() {
-                        return Err(Error::InvalidResponse {
-                            structure: "duplicate HIKKSS version 1",
-                        });
-                    }
-                    credit_card_balance_account_required =
-                        Some(parse_credit_card_balance_parameters(segment)?);
-                }
-            }
-            b"HIPINS" if replace_bpd => {
-                // PIN/TAN B.8.1: HIPINS field 5 is the parameter DEG at
-                // element 4; five scalar fields precede repeated two-component
-                // operation records.
-                require_version(header.version, 1, "HIPINS")?;
-                balance_requires_tan = parse_tan_requirement(segment, "HKSAL")?;
-                camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
-                legacy_transactions_require_tan = parse_tan_requirement(segment, "HKKAZ")?;
-                depot_positions_requires_tan = parse_tan_requirement(segment, "HKWPD")?;
-                securities_transactions_requires_tan = parse_tan_requirement(segment, "HKWDU")?;
-                credit_card_transactions_requires_tan = parse_tan_requirement(segment, "HKKKU")?;
-                credit_card_balance_requires_tan = parse_tan_requirement(segment, "HKKKS")?;
-            }
+            b"HIUPA" => params.upd.absorb_usage(segment, &header)?,
+            b"HIUPD" => params.upd.absorb_account(segment, &header)?,
+            b"HISALS" if replace_bpd => params.balance.absorb(segment, &header),
+            b"HICAZS" if replace_bpd => params.cash.absorb_camt(segment, &header),
+            b"HIKAZS" if replace_bpd => params.cash.absorb_legacy(&header),
+            b"HIWPDS" if replace_bpd => params.depot.absorb(&header)?,
+            b"HIWDUS" if replace_bpd => params.securities.absorb(segment, &header)?,
+            b"HIKKUS" if replace_bpd => params.credit_card.absorb_transactions(segment, &header)?,
+            b"HIKKSS" if replace_bpd => params.credit_card.absorb_balance(segment, &header)?,
+            b"HIPINS" if replace_bpd => params.absorb_tan_requirements(segment, &header)?,
             b"HITANS" if replace_bpd && (6..=7).contains(&header.version) => {
-                // PIN/TAN B.5.1/B.5.2: HITANS field 5 is the parameter DEG
-                // at element 4; three scalar fields precede the repeated
-                // method DEGs, which flatten to 21/26 components.
-                received_methods.extend(parse_tan_methods(segment, header.version)?);
+                params.tan.absorb_methods(segment, &header)?;
             }
             _ => {}
         }
     }
 
+    // Accumulate-then-commit: nothing below runs on a parse error above, so a
+    // rejected response never leaves partially replaced BPD or UPD state.
     if let Some(version) = received_bpd_version.filter(|_| replace_bpd) {
         state.bpd_version = version;
-        received_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
-        received_balance_versions.dedup();
-        advertised_balance_versions.sort_unstable_by(|left, right| right.cmp(left));
-        advertised_balance_versions.dedup();
-        advertised_tan_media_versions.sort_unstable_by(|left, right| right.cmp(left));
-        advertised_tan_media_versions.dedup();
-        received_legacy_transaction_versions.sort_unstable_by(|left, right| right.cmp(left));
-        received_legacy_transaction_versions.dedup();
-        received_camt_descriptors.sort();
-        received_camt_descriptors.dedup();
-        advertised_parameter_segments.sort_by(|left, right| {
+        params.advertisements.commit(state);
+        params.tan.commit(state);
+        params.balance.commit(state);
+        params.cash.commit(state);
+        params.depot.commit(state);
+        params.securities.commit(state);
+        params.credit_card.commit(state);
+    }
+    params.upd.commit(state)
+}
+
+/// Accumulated BPD/UPD facts for one parameter response, grouped by the
+/// operation family that owns them. Families absorb their segments during the
+/// single pass and commit to state only after the whole response parsed.
+#[derive(Default)]
+struct ParameterAccumulator {
+    advertisements: AdvertisementParams,
+    tan: TanParams,
+    balance: BalanceParams,
+    cash: CashTransactionParams,
+    depot: DepotPositionParams,
+    securities: SecuritiesTransactionParams,
+    credit_card: CreditCardParams,
+    upd: UpdParams,
+}
+
+impl ParameterAccumulator {
+    fn record_advertisement(&mut self, header: &SegmentHeader<'_>) {
+        self.advertisements
+            .segments
+            .push(ParameterSegmentAdvertisement::new(
+                header.code.iter().copied().map(char::from).collect(),
+                header.version,
+            ));
+        if header.code == b"HITABS" {
+            self.tan.advertised_media_versions.push(header.version);
+        }
+    }
+
+    // PIN/TAN B.8.1: HIPINS field 5 is the parameter DEG at
+    // element 4; five scalar fields precede repeated two-component
+    // operation records. One segment carries the TAN requirement of
+    // every operation family, so it is absorbed at the accumulator root.
+    fn absorb_tan_requirements(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        require_version(header.version, 1, "HIPINS")?;
+        self.balance.requires_tan = parse_tan_requirement(segment, "HKSAL")?;
+        self.cash.camt_requires_tan = parse_tan_requirement(segment, "HKCAZ")?;
+        self.cash.legacy_requires_tan = parse_tan_requirement(segment, "HKKAZ")?;
+        self.depot.requires_tan = parse_tan_requirement(segment, "HKWPD")?;
+        self.securities.requires_tan = parse_tan_requirement(segment, "HKWDU")?;
+        self.credit_card.transactions_requires_tan = parse_tan_requirement(segment, "HKKKU")?;
+        self.credit_card.balance_requires_tan = parse_tan_requirement(segment, "HKKKS")?;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct AdvertisementParams {
+    segments: Vec<ParameterSegmentAdvertisement>,
+}
+
+impl AdvertisementParams {
+    fn commit(mut self, state: &mut ReusableState) {
+        self.segments.sort_by(|left, right| {
             left.code()
                 .cmp(right.code())
                 .then_with(|| right.version().cmp(&left.version()))
         });
-        advertised_parameter_segments.dedup();
-        received_methods.sort_by(|left, right| {
+        self.segments.dedup();
+        state.advertised_parameter_segments = self.segments;
+    }
+}
+
+#[derive(Default)]
+struct TanParams {
+    methods: Vec<TanMethod>,
+    advertised_media_versions: Vec<u16>,
+}
+
+impl TanParams {
+    // PIN/TAN B.5.1/B.5.2: HITANS field 5 is the parameter DEG
+    // at element 4; three scalar fields precede the repeated
+    // method DEGs, which flatten to 21/26 components.
+    fn absorb_methods(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        self.methods
+            .extend(parse_tan_methods(segment, header.version)?);
+        Ok(())
+    }
+
+    fn commit(mut self, state: &mut ReusableState) {
+        self.advertised_media_versions
+            .sort_unstable_by(|left, right| right.cmp(left));
+        self.advertised_media_versions.dedup();
+        self.methods.sort_by(|left, right| {
             left.security_function
                 .cmp(&right.security_function)
                 .then_with(|| right.hktan_version.cmp(&left.hktan_version))
         });
-        received_methods.dedup_by(|left, right| left.security_function == right.security_function);
-        state.balance_versions = received_balance_versions;
-        state.advertised_balance_versions = advertised_balance_versions;
-        state.advertised_tan_media_versions = advertised_tan_media_versions;
-        state.balance_capability_advertised = balance_capability_advertised;
-        state.balance_requires_tan = balance_requires_tan;
-        state.transaction_capability_advertised = transaction_capability_advertised;
-        state.advertised_camt_descriptors = received_camt_descriptors.clone();
-        state.camt_storage_period_days = camt_storage_period_days;
-        state.camt_capability = received_camt_descriptors
+        self.methods
+            .dedup_by(|left, right| left.security_function == right.security_function);
+        state.advertised_tan_media_versions = self.advertised_media_versions;
+        state.tan_methods = self.methods;
+    }
+}
+
+#[derive(Default)]
+struct BalanceParams {
+    capability_advertised: bool,
+    advertised_versions: Vec<u16>,
+    supported_versions: Vec<u16>,
+    requires_tan: Option<bool>,
+}
+
+impl BalanceParams {
+    // Messages C.2.1.2: HISALS fields 2-4 are segment elements
+    // 1-3; only v8 adds its parameter DEG as element 4.
+    fn absorb(&mut self, segment: &Segment, header: &SegmentHeader<'_>) {
+        self.capability_advertised = true;
+        self.advertised_versions.push(header.version);
+        if header.version == 5 {
+            // HBCI 2.2 VII.2.2 contains only meaning-neutral order and
+            // signature limits. A malformed legacy parameter shape is
+            // retained as advertised-but-unsupported, not fatal to BPD.
+            if require_legacy_balance_parameters(segment).is_ok() {
+                self.supported_versions.push(header.version);
+            }
+        } else if (6..=8).contains(&header.version) {
+            self.supported_versions.push(header.version);
+        }
+    }
+
+    fn commit(mut self, state: &mut ReusableState) {
+        self.supported_versions
+            .sort_unstable_by(|left, right| right.cmp(left));
+        self.supported_versions.dedup();
+        self.advertised_versions
+            .sort_unstable_by(|left, right| right.cmp(left));
+        self.advertised_versions.dedup();
+        state.balance_versions = self.supported_versions;
+        state.advertised_balance_versions = self.advertised_versions;
+        state.balance_capability_advertised = self.capability_advertised;
+        state.balance_requires_tan = self.requires_tan;
+    }
+}
+
+#[derive(Default)]
+struct CashTransactionParams {
+    capability_advertised: bool,
+    camt_descriptors: Vec<String>,
+    camt_storage_period_days: Option<u16>,
+    legacy_versions: Vec<u16>,
+    camt_requires_tan: Option<bool>,
+    legacy_requires_tan: Option<bool>,
+}
+
+impl CashTransactionParams {
+    // Messages C.2.3.1.1.1: HICAZS field 5 is the parameter DEG
+    // at element 4; its own fields are flattened by that helper.
+    fn absorb_camt(&mut self, segment: &Segment, header: &SegmentHeader<'_>) {
+        self.capability_advertised = true;
+        if header.version == 1 {
+            let (storage_period, descriptors) = parse_camt_parameters(segment);
+            self.camt_storage_period_days = self.camt_storage_period_days.or(storage_period);
+            self.camt_descriptors.extend(descriptors);
+        }
+    }
+
+    // Messages C.2.3.1.1 and DD: HIKAZS 6/7 advertise the
+    // segment version in the header. No parameter component is
+    // consumed for version negotiation.
+    fn absorb_legacy(&mut self, header: &SegmentHeader<'_>) {
+        self.capability_advertised = true;
+        if (6..=7).contains(&header.version) {
+            self.legacy_versions.push(header.version);
+        }
+    }
+
+    fn commit(mut self, state: &mut ReusableState) {
+        self.legacy_versions
+            .sort_unstable_by(|left, right| right.cmp(left));
+        self.legacy_versions.dedup();
+        self.camt_descriptors.sort();
+        self.camt_descriptors.dedup();
+        state.transaction_capability_advertised = self.capability_advertised;
+        state.advertised_camt_descriptors = self.camt_descriptors.clone();
+        state.camt_storage_period_days = self.camt_storage_period_days;
+        state.camt_capability = self
+            .camt_descriptors
             .into_iter()
             .find(|descriptor| camt_descriptor_matches(descriptor, SUPPORTED_CAMT_DESCRIPTOR))
             .map(|descriptor| CamtCapability { descriptor });
-        state.legacy_transaction_versions = received_legacy_transaction_versions;
-        state.camt_requires_tan = camt_requires_tan;
-        state.legacy_transactions_require_tan = legacy_transactions_require_tan;
-        state.depot_positions_advertised = depot_positions_advertised;
-        received_depot_position_versions.sort_unstable_by(|a, b| b.cmp(a));
-        state.depot_position_versions = received_depot_position_versions;
-        state.depot_positions_requires_tan = depot_positions_requires_tan;
-        state.securities_transactions_advertised = securities_transactions_advertised;
-        state.securities_transactions_supported = securities_transactions_supported;
-        state.securities_transactions_storage_period_days =
-            securities_transactions_storage_period_days;
-        state.securities_transactions_requires_tan = securities_transactions_requires_tan;
-        state.credit_card_transactions_advertised = credit_card_transactions_advertised;
-        state.credit_card_transactions = credit_card_transactions;
-        state.credit_card_transactions_storage_period_days =
-            credit_card_transactions_storage_period_days;
-        state.credit_card_transactions_requires_tan = credit_card_transactions_requires_tan;
-        state.credit_card_balance_advertised = credit_card_balance_advertised;
-        state.credit_card_balance_account_required = credit_card_balance_account_required;
-        state.credit_card_balance_requires_tan = credit_card_balance_requires_tan;
-        state.advertised_parameter_segments = advertised_parameter_segments;
-        state.tan_methods = received_methods;
+        state.legacy_transaction_versions = self.legacy_versions;
+        state.camt_requires_tan = self.camt_requires_tan;
+        state.legacy_transactions_require_tan = self.legacy_requires_tan;
+    }
+}
+
+#[derive(Default)]
+struct DepotPositionParams {
+    advertised: bool,
+    versions: Vec<u16>,
+    requires_tan: Option<bool>,
+}
+
+impl DepotPositionParams {
+    // HBCI 2.2 VII.4.3.1/IV.6 and Messages 2022 C.4.3.1:
+    // HIWPDS 5 uses the legacy parameter envelope, whose field 4
+    // parameter DEG is segment element 3. HIWPDS 6 adds the generic
+    // security-class field, shifting its field 5 parameter DEG to
+    // element 4. Both operation-specific DEGs are three flat J/N
+    // fields. Gate 4 consumes only the advertised segment version,
+    // so meaning-neutral parameter values are read past.
+    fn absorb(&mut self, header: &SegmentHeader<'_>) -> Result<(), Error> {
+        self.advertised = true;
+        if (5..=6).contains(&header.version) {
+            if self.versions.contains(&header.version) {
+                return Err(Error::InvalidResponse {
+                    structure: "duplicate supported HIWPDS version",
+                });
+            }
+            self.versions.push(header.version);
+        }
+        Ok(())
     }
 
-    let mut transient_accounts = None;
-    if let Some(version) = received_upd_version {
-        let unlisted_operations_unknown =
-            received_upd_usage.ok_or(Error::MissingValue { field: "UPD usage" })?;
-        for account in &mut received_accounts {
-            account.unlisted_operations_unknown = unlisted_operations_unknown;
-        }
-        state.upd_version = version;
-        if version > 0 {
-            state.accounts = received_accounts;
-        } else {
-            transient_accounts = Some(received_accounts);
-        }
+    fn commit(mut self, state: &mut ReusableState) {
+        state.depot_positions_advertised = self.advertised;
+        self.versions.sort_unstable_by(|a, b| b.cmp(a));
+        state.depot_position_versions = self.versions;
+        state.depot_positions_requires_tan = self.requires_tan;
     }
-    Ok(transient_accounts)
+}
+
+#[derive(Default)]
+struct SecuritiesTransactionParams {
+    advertised: bool,
+    seen: bool,
+    supported: bool,
+    storage_period_days: Option<u16>,
+    requires_tan: Option<bool>,
+}
+
+impl SecuritiesTransactionParams {
+    // Messages C.4.3.2: HIWDUS field 5 is the parameter DEG at
+    // element 4; its field 1 is component 0.
+    fn absorb(&mut self, segment: &Segment, header: &SegmentHeader<'_>) -> Result<(), Error> {
+        self.advertised = true;
+        if header.version == 5 {
+            if self.seen {
+                return Err(Error::InvalidResponse {
+                    structure: "duplicate HIWDUS version 5",
+                });
+            }
+            self.seen = true;
+            if let Some(storage_period) = parse_storage_period(segment) {
+                self.storage_period_days = Some(storage_period);
+                self.supported = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn commit(self, state: &mut ReusableState) {
+        state.securities_transactions_advertised = self.advertised;
+        state.securities_transactions_supported = self.supported;
+        state.securities_transactions_storage_period_days = self.storage_period_days;
+        state.securities_transactions_requires_tan = self.requires_tan;
+    }
+}
+
+#[derive(Default)]
+struct CreditCardParams {
+    transactions_advertised: bool,
+    transactions_seen: bool,
+    transactions: Option<CreditCardCapability>,
+    transactions_storage_period_days: Option<u16>,
+    transactions_requires_tan: Option<bool>,
+    balance_advertised: bool,
+    balance_account_required: Option<bool>,
+    balance_requires_tan: Option<bool>,
+}
+
+impl CreditCardParams {
+    // G112 C.12.1: HIKKUS field 5 is the parameter DEG at
+    // element 4; all four parameter fields are scalar.
+    fn absorb_transactions(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        self.transactions_advertised = true;
+        if header.version == 1 {
+            if self.transactions_seen {
+                return Err(Error::InvalidResponse {
+                    structure: "duplicate HIKKUS version 1",
+                });
+            }
+            self.transactions_seen = true;
+            if let Some((capability, storage_period)) = parse_credit_card_parameters(segment) {
+                self.transactions = Some(capability);
+                self.transactions_storage_period_days = Some(storage_period);
+            }
+        }
+        Ok(())
+    }
+
+    // G112 C.12.2: HIKKSS field 5 is the parameter DEG at
+    // element 4 and contains one scalar component.
+    fn absorb_balance(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        self.balance_advertised = true;
+        if header.version == 1 {
+            if self.balance_account_required.is_some() {
+                return Err(Error::InvalidResponse {
+                    structure: "duplicate HIKKSS version 1",
+                });
+            }
+            self.balance_account_required = Some(parse_credit_card_balance_parameters(segment)?);
+        }
+        Ok(())
+    }
+
+    fn commit(self, state: &mut ReusableState) {
+        state.credit_card_transactions_advertised = self.transactions_advertised;
+        state.credit_card_transactions = self.transactions;
+        state.credit_card_transactions_storage_period_days = self.transactions_storage_period_days;
+        state.credit_card_transactions_requires_tan = self.transactions_requires_tan;
+        state.credit_card_balance_advertised = self.balance_advertised;
+        state.credit_card_balance_account_required = self.balance_account_required;
+        state.credit_card_balance_requires_tan = self.balance_requires_tan;
+    }
+}
+
+#[derive(Default)]
+struct UpdParams {
+    accounts: Vec<Account>,
+    version: Option<u16>,
+    usage: Option<bool>,
+}
+
+impl UpdParams {
+    // Formals E.2, HIUPA 4: segment fields remain separate
+    // elements, so DD fields 3/4 are element indices 2/3.
+    fn absorb_usage(&mut self, segment: &Segment, header: &SegmentHeader<'_>) -> Result<(), Error> {
+        require_version(header.version, 4, "HIUPA")?;
+        let version = parse_element_u16(segment, 2, "UPD version")?;
+        if version > 999 {
+            return Err(Error::InvalidValue {
+                field: "UPD version",
+            });
+        }
+        self.version = Some(version);
+        self.usage = Some(match single_text(segment, 3, "UPD usage")?.as_str() {
+            "0" => false,
+            "1" => true,
+            _ => {
+                return Err(Error::InvalidValue { field: "UPD usage" });
+            }
+        });
+        Ok(())
+    }
+
+    // Formals E.3, HIUPD 6: field 2 is one ktv element whose four
+    // components do not shift later segment elements.
+    fn absorb_account(
+        &mut self,
+        segment: &Segment,
+        header: &SegmentHeader<'_>,
+    ) -> Result<(), Error> {
+        require_version(header.version, 6, "HIUPD")?;
+        if let Some(account) = parse_account(segment)? {
+            self.accounts.push(account);
+        }
+        Ok(())
+    }
+
+    fn commit(mut self, state: &mut ReusableState) -> Result<Option<Vec<Account>>, Error> {
+        let mut transient_accounts = None;
+        if let Some(version) = self.version {
+            let unlisted_operations_unknown = self
+                .usage
+                .ok_or(Error::MissingValue { field: "UPD usage" })?;
+            for account in &mut self.accounts {
+                account.unlisted_operations_unknown = unlisted_operations_unknown;
+            }
+            state.upd_version = version;
+            if version > 0 {
+                state.accounts = self.accounts;
+            } else {
+                transient_accounts = Some(self.accounts);
+            }
+        }
+        Ok(transient_accounts)
+    }
 }
 
 fn is_parameter_segment(code: &[u8]) -> bool {
