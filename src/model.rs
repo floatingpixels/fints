@@ -595,6 +595,11 @@ pub struct Amount {
     currency: String,
 }
 
+pub(crate) fn valid_latin1_length(value: &str, minimum: usize, maximum: usize) -> bool {
+    mem::is_str_latin1(value)
+        && (minimum..=maximum).contains(&mem::encode_latin1_lossy(value).len())
+}
+
 mod cash;
 mod credit_card;
 mod securities;

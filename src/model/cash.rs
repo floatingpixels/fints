@@ -323,8 +323,3 @@ impl Balance {
         self.garnishable_after_month_end.as_ref()
     }
 }
-
-pub(crate) fn valid_latin1_length(value: &str, minimum: usize, maximum: usize) -> bool {
-    mem::is_str_latin1(value)
-        && (minimum..=maximum).contains(&mem::encode_latin1_lossy(value).len())
-}

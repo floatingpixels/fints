@@ -52,8 +52,12 @@ pub(super) fn apply(
         }
     }
 
-    // Accumulate-then-commit: nothing below runs on a parse error above, so a
-    // rejected response never leaves partially replaced BPD or UPD state.
+    // Accumulate-then-commit: a parse error in the loop above returns before
+    // any state write below, so a rejected response never leaves partially
+    // replaced BPD or UPD state. The trailing UPD commit's missing-usage error
+    // is unreachable because absorb_usage records version and usage together;
+    // if a future change makes it reachable, its check must move ahead of the
+    // BPD commits to keep this guarantee.
     if let Some(version) = received_bpd_version.filter(|_| replace_bpd) {
         state.bpd_version = version;
         params.advertisements.commit(state);
