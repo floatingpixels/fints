@@ -193,6 +193,8 @@ The full stack must stay green:
 
 ```sh
 cargo test --all-targets
+cargo test --all-features --all-targets
+cargo test --doc
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 cargo doc --no-deps

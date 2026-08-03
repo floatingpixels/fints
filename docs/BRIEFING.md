@@ -58,7 +58,7 @@ semantic above, owner-live-re-verified against two institutions. Gate 4 closed w
 advertised HKWDU 5 booked securities transactions, and G112 HKKKU/HKKKS 1
 credit-card transactions and balances.
 
-The Gate 4 handoff stays narrow:
+The standing operational rules from the closed gates remain binding:
 
 1. Gate every operation on exact BPD advertisement, UPD authorization, account type,
    signature count, and HIPINS TAN parameters.
@@ -117,5 +117,5 @@ character-class patterns—is redaction-safe. Slice-by-slice diagnostics that ad
 per revision cost a full owner round trip for every hypothesis; this has twice been
 slower than one structural capture. Report only the rendered generic structure and
 other non-identifying protocol facts. Never place authenticated messages, challenges,
-credentials, account identifiers, balances, or raw traces in Codex context, issues,
+credentials, account identifiers, balances, or raw traces in agent context, issues,
 commits, or fixtures.

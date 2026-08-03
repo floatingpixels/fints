@@ -3,7 +3,8 @@ name: Release
 # release-plz opens and maintains a release PR from Conventional Commits
 # (version bump + changelog). Merging that PR is the owner's release decision;
 # the release job then tags the version and publishes a GitHub release.
-# cargo publish stays disabled (publish = false).
+# cargo publish stays impossible: the manifest restricts publishing to a
+# non-configured registry and release-plz is configured git-only.
 on:
   push:
     branches: [main]

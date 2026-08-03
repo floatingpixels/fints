@@ -170,6 +170,12 @@ impl Transport {
             return Ok(response);
         }
 
+        // The fixture short-circuit above means this real HTTPS path — status
+        // mapping, the content-length precheck, and streamed size enforcement —
+        // has no network-independent coverage and is verified through owner-run
+        // live probes only. A loopback test would need either a test-only trust
+        // root in the production client or new server/certificate
+        // dev-dependencies; both require an owner-approved scope change.
         let body = encode_body(message);
         let mut response = self
             .client
