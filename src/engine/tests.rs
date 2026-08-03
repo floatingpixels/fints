@@ -3,7 +3,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 use super::*;
 use crate::{
     ResponseClass,
-    model::{Account, CamtCapability, InstituteState, OperationPermission},
+    model::{Account, CamtCapability, InstituteState, OperationPermission, TransactionFormat},
 };
 
 fn response(segments: &[&str], dialog_id: &str, message_number: u16) -> Vec<u8> {
