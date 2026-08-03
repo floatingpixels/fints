@@ -135,6 +135,21 @@ integration and owner-run live balance verification.
   Institutions that do not advertise `HKWDU` return the normal typed limitation; the
   crate never derives securities transactions from position snapshots.
 
+### Gate 5 — Async-first API
+
+- Every IO-performing client operation becomes `async fn` on the async reqwest
+  transport; the blocking API is removed. Wire behavior, dialog state, reusable-state
+  shape and version, and all request/outcome/continuation type shapes are unchanged.
+- The crate still contains no internal waiting, retrying, or polling; decoupled-poll
+  pacing remains caller-driven. Library code takes no direct runtime dependency; tokio
+  enters as a dev-dependency for tests and the owner-run probe only.
+- All public operation futures are `Send`, asserted by compile-time regression.
+- Cancelling an in-flight operation future aborts the dialog into a typed-error state
+  rather than leaving desynchronized protocol state; this semantic is documented.
+- Transport bounds, redirect refusal, HTTPS-only enforcement, timeouts, redaction, and
+  the trace-hook contract are preserved; live re-verification against at least one
+  verified institution precedes merge.
+
 ## Explicitly out of scope
 
 - FinTS 4.1.

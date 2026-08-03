@@ -48,10 +48,13 @@ The initial direct-dependency allowlist is:
 - `serde` for caller-owned persistence of explicitly serializable protocol state.
 - `thiserror` for typed, redacted errors.
 - `chrono` for protocol-defined dates and times.
-- `reqwest` with rustls TLS and default features disabled for HTTPS transport.
+- `reqwest` (async client) with rustls TLS and default features disabled for HTTPS
+  transport.
 - `encoding_rs` only where an official FinTS encoding requirement proves it necessary.
 - `base64` for the HTTPS body encoding inherited from the HBCI PIN/TAN mapping.
 - `quick-xml` for bounded, namespace-aware parsing of HKCAZ camt.052 transaction data.
+- `tokio` as a dev-dependency only (`rt`, `macros`), for the async test harness and the
+  owner-run live probe example. Library code takes no direct tokio dependency.
 
 Required transitive dependencies are allowed. Direct dev dependencies need the same
 owner approval as runtime dependencies.
