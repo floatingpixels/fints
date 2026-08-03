@@ -396,7 +396,7 @@ impl Client {
                 .transaction_request(account_index, from, to, now.date(), now.time())?;
         let response = self.send(&request).await?;
         let result = self.engine.accept_transactions(&response, now)?;
-        self.finish_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     /// Retrieves advertised depot positions and exhausts same-dialog pagination.
@@ -413,7 +413,7 @@ impl Client {
             .depot_positions_request(account_index, now.date(), now.time())?;
         let response = self.send(&request).await?;
         let result = self.engine.accept_depot_positions(&response, now)?;
-        self.finish_depot_positions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     /// Retrieves advertised booked securities transactions with optional inclusive dates.
@@ -434,7 +434,7 @@ impl Client {
         )?;
         let response = self.send(&request).await?;
         let result = self.engine.accept_securities_transactions(&response, now)?;
-        self.finish_securities_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     /// Retrieves advertised booked credit-card transactions with optional inclusive dates.
@@ -457,7 +457,7 @@ impl Client {
         let result = self
             .engine
             .accept_credit_card_transactions(&response, now)?;
-        self.finish_credit_card_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     /// Retrieves the independently reported G112 credit-card balance components.
@@ -480,14 +480,12 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<Initialization, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
         map_initialization(
             self.engine
-                .accept_initialization_continuation(&response, continuation.pending)?,
+                .accept_initialization_continuation(&response, pending)?,
         )
     }
 
@@ -497,11 +495,9 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<Initialization, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         map_initialization(
             self.engine
                 .accept_initialization_continuation(&response, continuation.pending)?,
@@ -514,13 +510,10 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<Synchronization, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        self.finish_synchronization(response, continuation.pending, now)
-            .await
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        self.finish_synchronization(response, pending, now).await
     }
 
     pub async fn poll_synchronization(
@@ -529,11 +522,9 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<Synchronization, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         self.finish_synchronization(response, continuation.pending, now)
             .await
     }
@@ -544,14 +535,12 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<BalanceRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
         map_balance(
             self.engine
-                .accept_balance_continuation(&response, continuation.pending)?,
+                .accept_balance_continuation(&response, pending)?,
         )
     }
 
@@ -561,11 +550,9 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<BalanceRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         map_balance(
             self.engine
                 .accept_balance_continuation(&response, continuation.pending)?,
@@ -578,15 +565,13 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<BookedTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        let result = self
             .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        let result =
-            self.engine
-                .accept_transactions_continuation(&response, continuation.pending, now)?;
-        self.finish_transactions(result, now).await
+            .accept_transactions_continuation(&response, pending, now)?;
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn poll_booked_transactions(
@@ -595,15 +580,13 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<BookedTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         let result =
             self.engine
                 .accept_transactions_continuation(&response, continuation.pending, now)?;
-        self.finish_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn submit_depot_position_tan(
@@ -612,17 +595,13 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<DepotPositionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        let result = self
             .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        let result = self.engine.accept_depot_positions_continuation(
-            &response,
-            continuation.pending,
-            now,
-        )?;
-        self.finish_depot_positions(result, now).await
+            .accept_depot_positions_continuation(&response, pending, now)?;
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn poll_depot_positions(
@@ -631,17 +610,15 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<DepotPositionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         let result = self.engine.accept_depot_positions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_depot_positions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn submit_securities_transaction_tan(
@@ -650,17 +627,13 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<SecuritiesTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        let result = self
             .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        let result = self.engine.accept_securities_transactions_continuation(
-            &response,
-            continuation.pending,
-            now,
-        )?;
-        self.finish_securities_transactions(result, now).await
+            .accept_securities_transactions_continuation(&response, pending, now)?;
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn poll_securities_transactions(
@@ -669,17 +642,15 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<SecuritiesTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         let result = self.engine.accept_securities_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_securities_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn submit_credit_card_transaction_tan(
@@ -688,17 +659,13 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<CreditCardTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        let result = self
             .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        let result = self.engine.accept_credit_card_transactions_continuation(
-            &response,
-            continuation.pending,
-            now,
-        )?;
-        self.finish_credit_card_transactions(result, now).await
+            .accept_credit_card_transactions_continuation(&response, pending, now)?;
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn poll_credit_card_transactions(
@@ -707,17 +674,15 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<CreditCardTransactionRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         let result = self.engine.accept_credit_card_transactions_continuation(
             &response,
             continuation.pending,
             now,
         )?;
-        self.finish_credit_card_transactions(result, now).await
+        self.exhaust_pages(result, now).await
     }
 
     pub async fn submit_credit_card_balance_tan(
@@ -726,16 +691,13 @@ impl Client {
         tan: &Tan,
         now: NaiveDateTime,
     ) -> Result<CreditCardBalanceRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .tan_submission_request(&continuation.pending, tan, now)?;
-        let response = self.send(&request).await?;
-        map_credit_card_balance(self.engine.accept_credit_card_balance_continuation(
-            &response,
-            continuation.pending,
-            now,
-        )?)
+        let (response, pending) = self
+            .submit_tan_exchange(continuation.pending, tan, now)
+            .await?;
+        map_credit_card_balance(
+            self.engine
+                .accept_credit_card_balance_continuation(&response, pending, now)?,
+        )
     }
 
     pub async fn poll_credit_card_balance(
@@ -744,11 +706,9 @@ impl Client {
         mode: PollingMode,
         now: NaiveDateTime,
     ) -> Result<CreditCardBalanceRequest, Error> {
-        self.recover_cancellation();
-        let request = self
-            .engine
-            .decoupled_poll_request(&mut continuation.pending, mode, now)?;
-        let response = self.send(&request).await?;
+        let response = self
+            .poll_exchange(&mut continuation.pending, mode, now)
+            .await?;
         map_credit_card_balance(self.engine.accept_credit_card_balance_continuation(
             &response,
             continuation.pending,
@@ -784,107 +744,47 @@ impl Client {
         }
     }
 
-    async fn finish_transactions(
+    /// Shared TAN-submission exchange: cancellation recovery, request build,
+    /// and one transport round trip. The caller applies its family's
+    /// engine acceptance to the returned response and pending challenge.
+    async fn submit_tan_exchange(
         &mut self,
-        mut result: TransactionsResult,
+        pending: PendingChallenge,
+        tan: &Tan,
         now: NaiveDateTime,
-    ) -> Result<BookedTransactionRequest, Error> {
-        loop {
-            match result {
-                TransactionsResult::Complete(transactions) => {
-                    return Ok(BookedTransactionRequest::Complete(transactions));
-                }
-                TransactionsResult::Challenge(pending) => {
-                    return Ok(BookedTransactionRequest::Challenge(Box::new(
-                        BookedTransactionContinuation { pending: *pending },
-                    )));
-                }
-                TransactionsResult::Continue => {
-                    let request = self
-                        .engine
-                        .next_transaction_page_request(now.date(), now.time())?;
-                    let response = self.send(&request).await?;
-                    result = self.engine.accept_transactions(&response, now)?;
-                }
-            }
-        }
+    ) -> Result<(Vec<u8>, PendingChallenge), Error> {
+        self.recover_cancellation();
+        let request = self.engine.tan_submission_request(&pending, tan, now)?;
+        let response = self.send(&request).await?;
+        Ok((response, pending))
     }
 
-    async fn finish_depot_positions(
+    /// Shared decoupled-poll exchange counterpart of [`Self::submit_tan_exchange`].
+    async fn poll_exchange(
         &mut self,
-        mut result: DepotPositionsResult,
+        pending: &mut PendingChallenge,
+        mode: PollingMode,
         now: NaiveDateTime,
-    ) -> Result<DepotPositionRequest, Error> {
-        loop {
-            match result {
-                DepotPositionsResult::Complete(value) => {
-                    return Ok(DepotPositionRequest::Complete(value));
-                }
-                DepotPositionsResult::Challenge(pending) => {
-                    return Ok(DepotPositionRequest::Challenge(Box::new(
-                        DepotPositionContinuation { pending: *pending },
-                    )));
-                }
-                DepotPositionsResult::Continue => {
-                    let request = self
-                        .engine
-                        .next_depot_positions_page_request(now.date(), now.time())?;
-                    let response = self.send(&request).await?;
-                    result = self.engine.accept_depot_positions(&response, now)?;
-                }
-            }
-        }
+    ) -> Result<Vec<u8>, Error> {
+        self.recover_cancellation();
+        let request = self.engine.decoupled_poll_request(pending, mode, now)?;
+        self.send(&request).await
     }
 
-    async fn finish_securities_transactions(
+    /// Exhausts same-dialog pagination for one operation family. Page bounds
+    /// and repeated-point detection stay inside the engine's accept methods.
+    async fn exhaust_pages<R: PaginatedResult>(
         &mut self,
-        mut result: SecuritiesTransactionsResult,
+        mut result: R,
         now: NaiveDateTime,
-    ) -> Result<SecuritiesTransactionRequest, Error> {
+    ) -> Result<R::Outcome, Error> {
         loop {
-            match result {
-                SecuritiesTransactionsResult::Complete(value) => {
-                    return Ok(SecuritiesTransactionRequest::Complete(value));
-                }
-                SecuritiesTransactionsResult::Challenge(pending) => {
-                    return Ok(SecuritiesTransactionRequest::Challenge(Box::new(
-                        SecuritiesTransactionContinuation { pending: *pending },
-                    )));
-                }
-                SecuritiesTransactionsResult::Continue => {
-                    let request = self
-                        .engine
-                        .next_securities_transactions_page_request(now.date(), now.time())?;
+            match result.into_step() {
+                PageStep::Finished(outcome) => return Ok(outcome),
+                PageStep::NextPage => {
+                    let request = R::next_page_request(&mut self.engine, now.date(), now.time())?;
                     let response = self.send(&request).await?;
-                    result = self.engine.accept_securities_transactions(&response, now)?;
-                }
-            }
-        }
-    }
-
-    async fn finish_credit_card_transactions(
-        &mut self,
-        mut result: CreditCardTransactionsResult,
-        now: NaiveDateTime,
-    ) -> Result<CreditCardTransactionRequest, Error> {
-        loop {
-            match result {
-                CreditCardTransactionsResult::Complete(value) => {
-                    return Ok(CreditCardTransactionRequest::Complete(value));
-                }
-                CreditCardTransactionsResult::Challenge(pending) => {
-                    return Ok(CreditCardTransactionRequest::Challenge(Box::new(
-                        CreditCardTransactionContinuation { pending: *pending },
-                    )));
-                }
-                CreditCardTransactionsResult::Continue => {
-                    let request = self
-                        .engine
-                        .next_credit_card_transactions_page_request(now.date(), now.time())?;
-                    let response = self.send(&request).await?;
-                    result = self
-                        .engine
-                        .accept_credit_card_transactions(&response, now)?;
+                    result = R::accept_page(&mut self.engine, &response, now)?;
                 }
             }
         }
@@ -914,61 +814,94 @@ impl Client {
     }
 }
 
-impl InitializationContinuation {
-    pub fn challenge(&self) -> &Challenge {
-        &self.pending.challenge
-    }
-
-    pub fn kind(&self) -> ContinuationKind {
-        continuation_kind(&self.pending)
-    }
-
-    pub fn earliest_poll_at(&self) -> Option<NaiveDateTime> {
-        self.pending.next_poll_at
-    }
+/// One step of a paginated operation: either the terminal public outcome or
+/// a request for the next same-dialog page.
+enum PageStep<T> {
+    Finished(T),
+    NextPage,
 }
 
-impl SynchronizationContinuation {
-    pub fn challenge(&self) -> &Challenge {
-        &self.pending.challenge
-    }
+/// Shared shape of the paginated engine results, letting one driver exhaust
+/// same-dialog pagination for every operation family.
+trait PaginatedResult: Sized {
+    type Outcome;
 
-    pub fn kind(&self) -> ContinuationKind {
-        continuation_kind(&self.pending)
-    }
+    fn next_page_request(
+        engine: &mut Engine,
+        date: chrono::NaiveDate,
+        time: chrono::NaiveTime,
+    ) -> Result<Vec<u8>, Error>;
 
-    pub fn earliest_poll_at(&self) -> Option<NaiveDateTime> {
-        self.pending.next_poll_at
-    }
+    fn accept_page(engine: &mut Engine, response: &[u8], now: NaiveDateTime)
+    -> Result<Self, Error>;
+
+    fn into_step(self) -> PageStep<Self::Outcome>;
 }
 
-impl BalanceContinuation {
-    pub fn challenge(&self) -> &Challenge {
-        &self.pending.challenge
-    }
+macro_rules! paginated_result {
+    ($result:ty, $outcome:ty, $continuation:ident, $next_page:ident, $accept:ident) => {
+        impl PaginatedResult for $result {
+            type Outcome = $outcome;
 
-    pub fn kind(&self) -> ContinuationKind {
-        continuation_kind(&self.pending)
-    }
+            fn next_page_request(
+                engine: &mut Engine,
+                date: chrono::NaiveDate,
+                time: chrono::NaiveTime,
+            ) -> Result<Vec<u8>, Error> {
+                engine.$next_page(date, time)
+            }
 
-    pub fn earliest_poll_at(&self) -> Option<NaiveDateTime> {
-        self.pending.next_poll_at
-    }
+            fn accept_page(
+                engine: &mut Engine,
+                response: &[u8],
+                now: NaiveDateTime,
+            ) -> Result<Self, Error> {
+                engine.$accept(response, now)
+            }
+
+            fn into_step(self) -> PageStep<$outcome> {
+                match self {
+                    Self::Complete(value) => PageStep::Finished(<$outcome>::Complete(value)),
+                    Self::Challenge(pending) => {
+                        PageStep::Finished(<$outcome>::Challenge(Box::new($continuation {
+                            pending: *pending,
+                        })))
+                    }
+                    Self::Continue => PageStep::NextPage,
+                }
+            }
+        }
+    };
 }
 
-impl BookedTransactionContinuation {
-    pub fn challenge(&self) -> &Challenge {
-        &self.pending.challenge
-    }
-
-    pub fn kind(&self) -> ContinuationKind {
-        continuation_kind(&self.pending)
-    }
-
-    pub fn earliest_poll_at(&self) -> Option<NaiveDateTime> {
-        self.pending.next_poll_at
-    }
-}
+paginated_result!(
+    TransactionsResult,
+    BookedTransactionRequest,
+    BookedTransactionContinuation,
+    next_transaction_page_request,
+    accept_transactions
+);
+paginated_result!(
+    DepotPositionsResult,
+    DepotPositionRequest,
+    DepotPositionContinuation,
+    next_depot_positions_page_request,
+    accept_depot_positions
+);
+paginated_result!(
+    SecuritiesTransactionsResult,
+    SecuritiesTransactionRequest,
+    SecuritiesTransactionContinuation,
+    next_securities_transactions_page_request,
+    accept_securities_transactions
+);
+paginated_result!(
+    CreditCardTransactionsResult,
+    CreditCardTransactionRequest,
+    CreditCardTransactionContinuation,
+    next_credit_card_transactions_page_request,
+    accept_credit_card_transactions
+);
 
 macro_rules! continuation_accessors {
     ($type:ty) => {
@@ -988,6 +921,10 @@ macro_rules! continuation_accessors {
     };
 }
 
+continuation_accessors!(InitializationContinuation);
+continuation_accessors!(SynchronizationContinuation);
+continuation_accessors!(BalanceContinuation);
+continuation_accessors!(BookedTransactionContinuation);
 continuation_accessors!(DepotPositionContinuation);
 continuation_accessors!(SecuritiesTransactionContinuation);
 continuation_accessors!(CreditCardTransactionContinuation);
