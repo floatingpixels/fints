@@ -26,6 +26,14 @@ claim that every listed version is available at every institution. Unsupported,
 unadvertised, and unauthorized combinations return typed `Limitation` values instead of
 guessed fallbacks.
 
+## License and contributions
+
+This repository is source-visible but **not licensed**: all rights are reserved.
+Reading the code is welcome; using, modifying, or redistributing it is not granted.
+External contributions are not accepted at this time, because contributions to an
+unlicensed repository have no clear legal basis. If your use case needs a license,
+open an issue describing it.
+
 The crate is currently consumed through exact Git revisions and is not published on
 crates.io:
 
