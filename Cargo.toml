@@ -1,6 +1,6 @@
 [package]
 name = "fints"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Product-neutral FinTS 3.0 PIN/TAN client"
