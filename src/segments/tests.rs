@@ -194,7 +194,7 @@ fn balance_versions_use_independent_account_layout_fixtures() {
         .unwrap()])
     .unwrap();
     assert!(
-        international == b"HKSAL:3:8+DE40123456780000123456::123456::280:12345678+N'",
+        international == b"HKSAL:3:8+DE40123456780000123456:::::+N'",
         "HKSAL 7/8 account fixture did not match"
     );
 }
@@ -236,7 +236,7 @@ fn transaction_requests_match_camt_and_legacy_wire_fixtures() {
     assert_eq!(
         encode_segments(std::slice::from_ref(operation)).unwrap(),
         concat!(
-            "HKCAZ:3:1+DE40123456780000123456::123456::280:12345678",
+            "HKCAZ:3:1+DE40123456780000123456:::::",
             "+urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08",
             "+N+20260701+20260728++fictional-next'"
         )
@@ -248,7 +248,7 @@ fn transaction_requests_match_camt_and_legacy_wire_fixtures() {
         (
             7,
             concat!(
-                "HKKAZ:3:7+DE40123456780000123456::123456::280:12345678",
+                "HKKAZ:3:7+DE40123456780000123456:::::",
                 "+N+20260701+20260728'"
             ),
         ),

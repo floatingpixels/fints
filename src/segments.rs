@@ -146,7 +146,7 @@ pub(crate) fn balance_request(
     let account_element = if version <= 6 {
         national_account(account, Limitation::BalanceVersion)?
     } else {
-        international_account(account, Limitation::BalanceVersion)?
+        cash_account_identification(account, Limitation::BalanceVersion)?
     };
     let mut operations = vec![raw_segment(
         "HKSAL",
@@ -198,7 +198,7 @@ pub(crate) fn transaction_request(
             "HKCAZ",
             1,
             vec![
-                international_account(request.account, Limitation::TransactionsVersion)?,
+                cash_account_identification(request.account, Limitation::TransactionsVersion)?,
                 group(&[descriptor])?,
                 text("N")?,
             ],
@@ -215,7 +215,7 @@ pub(crate) fn transaction_request(
             "HKKAZ",
             7,
             vec![
-                international_account(request.account, Limitation::TransactionsVersion)?,
+                cash_account_identification(request.account, Limitation::TransactionsVersion)?,
                 text("N")?,
             ],
         ),
@@ -659,6 +659,24 @@ fn national_account(account: &Account, limitation: Limitation) -> Result<Element
         &institute.country_code,
         &institute.institute_code,
     ])
+}
+
+// Formals DD "Kontoverbindung international" (kti) for cash-account reads: the
+// SEPA identification (IBAN, optionally BIC) and the national identification
+// (account, subaccount, KIK) are alternative occupancies. An account known by
+// IBAN is identified by it alone — institutions validate a national part sent
+// alongside the IBAN and reject the segment (3010) when their UPD account
+// number does not match the IBAN-embedded one. The national form remains for
+// accounts the UPD delivered without an IBAN. Credit-card segments (G112) bind
+// the card through the national slots and keep `international_account`.
+fn cash_account_identification(
+    account: &Account,
+    limitation: Limitation,
+) -> Result<Element, Error> {
+    match account.iban.as_deref() {
+        Some(iban) => group(&[iban, account.bic.as_deref().unwrap_or(""), "", "", "", ""]),
+        None => international_account(account, limitation),
+    }
 }
 
 fn international_account(account: &Account, limitation: Limitation) -> Result<Element, Error> {
