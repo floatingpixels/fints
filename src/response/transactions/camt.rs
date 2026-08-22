@@ -14,7 +14,11 @@ use crate::{
 use super::MAX_TRANSACTION_PAGE_ENTRIES;
 
 const MAX_XML_DEPTH: usize = 64;
-const MAX_XML_NODES: usize = 20_000;
+/// Element budget per document, sized from the entry cap: a booked entry with
+/// full transaction details occupies up to roughly 60 elements (live pages of
+/// 500 entries run close to 15,000), so the bound accommodates a page at the
+/// entry cap while still rejecting unbounded element floods.
+const MAX_XML_NODES: usize = MAX_TRANSACTION_PAGE_ENTRIES * 60;
 
 pub(super) struct CamtPayload {
     pub(super) iban: Option<String>,
