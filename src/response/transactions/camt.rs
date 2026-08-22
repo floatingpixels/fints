@@ -507,13 +507,13 @@ impl DetailBuilder {
             set_optional_once(&mut self.bank_transaction_subfamily, text)?;
         } else if local == "Cd" && ends_with(ancestors, &["TxDtls", "BkTxCd", "Prtry"]) {
             set_optional_once(&mut self.proprietary_transaction_code, text)?;
-        } else if local == "Nm" && ends_with(ancestors, &["TxDtls", "RltdPties", "Dbtr"]) {
+        } else if local == "Nm" && is_party_name(ancestors, "Dbtr") {
             set_optional_once(&mut self.debtor_name, text)?;
         } else if local == "IBAN"
             && ends_with(ancestors, &["TxDtls", "RltdPties", "DbtrAcct", "Id"])
         {
             set_optional_once(&mut self.debtor_iban, text)?;
-        } else if local == "Nm" && ends_with(ancestors, &["TxDtls", "RltdPties", "Cdtr"]) {
+        } else if local == "Nm" && is_party_name(ancestors, "Cdtr") {
             set_optional_once(&mut self.creditor_name, text)?;
         } else if local == "IBAN"
             && ends_with(ancestors, &["TxDtls", "RltdPties", "CdtrAcct", "Id"])
@@ -715,6 +715,15 @@ fn set_once<T>(target: &mut Option<T>, value: T) -> Result<(), Error> {
 
 fn set_optional_once(target: &mut Option<String>, value: String) -> Result<(), Error> {
     set_once(target, nonempty(value)?)
+}
+
+/// camt.052.001.02 places the party name directly below `Dbtr`/`Cdtr`
+/// (PartyIdentification32); camt.052.001.08 wraps the party in the
+/// `Party40Choice` element `Pty` (DK Anlage 3 v3.9, 7.1.7). The `Agt` branch
+/// of that choice carries an agent, never a party name.
+fn is_party_name(stack: &[Node], party: &str) -> bool {
+    ends_with(stack, &["TxDtls", "RltdPties", party])
+        || ends_with(stack, &["TxDtls", "RltdPties", party, "Pty"])
 }
 
 fn ends_with(stack: &[Node], expected: &[&str]) -> bool {

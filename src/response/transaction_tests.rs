@@ -341,6 +341,27 @@ fn camt_delivery_may_use_the_short_descriptor_of_another_supported_version() {
     ));
 }
 
+// DK Anlage 3 v3.9, 7.1.7 with the camt.052.001.08 schema: RltdPties/Dbtr and
+// RltdPties/Cdtr are Party40Choice, so the name sits below `Pty`. An `Agt`
+// branch carries no party name.
+#[test]
+fn camt_052_001_08_party_names_are_read_below_the_party_choice() {
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">5.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>2026-08-03</Dt></BookgDt><AcctSvcrRef>fictional-pty</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">5.00</Amt><RltdPties><Dbtr><Agt><FinInstnId><Nm>Fictional Agent</Nm></FinInstnId></Agt></Dbtr><Cdtr><Pty><Nm>Fictional Creditor</Nm></Pty></Cdtr><CdtrAcct><Id><IBAN>DE02120300000000202051</IBAN></Id></CdtrAcct></RltdPties></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let page = Response::parse(&camt_message(xml))
+        .unwrap()
+        .transactions(&TransactionFormat::Camt {
+            descriptor: CAMT_DESCRIPTOR.to_owned(),
+        })
+        .unwrap()
+        .unwrap();
+    let detail = &page.entries[0].details()[0];
+    assert_eq!(detail.counterparty_name(), Some("Fictional Creditor"));
+    assert_eq!(
+        detail.counterparty_account(),
+        Some("DE02120300000000202051")
+    );
+}
+
 // cap-exceeding XML fails as one redacted typed error, never a partial result.
 #[test]
 fn camt_namespace_and_declaration_limits_fail_without_partial_results() {
