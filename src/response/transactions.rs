@@ -5,6 +5,7 @@ use crate::{
 };
 
 use super::{camt_descriptor_matches, optional_component, strip_ascii_suffix};
+use crate::model::SUPPORTED_CAMT_DESCRIPTORS;
 
 mod camt;
 mod mt940;
@@ -64,21 +65,18 @@ fn parse_camt(
         }
         account = Some(parsed_account);
         let descriptor = single_text(segment, 2, "HICAZ camt descriptor")?;
-        // Messages 2022 echoes the negotiated camt descriptor in HICAZ.
-        // Descriptor identifiers are compared case-insensitively and permit
-        // the optional schema-file suffix used by the DD.
-        if !camt_descriptor_matches(&descriptor, expected_descriptor) {
-            return Err(Error::InvalidValue {
-                field: "HICAZ camt descriptor",
-            });
-        }
+        // Messages 2022: HICAZ names the camt descriptor of the delivered
+        // documents. Institutions may answer with a different supported schema
+        // version than the one requested, and may shorten the identifier to its
+        // `camt.052.001.NN` tail; the delivered descriptor therefore decides the
+        // namespace the documents must bind, while an unsupported descriptor
+        // remains a typed limitation. Identifiers are compared case-insensitively
+        // and permit the optional schema-file suffix used by the DD.
+        let namespace = delivered_camt_namespace(&descriptor, expected_descriptor)?;
         // Messages 2022 Data Dictionary, "Gebuchte camt-Umsätze":
         // "camt-Umsätze gebucht" has repetition M n, normally one binary camt.052
         // document per booking day. G97 additionally requires accepting a single
         // document that itself covers multiple booking days.
-        // The document namespace is the descriptor identifier itself; the DD's
-        // optional schema-file suffix never appears in the XML.
-        let namespace = strip_ascii_suffix(&descriptor, ".xsd");
         for booked in binary_components(segment, 3, "HICAZ booked camt payload")? {
             let payload = camt::parse(booked, namespace)?;
             ensure_camt_account(account.as_ref().ok_or(Error::InconsistentState)?, &payload)?;
@@ -184,6 +182,28 @@ fn parse_international_account(components: &[Value]) -> Result<Account, Error> {
         allowed_operations: Vec::new(),
         unlisted_operations_unknown: false,
     })
+}
+
+/// Resolves the namespace the delivered documents must bind from the HICAZ
+/// descriptor: the requested descriptor or any other descriptor this crate parses.
+fn delivered_camt_namespace(delivered: &str, requested: &str) -> Result<&'static str, Error> {
+    let delivered = strip_ascii_suffix(delivered, ".xsd");
+    std::iter::once(requested)
+        .chain(SUPPORTED_CAMT_DESCRIPTORS.iter().copied())
+        .find(|candidate| {
+            let candidate = strip_ascii_suffix(candidate, ".xsd");
+            candidate.eq_ignore_ascii_case(delivered)
+                || candidate
+                    .rsplit_once(':')
+                    .is_some_and(|(_, tail)| tail.eq_ignore_ascii_case(delivered))
+        })
+        .and_then(|matched| {
+            SUPPORTED_CAMT_DESCRIPTORS
+                .iter()
+                .copied()
+                .find(|supported| camt_descriptor_matches(supported, matched))
+        })
+        .ok_or(Error::Unsupported(crate::Limitation::CamtNamespace))
 }
 
 fn ensure_camt_account(account: &Account, payload: &camt::CamtPayload) -> Result<(), Error> {

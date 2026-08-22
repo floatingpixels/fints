@@ -275,17 +275,21 @@ fn camt_052_001_02_payload_parses_under_its_negotiated_descriptor() {
     assert_eq!(detail.counterparty_name(), Some("Fictional Creditor"));
     assert_eq!(detail.end_to_end_reference(), Some("fictional-e2e"));
 
-    // The 001.08 descriptor does not authorize a 001.02 document, and vice versa.
-    assert!(matches!(
+    // The delivered descriptor decides the namespace, not the requested one: a
+    // 001.02 delivery under a 001.08 request parses, while the wire's descriptor
+    // never authorizes a document bound to a different version.
+    assert_eq!(
         Response::parse(&wire)
             .unwrap()
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
-            }),
-        Err(Error::InvalidValue {
-            field: "HICAZ camt descriptor"
-        })
-    ));
+            })
+            .unwrap()
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
     let mismatched = binary_message(
         &format!(
             "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+{CAMT_DESCRIPTOR_WIRE}+@"
@@ -299,6 +303,40 @@ fn camt_052_001_02_payload_parses_under_its_negotiated_descriptor() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
+        Err(Error::Unsupported(crate::Limitation::CamtNamespace))
+    ));
+}
+
+// Messages 2022 C.2.3.1.1.1: an institution may deliver another supported camt
+// version than requested and may shorten the HICAZ descriptor to its
+// `camt.052.001.NN` tail. The delivered identifier binds the document namespace.
+#[test]
+fn camt_delivery_may_use_the_short_descriptor_of_another_supported_version() {
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>2026-08-03</Dt></BookgDt><AcctSvcrRef>fictional-short</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">1.00</Amt></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let wire = binary_message(
+        "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+camt.052.001.08+@",
+        xml,
+        "'HNHBS:4:1+2'",
+    );
+    let requested_older = TransactionFormat::Camt {
+        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02".to_owned(),
+    };
+    let page = Response::parse(&wire)
+        .unwrap()
+        .transactions(&requested_older)
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.entries.len(), 1);
+
+    let unsupported = binary_message(
+        "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+camt.053.001.08+@",
+        xml,
+        "'HNHBS:4:1+2'",
+    );
+    assert!(matches!(
+        Response::parse(&unsupported)
+            .unwrap()
+            .transactions(&requested_older),
         Err(Error::Unsupported(crate::Limitation::CamtNamespace))
     ));
 }
@@ -435,9 +473,7 @@ fn camt_accepts_permitted_lexical_and_supplementary_shapes() {
             .transactions(&TransactionFormat::Camt {
                 descriptor: CAMT_DESCRIPTOR.to_owned()
             }),
-        Err(Error::InvalidValue {
-            field: "HICAZ camt descriptor"
-        })
+        Err(Error::Unsupported(crate::Limitation::CamtNamespace))
     ));
 }
 
