@@ -324,7 +324,7 @@ impl Engine {
         let parameters = self.parameters();
         let mut missing_tan_parameters = false;
         if let (Some(signatures), Some(capability)) =
-            (camt_signatures, parameters.camt_capability.as_ref())
+            (camt_signatures, parameters.camt_capability())
             && signatures <= 1
         {
             if let Some(requires_tan) = parameters.camt_requires_tan {

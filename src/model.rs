@@ -403,7 +403,18 @@ pub(crate) struct InstituteState {
     pub(crate) institute_code: String,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+/// camt.052 schema descriptors this crate can parse, in negotiation preference.
+///
+/// DK Anlage 3 specifies `camt.052.001.08` since v3.4; institutions that still
+/// run the earlier Anlage 3 occupancy advertise `camt.052.001.02`. Both share the
+/// entry and transaction-detail structure read by the parser, so the older version
+/// is a protocol-level compatibility, not an institution rule.
+pub(crate) const SUPPORTED_CAMT_DESCRIPTORS: &[&str] = &[
+    "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08",
+    "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02",
+];
+
+#[derive(Clone)]
 pub(crate) struct CamtCapability {
     pub(crate) descriptor: String,
 }
@@ -452,7 +463,6 @@ pub struct ReusableState {
     pub(crate) balance_capability_advertised: bool,
     pub(crate) balance_requires_tan: Option<bool>,
     pub(crate) transaction_capability_advertised: bool,
-    pub(crate) camt_capability: Option<CamtCapability>,
     pub(crate) advertised_camt_descriptors: Vec<String>,
     pub(crate) camt_storage_period_days: Option<u16>,
     pub(crate) legacy_transaction_versions: Vec<u16>,
@@ -494,7 +504,6 @@ impl Default for ReusableState {
             balance_capability_advertised: false,
             balance_requires_tan: None,
             transaction_capability_advertised: false,
-            camt_capability: None,
             advertised_camt_descriptors: Vec::new(),
             camt_storage_period_days: None,
             legacy_transaction_versions: Vec::new(),
@@ -524,6 +533,23 @@ impl Default for ReusableState {
 }
 
 impl ReusableState {
+    /// The negotiable camt descriptor, derived from the retained BPD advertisement.
+    ///
+    /// Crate support is never persisted: a crate upgrade that learns a descriptor
+    /// applies to already-stored BPD facts without a parameter refresh.
+    pub(crate) fn camt_capability(&self) -> Option<CamtCapability> {
+        SUPPORTED_CAMT_DESCRIPTORS
+            .iter()
+            .find_map(|supported| {
+                self.advertised_camt_descriptors.iter().find(|descriptor| {
+                    crate::response::camt_descriptor_matches(descriptor, supported)
+                })
+            })
+            .map(|descriptor| CamtCapability {
+                descriptor: descriptor.clone(),
+            })
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

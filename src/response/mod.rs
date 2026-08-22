@@ -857,7 +857,7 @@ fn element_is_empty(element: &crate::wire::Element) -> bool {
         .all(|value| value.as_text().is_some_and(|value| value.is_empty()))
 }
 
-pub(super) fn camt_descriptor_matches(value: &str, expected: &str) -> bool {
+pub(crate) fn camt_descriptor_matches(value: &str, expected: &str) -> bool {
     strip_ascii_suffix(value, ".xsd").eq_ignore_ascii_case(strip_ascii_suffix(expected, ".xsd"))
 }
 

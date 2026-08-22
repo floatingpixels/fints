@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{CamtCapability, CreditCardCapability, CreditDebit, TanMethod, TanProcess};
+use crate::model::{CreditCardCapability, CreditDebit, TanMethod, TanProcess};
 use crate::wire::{Element, Value};
 use chrono::{NaiveDate, NaiveTime};
 
@@ -1253,7 +1253,7 @@ fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
 
     assert!(state.transaction_capability_advertised);
     assert_eq!(
-        state.camt_capability.as_ref().unwrap().descriptor,
+        state.camt_capability().unwrap().descriptor,
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
     );
     assert_eq!(state.legacy_transaction_versions, [7]);
@@ -1285,7 +1285,7 @@ fn transaction_capabilities_accept_the_earlier_camt_052_001_02_descriptor() {
         .unwrap();
 
     assert_eq!(
-        state.camt_capability.as_ref().unwrap().descriptor,
+        state.camt_capability().unwrap().descriptor,
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02"
     );
     assert!(state.legacy_transaction_versions.is_empty());
@@ -1308,8 +1308,29 @@ fn transaction_capabilities_accept_the_earlier_camt_052_001_02_descriptor() {
         .apply_parameters(&mut state)
         .unwrap();
     assert_eq!(
-        state.camt_capability.as_ref().unwrap().descriptor,
+        state.camt_capability().unwrap().descriptor,
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
+    );
+}
+
+// Crate support is a property of the running crate, not of stored bank facts:
+// state persisted by an earlier crate that only retained the descriptors must
+// negotiate camt after an upgrade without a BPD refresh.
+#[test]
+fn camt_support_is_derived_from_retained_descriptors_at_read_time() {
+    let mut state = ReusableState::new();
+    assert!(state.camt_capability().is_none());
+    state.advertised_camt_descriptors =
+        vec!["urn:iso:std:iso:20022:tech:xsd:camt.052.001.02.XSD".to_owned()];
+    assert_eq!(
+        state.camt_capability().unwrap().descriptor,
+        "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02.XSD"
+    );
+    assert!(
+        state
+            .advertised_capabilities()
+            .camt_cash_transactions()
+            .supported_by_crate()
     );
 }
 
@@ -1664,7 +1685,7 @@ fn camt_descriptors_are_retained_and_supported_by_normalized_identity() {
         2
     );
     assert_eq!(
-        state.camt_capability.as_ref().unwrap().descriptor,
+        state.camt_capability().unwrap().descriptor,
         "URN:ISO:STD:ISO:20022:TECH:XSD:CAMT.052.001.08.XSD"
     );
 
@@ -1722,7 +1743,7 @@ fn gate3_atruvia_profile_accepts_advertised_camt_without_legacy_turnover() {
         .unwrap();
 
     assert!(state.transaction_capability_advertised);
-    assert!(state.camt_capability.is_some());
+    assert!(state.camt_capability().is_some());
     assert!(state.legacy_transaction_versions.is_empty());
     assert_eq!(state.camt_requires_tan, Some(false));
     assert!(state.accounts()[0].allows_booked_transactions());
@@ -1936,9 +1957,8 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
     state.balance_capability_advertised = true;
     state.balance_requires_tan = Some(false);
     state.transaction_capability_advertised = true;
-    state.camt_capability = Some(CamtCapability {
-        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
-    });
+    state.advertised_camt_descriptors =
+        vec!["urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned()];
     state.legacy_transaction_versions = vec![7];
     state.camt_requires_tan = Some(false);
     state.legacy_transactions_require_tan = Some(true);
@@ -1999,7 +2019,7 @@ fn same_version_hibpa_preserves_all_retained_bpd_capabilities() {
         [5]
     );
     assert_eq!(
-        state.camt_capability.as_ref().unwrap().descriptor,
+        state.camt_capability().unwrap().descriptor,
         "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
     );
     assert_eq!(state.legacy_transaction_versions, [7]);

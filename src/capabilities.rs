@@ -203,7 +203,7 @@ impl ReusableState {
             camt_cash_transactions: OperationCapabilitySnapshot::new(
                 !camt_versions.is_empty(),
                 camt_versions,
-                self.camt_capability
+                self.camt_capability()
                     .as_ref()
                     .map(|_| vec![1])
                     .unwrap_or_default(),

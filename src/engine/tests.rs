@@ -3,7 +3,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 use super::*;
 use crate::{
     ResponseClass,
-    model::{Account, CamtCapability, InstituteState, OperationPermission, TransactionFormat},
+    model::{Account, InstituteState, OperationPermission, TransactionFormat},
 };
 
 fn response(segments: &[&str], dialog_id: &str, message_number: u16) -> Vec<u8> {
@@ -151,9 +151,10 @@ fn connected_transaction_engine(
     let mut engine = engine_with_method(TanProcess::ProcessVariantTwo);
     engine.state.accounts = accounts;
     engine.state.transaction_capability_advertised = camt || !legacy_versions.is_empty();
-    engine.state.camt_capability = camt.then(|| crate::model::CamtCapability {
-        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
-    });
+    engine.state.advertised_camt_descriptors = camt
+        .then(|| "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned())
+        .into_iter()
+        .collect();
     engine.state.legacy_transaction_versions = legacy_versions;
     engine.state.camt_requires_tan = camt_requires_tan;
     engine.state.legacy_transactions_require_tan = legacy_requires_tan;
@@ -1503,9 +1504,8 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
 
     let mut transactions = engine_with_method(TanProcess::ProcessVariantTwo);
     transactions.state.transaction_capability_advertised = true;
-    transactions.state.camt_capability = Some(CamtCapability {
-        descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
-    });
+    transactions.state.advertised_camt_descriptors =
+        vec!["urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned()];
     transactions.state.camt_requires_tan = Some(false);
     transactions.state.accounts.push(account(1, true));
     let mut transactions = connected(transactions);
@@ -1533,9 +1533,8 @@ fn upd_usage_one_allows_unknown_cash_and_product_operations() {
         denied.state.balance_capability_advertised = true;
         denied.state.balance_requires_tan = Some(false);
         denied.state.transaction_capability_advertised = true;
-        denied.state.camt_capability = Some(CamtCapability {
-            descriptor: "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned(),
-        });
+        denied.state.advertised_camt_descriptors =
+            vec!["urn:iso:std:iso:20022:tech:xsd:camt.052.001.08".to_owned()];
         denied.state.camt_requires_tan = Some(false);
         denied.state.depot_positions_advertised = true;
         denied.state.depot_position_versions = vec![6];
