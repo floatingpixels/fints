@@ -13,7 +13,6 @@ use crate::{
 
 use super::MAX_TRANSACTION_PAGE_ENTRIES;
 
-const CAMT_NAMESPACE: &[u8] = b"urn:iso:std:iso:20022:tech:xsd:camt.052.001.08";
 const MAX_XML_DEPTH: usize = 64;
 const MAX_XML_NODES: usize = 20_000;
 
@@ -56,7 +55,10 @@ impl XmlBounds {
     }
 }
 
-pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
+/// Parses one booked camt.052 document whose bound namespace must equal the
+/// negotiated `namespace` (the HICAZ descriptor without its `.xsd` suffix).
+pub(super) fn parse(input: &[u8], namespace: &str) -> Result<CamtPayload, Error> {
+    let expected_namespace = namespace.as_bytes();
     let mut reader = NsReader::from_reader(input);
     let mut stack = Vec::new();
     let mut state = CamtState::default();
@@ -87,7 +89,7 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 let document_root = !state.saw_document
                     && stack.is_empty()
                     && start.local_name().as_ref() == b"Document";
-                require_camt_namespace(namespace, document_root)?;
+                require_camt_namespace(namespace, expected_namespace, document_root)?;
                 bounds.count_node()?;
                 bounds.check_depth(stack.len())?;
                 let local = std::str::from_utf8(start.local_name().as_ref())
@@ -143,7 +145,7 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 let document_root = !state.saw_document
                     && stack.is_empty()
                     && start.local_name().as_ref() == b"Document";
-                require_camt_namespace(namespace, document_root)?;
+                require_camt_namespace(namespace, expected_namespace, document_root)?;
                 bounds.count_node()?;
                 if matches!(
                     start.local_name().as_ref(),
@@ -184,7 +186,7 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
                 );
             }
             Event::End(end) => {
-                require_camt_namespace(namespace, false)?;
+                require_camt_namespace(namespace, expected_namespace, false)?;
                 let local = std::str::from_utf8(end.local_name().as_ref())
                     .map_err(|_| malformed_transaction_data!())?
                     .to_owned();
@@ -240,9 +242,13 @@ pub(super) fn parse(input: &[u8]) -> Result<CamtPayload, Error> {
     })
 }
 
-fn require_camt_namespace(namespace: ResolveResult<'_>, document_root: bool) -> Result<(), Error> {
+fn require_camt_namespace(
+    namespace: ResolveResult<'_>,
+    expected: &[u8],
+    document_root: bool,
+) -> Result<(), Error> {
     match namespace {
-        ResolveResult::Bound(Namespace(value)) if value == CAMT_NAMESPACE => Ok(()),
+        ResolveResult::Bound(Namespace(value)) if value.eq_ignore_ascii_case(expected) => Ok(()),
         ResolveResult::Bound(_) if document_root => Err(crate::Limitation::CamtNamespace.into()),
         ResolveResult::Bound(_) => Err(malformed_transaction_data!()),
         ResolveResult::Unbound | ResolveResult::Unknown(_) => Err(malformed_transaction_data!()),

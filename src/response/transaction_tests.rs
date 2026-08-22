@@ -242,6 +242,67 @@ fn hicaz_repeated_binary_components_aggregate_booking_day_documents() {
 }
 
 // quick-xml 0.41 default namespace cap and Gate 2 parse contract: malformed or
+// DK Anlage 3 v3.x before v3.4 (camt.052.001.02): `Sts` is a plain code and
+// parties carry `Nm` directly. The namespace must match the negotiated descriptor.
+#[test]
+fn camt_052_001_02_payload_parses_under_its_negotiated_descriptor() {
+    const OLDER: &str = "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02";
+    const OLDER_WIRE: &str = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.02.xsd";
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Document xmlns="{OLDER}"><BkToCstmrAcctRpt><GrpHdr><MsgId>fictional</MsgId></GrpHdr><Rpt><Id>1</Id><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">12.34</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><Dt>2026-08-03</Dt></BookgDt><ValDt><Dt>2026-08-03</Dt></ValDt><AcctSvcrRef>fictional-02</AcctSvcrRef><BkTxCd><Domn><Cd>PMNT</Cd><Fmly><Cd>ICDT</Cd><SubFmlyCd>ESCT</SubFmlyCd></Fmly></Domn></BkTxCd><NtryDtls><TxDtls><Refs><EndToEndId>fictional-e2e</EndToEndId></Refs><RltdPties><Cdtr><Nm>Fictional Creditor</Nm></Cdtr><CdtrAcct><Id><IBAN>DE02120300000000202051</IBAN></Id></CdtrAcct></RltdPties><RmtInf><Ustrd>Fictional purpose</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>PDNG</Sts><AcctSvcrRef>fictional-pending</AcctSvcrRef><BkTxCd/></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#
+    );
+    let wire = binary_message(
+        &format!("HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+{OLDER_WIRE}+@"),
+        xml.as_bytes(),
+        "'HNHBS:4:1+2'",
+    );
+
+    let page = Response::parse(&wire)
+        .unwrap()
+        .transactions(&TransactionFormat::Camt {
+            descriptor: OLDER.to_owned(),
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    let entry = &page.entries[0];
+    assert_eq!(entry.amount().coefficient(), 1234);
+    assert_eq!(entry.amount().scale(), 2);
+    assert_eq!(entry.direction(), CreditDebit::Debit);
+    assert_eq!(entry.booking_date(), NaiveDate::from_ymd_opt(2026, 8, 3));
+    assert_eq!(entry.account_servicer_reference(), Some("fictional-02"));
+    let detail = entry.details().first().unwrap();
+    assert_eq!(detail.counterparty_name(), Some("Fictional Creditor"));
+    assert_eq!(detail.end_to_end_reference(), Some("fictional-e2e"));
+
+    // The 001.08 descriptor does not authorize a 001.02 document, and vice versa.
+    assert!(matches!(
+        Response::parse(&wire)
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::InvalidValue {
+            field: "HICAZ camt descriptor"
+        })
+    ));
+    let mismatched = binary_message(
+        &format!(
+            "HICAZ:3:1:3+DE40123456780000123456::123456::280:12345678+{CAMT_DESCRIPTOR_WIRE}+@"
+        ),
+        xml.as_bytes(),
+        "'HNHBS:4:1+2'",
+    );
+    assert!(matches!(
+        Response::parse(&mismatched)
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::Unsupported(crate::Limitation::CamtNamespace))
+    ));
+}
+
 // cap-exceeding XML fails as one redacted typed error, never a partial result.
 #[test]
 fn camt_namespace_and_declaration_limits_fail_without_partial_results() {

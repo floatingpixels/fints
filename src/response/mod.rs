@@ -861,7 +861,7 @@ pub(super) fn camt_descriptor_matches(value: &str, expected: &str) -> bool {
     strip_ascii_suffix(value, ".xsd").eq_ignore_ascii_case(strip_ascii_suffix(expected, ".xsd"))
 }
 
-fn strip_ascii_suffix<'a>(value: &'a str, suffix: &str) -> &'a str {
+pub(super) fn strip_ascii_suffix<'a>(value: &'a str, suffix: &str) -> &'a str {
     value
         .get(..value.len().saturating_sub(suffix.len()))
         .filter(|prefix| {

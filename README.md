@@ -15,7 +15,7 @@ user's account is authorized for it.
 | --- | --- | --- | --- |
 | Dialog, synchronization, TAN methods and media | `HKSYN`/`HISYN`; `HKTAN`/`HITAN` 6-7; `HKTAB`/`HITAB` 2-5 | FinTS PIN/TAN | Verified against multiple institutions |
 | Cash-account balance | `HKSAL`/`HISAL` 5-8 | FinTS segment data | Verified |
-| Booked cash transactions | `HKCAZ`/`HICAZ` 1; `HKKAZ`/`HIKAZ` 6-7 | camt.052.001.08 or MT940 | Both formats verified |
+| Booked cash transactions | `HKCAZ`/`HICAZ` 1; `HKKAZ`/`HIKAZ` 6-7 | camt.052.001.08 or camt.052.001.02, or MT940 | camt.052.001.08 and MT940 verified; camt.052.001.02 fixture-covered, live verification pending |
 | Securities positions | `HKWPD`/`HIWPD` 5-6 | MT535 | Verified |
 | Booked securities transactions | `HKWDU`/`HIWDU` 5 | MT536 | Implemented, but not live-verified because no available institution advertises `HIWDUS` |
 | Credit-card balance | `HKKKS`/`HIKKS` 1 | G112 FinTS segment data | Verified |

@@ -1262,6 +1262,57 @@ fn transaction_capabilities_prefer_supported_camt_and_retain_legacy_fallback() {
     assert!(state.accounts()[0].allows_booked_transactions());
 }
 
+// DK Anlage 3 v3.x before v3.4 occupied camt.052.001.02; an institution that
+// advertises only that descriptor (optionally with the DD's `.xsd` variant) and
+// no HIKAZS still negotiates camt transactions, preferring 001.08 when both exist.
+#[test]
+fn transaction_capabilities_accept_the_earlier_camt_052_001_02_descriptor() {
+    let older = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.02";
+    let fixture = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+57+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+90:J:N:{older}:{older}.xsd"),
+            "HIPINS:5:1:3+1+1+0+4:6:6:::HKCAZ:J".into(),
+        ],
+        "dialog1",
+        1,
+    );
+    let mut state = ReusableState::new();
+    Response::parse(&fixture)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+
+    assert_eq!(
+        state.camt_capability.as_ref().unwrap().descriptor,
+        "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02"
+    );
+    assert!(state.legacy_transaction_versions.is_empty());
+    let snapshot = state.advertised_capabilities();
+    assert!(snapshot.camt_cash_transactions().supported_by_crate());
+    assert!(!snapshot.mt940_cash_transactions().advertised());
+
+    let newer = "urn?:iso?:std?:iso?:20022?:tech?:xsd?:camt.052.001.08";
+    let both = message(
+        &[
+            "HIRMG:2:2+0010::accepted".into(),
+            "HIBPA:3:3:3+58+280:12345678+Fictional Bank+9+1+300".into(),
+            format!("HICAZS:4:1:3+1+1+0+90:J:N:{older}:{newer}"),
+        ],
+        "dialog1",
+        1,
+    );
+    Response::parse(&both)
+        .unwrap()
+        .apply_parameters(&mut state)
+        .unwrap();
+    assert_eq!(
+        state.camt_capability.as_ref().unwrap().descriptor,
+        "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"
+    );
+}
+
 // FinTS Formals D/E and the registered Messages parameter segments: BPD
 // advertisements are safe generic protocol facts. The snapshot retains all
 // parameter codes/versions while operation support remains independently bounded.

@@ -4,7 +4,7 @@ use crate::{
     wire::{Segment, Value},
 };
 
-use super::{camt_descriptor_matches, optional_component};
+use super::{camt_descriptor_matches, optional_component, strip_ascii_suffix};
 
 mod camt;
 mod mt940;
@@ -76,8 +76,11 @@ fn parse_camt(
         // "camt-Umsätze gebucht" has repetition M n, normally one binary camt.052
         // document per booking day. G97 additionally requires accepting a single
         // document that itself covers multiple booking days.
+        // The document namespace is the descriptor identifier itself; the DD's
+        // optional schema-file suffix never appears in the XML.
+        let namespace = strip_ascii_suffix(&descriptor, ".xsd");
         for booked in binary_components(segment, 3, "HICAZ booked camt payload")? {
-            let payload = camt::parse(booked)?;
+            let payload = camt::parse(booked, namespace)?;
             ensure_camt_account(account.as_ref().ok_or(Error::InconsistentState)?, &payload)?;
             if entries
                 .len()
@@ -259,7 +262,7 @@ fn single_binary<'a>(
 
 #[cfg(feature = "fuzzing")]
 pub(super) fn fuzz_camt(input: &[u8]) -> bool {
-    camt::parse(input).is_ok()
+    camt::parse(input, "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08").is_ok()
 }
 
 #[cfg(feature = "fuzzing")]

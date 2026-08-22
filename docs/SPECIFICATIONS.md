@@ -552,8 +552,12 @@ entry changes the current HKWPD 6 or HKWDU 5 layouts.
   response payload returned by HICAZ, including exact amounts, booking/value
   dates, transaction references, counterpart data, and remittance information
   only where supplied. The advertised and echoed descriptor is compared after
-  the Data Dictionary's optional `.xsd` suffix and ASCII case are normalized;
-  delivery in another bound camt namespace remains a typed limitation.
+  the Data Dictionary's optional `.xsd` suffix and ASCII case are normalized.
+  The earlier Anlage 3 occupancy `camt.052.001.02` (the version before v3.4)
+  is accepted with the same element reading when an institution advertises
+  only that descriptor; `001.08` is preferred when both are advertised, and the
+  document namespace must equal the negotiated descriptor — delivery in any
+  other bound camt namespace remains a typed limitation.
 - **Gate 4 sections:** 4.3 (MT535 `Statement of Holdings`, SRG 1998) and
   4.4 (MT536 `Statement of Transactions`, SRG 1998), including GENL/FIN,
   SUBBAL, TRAN/TRANSDET, instrument identifiers, quantities, prices, position

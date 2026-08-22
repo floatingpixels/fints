@@ -11,7 +11,16 @@ use crate::{
 use super::camt_descriptor_matches;
 use super::{component, optional_component};
 
-const SUPPORTED_CAMT_DESCRIPTOR: &str = "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08";
+/// camt.052 schema descriptors this crate can parse, in negotiation preference.
+///
+/// DK Anlage 3 specifies `camt.052.001.08` since v3.4; institutions that still
+/// run the earlier Anlage 3 occupancy advertise `camt.052.001.02`. Both share the
+/// entry and transaction-detail structure read here, so the older version is a
+/// protocol-level compatibility, not an institution rule.
+const SUPPORTED_CAMT_DESCRIPTORS: &[&str] = &[
+    "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08",
+    "urn:iso:std:iso:20022:tech:xsd:camt.052.001.02",
+];
 
 pub(super) fn apply(
     segments: &[Segment],
@@ -254,11 +263,16 @@ impl CashTransactionParams {
         state.transaction_capability_advertised = self.capability_advertised;
         state.advertised_camt_descriptors = self.camt_descriptors.clone();
         state.camt_storage_period_days = self.camt_storage_period_days;
-        state.camt_capability = self
-            .camt_descriptors
-            .into_iter()
-            .find(|descriptor| camt_descriptor_matches(descriptor, SUPPORTED_CAMT_DESCRIPTOR))
-            .map(|descriptor| CamtCapability { descriptor });
+        state.camt_capability = SUPPORTED_CAMT_DESCRIPTORS
+            .iter()
+            .find_map(|supported| {
+                self.camt_descriptors
+                    .iter()
+                    .find(|descriptor| camt_descriptor_matches(descriptor, supported))
+            })
+            .map(|descriptor| CamtCapability {
+                descriptor: descriptor.clone(),
+            });
         state.legacy_transaction_versions = self.legacy_versions;
         state.camt_requires_tan = self.camt_requires_tan;
         state.legacy_transactions_require_tan = self.legacy_requires_tan;
