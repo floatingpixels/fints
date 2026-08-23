@@ -362,6 +362,35 @@ fn camt_052_001_08_party_names_are_read_below_the_party_choice() {
     );
 }
 
+// Institutions wrap purpose text into fixed-width Ustrd lines; a trailing space
+// at the width is the only evidence that the next line continues the same
+// field, so remittance lines are delivered to the caller with their whitespace.
+#[test]
+fn camt_remittance_lines_keep_their_whitespace() {
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-ws</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">1.00</Amt><RmtInf><Ustrd>Fictional Market GmbH + Co. </Ustrd><Ustrd>KG</Ustrd><Ustrd>   </Ustrd></RmtInf></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    assert!(matches!(
+        Response::parse(&camt_message(xml))
+            .unwrap()
+            .transactions(&TransactionFormat::Camt {
+                descriptor: CAMT_DESCRIPTOR.to_owned()
+            }),
+        Err(Error::MalformedTransactionData { .. })
+    ));
+
+    let xml = br#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08"><BkToCstmrAcctRpt><Rpt><Acct><Id><IBAN>DE40123456780000123456</IBAN></Id></Acct><Ntry><Amt Ccy="EUR">1.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><AcctSvcrRef>fictional-ws</AcctSvcrRef><BkTxCd/><NtryDtls><TxDtls><Amt Ccy="EUR">1.00</Amt><RmtInf><Ustrd>Fictional Market GmbH + Co. </Ustrd><Ustrd>KG</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry></Rpt></BkToCstmrAcctRpt></Document>"#;
+    let page = Response::parse(&camt_message(xml))
+        .unwrap()
+        .transactions(&TransactionFormat::Camt {
+            descriptor: CAMT_DESCRIPTOR.to_owned(),
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        page.entries[0].details()[0].remittance_information(),
+        ["Fictional Market GmbH + Co. ", "KG"]
+    );
+}
+
 // cap-exceeding XML fails as one redacted typed error, never a partial result.
 #[test]
 fn camt_namespace_and_declaration_limits_fail_without_partial_results() {

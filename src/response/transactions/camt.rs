@@ -198,7 +198,14 @@ pub(super) fn parse(input: &[u8], namespace: &str) -> Result<CamtPayload, Error>
                 if node.local != local {
                     return Err(malformed_transaction_data!());
                 }
-                let text = node.text.trim().to_owned();
+                // Unstructured remittance lines keep their whitespace: institutions
+                // wrap purpose text into fixed-width lines, and a trailing space is
+                // the only evidence that a line continues in the next one.
+                let text = if node.local == "Ustrd" {
+                    node.text.replace(['\r', '\n'], "")
+                } else {
+                    node.text.trim().to_owned()
+                };
                 state.finish_node(&stack, node.local, text, node.currency)?;
                 if state.entries.len() > MAX_TRANSACTION_PAGE_ENTRIES {
                     return Err(malformed_transaction_data!());
@@ -524,7 +531,10 @@ impl DetailBuilder {
         {
             set_optional_once(&mut self.creditor_iban, text)?;
         } else if local == "Ustrd" && ends_with(ancestors, &["TxDtls", "RmtInf"]) {
-            self.remittance_information.push(nonempty(text)?);
+            if text.trim().is_empty() {
+                return Err(malformed_transaction_data!());
+            }
+            self.remittance_information.push(text);
         }
         Ok(())
     }
