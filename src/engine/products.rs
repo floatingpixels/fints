@@ -1067,7 +1067,10 @@ impl Engine {
             .map(|method| response.tan(method.hktan_version))
             .transpose()?
             .flatten()
-            .filter(|tan| tan.challenge.reference != "noref");
+            .filter(|tan| tan.challenge.reference != "noref")
+            // PIN/TAN 2020 B.4.2.1 step 2: HITAN with process 2 and the order
+            // reference acknowledges the submitted TAN; it is not a challenge.
+            .filter(|tan| !super::acknowledges_variant_two(tan, pending.as_ref()));
         if tan_response.is_some() && !requires_tan {
             return Err(Error::InvalidResponse {
                 structure: "unsolicited product TAN challenge",

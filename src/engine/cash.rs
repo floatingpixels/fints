@@ -394,7 +394,11 @@ impl Engine {
             .map(|method| response.tan(method.hktan_version))
             .transpose()?
             .flatten()
-            .filter(|tan| tan.challenge.reference != "noref");
+            .filter(|tan| tan.challenge.reference != "noref")
+            // PIN/TAN 2020 B.4.2.1 step 2: the response to the submitted TAN
+            // echoes HITAN with process 2 and the order reference. That is the
+            // acknowledgment of this order, not a further challenge.
+            .filter(|tan| !super::acknowledges_variant_two(tan, pending.as_ref()));
         if tan_response.is_some()
             && !self
                 .transaction

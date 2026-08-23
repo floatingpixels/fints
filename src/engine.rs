@@ -812,6 +812,21 @@ fn validate_medium(method: &TanMethod, medium: Option<&str>) -> Result<(), Error
     }
 }
 
+/// PIN/TAN 2020 B.4.2.1, process variant 2 step 2: the institution answers the
+/// TAN submission with HITAN carrying process `2` and the reference of the
+/// order being approved. Such a segment acknowledges that order and may
+/// accompany its result; it never opens a further challenge.
+pub(super) fn acknowledges_variant_two(
+    tan: &crate::response::tan::TanResponse,
+    pending: Option<&PendingChallenge>,
+) -> bool {
+    pending.is_some_and(|pending| {
+        pending.method.process == TanProcess::ProcessVariantTwo
+            && tan.process == "2"
+            && tan.challenge.reference == pending.challenge.reference
+    })
+}
+
 fn validate_tan_process(actual: &str, expected: &str) -> Result<(), Error> {
     if actual == expected {
         Ok(())

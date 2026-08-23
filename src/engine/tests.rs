@@ -2912,7 +2912,7 @@ fn decoupled_product_result_rejects_continuing_or_new_challenges() {
                 "HIRMG:2:2+0010::accepted",
                 "HIRMS:3:2:3+0020::executed",
                 "HIKKU:4:1:3+444433******1111",
-                "HITAN:5:6:3+2++fictional-card-reference+nochallenge",
+                "HITAN:5:6:3+2++fictional-other-reference+nochallenge",
             ],
             TanProcess::ProcessVariantTwo,
         ),
@@ -3047,6 +3047,102 @@ fn booked_transaction_tan_continuation_is_typed_and_operation_bound() {
             .accept_transactions_continuation(&completion, pending, now())
             .unwrap(),
         TransactionsResult::Complete(_)
+    ));
+}
+
+// PIN/TAN 2020 B.4.2.1, process variant 2 step 2: the institution answers the
+// submitted TAN with the order result and HITAN process 2 echoing the order
+// reference. That acknowledgment completes the order; a HITAN for another
+// reference next to a result is still the invalid shape it always was.
+#[test]
+fn booked_transaction_result_may_carry_the_variant_two_acknowledgment() {
+    for (reference, completes) in [
+        ("fictional-transaction-reference", true),
+        ("fictional-other-reference", false),
+    ] {
+        let account = transaction_account("DE40123456780000123456", "123456", &[("HKKAZ", 1)]);
+        let mut engine =
+            connected_transaction_engine(vec![account], false, vec![7], None, Some(true));
+        engine
+            .transaction_request(0, None, None, now().date(), now().time())
+            .unwrap();
+        let challenge = response(
+            &[
+                "HIRMG:2:2+0010::accepted",
+                "HITAN:3:6:3+4++fictional-transaction-reference+Approve fictional entries",
+            ],
+            "dialog1",
+            2,
+        );
+        let pending = match engine.accept_transactions(&challenge, now()).unwrap() {
+            TransactionsResult::Challenge(pending) => *pending,
+            _ => panic!("expected transaction TAN challenge"),
+        };
+        engine
+            .tan_submission_request(&pending, &Tan::new("123456").unwrap(), now())
+            .unwrap();
+        let completion = binary_response(
+            &format!(
+                "HIRMS:3:2:3+0020::executed'HITAN:4:6:3+2++{reference}+nochallenge'HIKAZ:5:7:3+@"
+            ),
+            &mt940_page(1, "FICTBANKREF1", "123456"),
+            "'HNHBS:6:1+3'",
+            "dialog1",
+            3,
+        );
+        let result = engine.accept_transactions_continuation(&completion, pending, now());
+        if completes {
+            assert!(matches!(result.unwrap(), TransactionsResult::Complete(_)));
+        } else {
+            assert!(matches!(
+                result.err().unwrap(),
+                Error::InvalidResponse {
+                    structure: "transaction result and TAN challenge together"
+                }
+            ));
+        }
+    }
+}
+
+#[test]
+fn credit_card_result_may_carry_the_variant_two_acknowledgment() {
+    let mut engine = connected_credit_card_engine(TanProcess::ProcessVariantTwo, true);
+    engine
+        .credit_card_transactions_request(0, None, None, now().date(), now().time())
+        .unwrap();
+    let challenge = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HITAN:3:6:3+4++fictional-card-reference+Approve fictional entries",
+        ],
+        "dialog1",
+        2,
+    );
+    let pending = match engine
+        .accept_credit_card_transactions(&challenge, now())
+        .unwrap()
+    {
+        CreditCardTransactionsResult::Challenge(pending) => *pending,
+        _ => panic!("expected a credit-card approval challenge"),
+    };
+    engine
+        .tan_submission_request(&pending, &Tan::new("123456").unwrap(), now())
+        .unwrap();
+    let completion = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIRMS:3:2:3+0020::executed",
+            "HIKKU:4:1:3+444433******1111",
+            "HITAN:5:6:3+2++fictional-card-reference+nochallenge",
+        ],
+        "dialog1",
+        3,
+    );
+    assert!(matches!(
+        engine
+            .accept_credit_card_transactions_continuation(&completion, pending, now())
+            .unwrap(),
+        CreditCardTransactionsResult::Complete(_)
     ));
 }
 

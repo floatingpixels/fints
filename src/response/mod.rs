@@ -10,7 +10,7 @@ mod balance;
 mod credit_card;
 mod parameters;
 mod securities;
-mod tan;
+pub(crate) mod tan;
 mod transactions;
 
 pub(crate) struct Response {
