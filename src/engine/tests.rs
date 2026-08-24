@@ -1117,6 +1117,52 @@ fn upd_version_zero_accounts_remain_process_memory_only() {
     assert_eq!(engine.state().upd_version(), 0);
 }
 
+// PIN/TAN 2020 HITANS 7 fields 22-24 bound decoupled polling by count and
+// spacing; the local bound is a time window from the challenge so that a
+// one-second spacing still leaves the customer time to approve elsewhere.
+#[test]
+fn decoupled_polling_is_bounded_by_a_time_window_not_a_request_count() {
+    let mut engine = engine_with_method(TanProcess::Decoupled);
+    let fixture = response(
+        &[
+            "HIRMG:2:2+0010::accepted",
+            "HIRMS:3:2:4+3955::approval elsewhere",
+            "HITAN:4:7:4+4++fictional-reference+Approve in the fictional app",
+        ],
+        "dialog1",
+        1,
+    );
+    let mut pending = match engine.accept_initialization(&fixture, now()).unwrap() {
+        InitializationResult::Challenge(pending) => *pending,
+        _ => panic!("expected a decoupled continuation"),
+    };
+    pending.method.max_decoupled_polls = Some(999);
+    pending.method.next_poll_delay_seconds = Some(1);
+
+    let mut at = now().checked_add_signed(TimeDelta::seconds(2)).unwrap();
+    for _ in 0..60 {
+        engine
+            .decoupled_poll_request(&mut pending, crate::PollingMode::Automatic, at)
+            .unwrap();
+        at = at.checked_add_signed(TimeDelta::seconds(1)).unwrap();
+    }
+    engine
+        .decoupled_poll_request(
+            &mut pending,
+            crate::PollingMode::Automatic,
+            now().checked_add_signed(TimeDelta::seconds(180)).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        engine.decoupled_poll_request(
+            &mut pending,
+            crate::PollingMode::Automatic,
+            now().checked_add_signed(TimeDelta::seconds(181)).unwrap()
+        ),
+        Err(Error::PollLimitReached)
+    ));
+}
+
 // FinTS 3.0 PIN/TAN correction T32, HKTAN/HITAN 7 decoupled polling bounds.
 #[test]
 fn decoupled_continuation_enforces_delay_expiry_and_poll_limit() {

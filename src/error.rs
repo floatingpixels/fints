@@ -268,7 +268,7 @@ pub enum Error {
     StaleContinuation,
     #[error("the TAN or approval challenge has expired")]
     ChallengeExpired,
-    #[error("the decoupled approval polling limit has been reached")]
+    #[error("the decoupled approval polling limit or time window has been exhausted")]
     PollLimitReached,
     #[error("the FinTS continuation limit has been reached")]
     ContinuationLimitReached,

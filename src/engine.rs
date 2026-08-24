@@ -19,7 +19,12 @@ mod products;
 
 pub(crate) use initialization::TanMediaInitializationResult;
 
-const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 20;
+// Institutions advertise the decoupled poll count and spacing (PIN/TAN 2020
+// HITANS 7 fields 22-24); with one-second spacing a count alone would give the
+// customer only seconds to approve on the other device. The local bound is
+// therefore a time window from the challenge, plus a runaway guard on requests.
+const LOCAL_DECOUPLED_POLL_WINDOW_SECONDS: i64 = 180;
+const LOCAL_DECOUPLED_POLL_LIMIT: u16 = 200;
 const LOCAL_CONTINUATION_LIMIT: u16 = 20;
 
 pub(crate) struct Engine {
@@ -86,6 +91,7 @@ pub(crate) struct PendingChallenge {
     dialog_id: String,
     polls: u16,
     continuations: u16,
+    opened_at: NaiveDateTime,
     pub(crate) next_poll_at: Option<NaiveDateTime>,
     assigned_system_id: Option<String>,
 }
@@ -427,7 +433,11 @@ impl Engine {
             .max_decoupled_polls
             .unwrap_or(LOCAL_DECOUPLED_POLL_LIMIT);
         let limit = bank_limit.min(LOCAL_DECOUPLED_POLL_LIMIT);
-        if pending.polls >= limit {
+        let window_end = pending
+            .opened_at
+            .checked_add_signed(TimeDelta::seconds(LOCAL_DECOUPLED_POLL_WINDOW_SECONDS))
+            .ok_or(Error::InconsistentState)?;
+        if pending.polls >= limit || now > window_end {
             return Err(Error::PollLimitReached);
         }
         if pending.next_poll_at.is_some_and(|earliest| now < earliest) {
@@ -885,6 +895,7 @@ fn pending_challenge(
         dialog_id: dialog_id.to_owned(),
         polls: 0,
         continuations: 0,
+        opened_at: received_at,
         next_poll_at,
         assigned_system_id: None,
     })
