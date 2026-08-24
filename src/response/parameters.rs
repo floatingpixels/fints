@@ -1085,8 +1085,14 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
             .then(|| optional_u16(components, 23, "next decoupled poll delay"))
             .transpose()?
             .flatten(),
-        manual_polling_allowed: version == 7 && optional_yes(components, 24)?,
-        automatic_polling_allowed: version == 7 && optional_yes(components, 25)?,
+        // PIN/TAN 2020 DD "Verfahrensparameter Zwei-Schritt-Verfahren" 7 marks
+        // fields 25 and 26 optional for decoupled methods, while B.4.2.2 makes
+        // n-fold process-S status queries the base decoupled flow. An absent
+        // flag therefore keeps that flow; only an explicit N withdraws it.
+        manual_polling_allowed: process == TanProcess::Decoupled
+            && optional_yes_or(components, 24, true)?,
+        automatic_polling_allowed: process == TanProcess::Decoupled
+            && optional_yes_or(components, 25, true)?,
         #[cfg(feature = "diagnostics")]
         development_medium_requirement: Some(crate::diagnostics::HitansMediumRequirementFact::new(
             version,
@@ -1098,8 +1104,13 @@ fn parse_tan_method(components: &[Value], version: u16) -> Result<TanMethod, Err
 }
 
 fn optional_yes(components: &[Value], index: usize) -> Result<bool, Error> {
+    optional_yes_or(components, index, false)
+}
+
+fn optional_yes_or(components: &[Value], index: usize, absent: bool) -> Result<bool, Error> {
     match optional_component(components, index).as_deref() {
-        None | Some("N") => Ok(false),
+        None => Ok(absent),
+        Some("N") => Ok(false),
         Some("J") => Ok(true),
         _ => Err(Error::InvalidValue {
             field: "yes/no parameter",

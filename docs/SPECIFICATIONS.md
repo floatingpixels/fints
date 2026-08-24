@@ -316,6 +316,16 @@ access date for each source below is 2026-07-28.
   instead of misclassifying its mandatory HITAN `S` response as a new challenge.
   Initial and variant-two result/challenge combinations, mismatched references,
   and codes 3955-3958 remain non-terminal.
+  HITANS 7 DD fields 25 ("Manuelle Bestätigung möglich") and 26
+  ("Automatisierte Statusabfragen erlaubt") are optional for decoupled
+  methods, and B.4.2.2 defines the n-fold process-`S` status query as the base
+  decoupled flow: an absent flag keeps that mode allowed and only an explicit
+  `N` withdraws it. This rests on the field table and B.4.2.2; an institution
+  advertising 999 polls at one-second spacing with both flags empty was
+  observed live (owner decision 2026-08-24, fictional regression fixture), and
+  hbci4java commit `c6133fab` (LGPL) was consulted as corroboration only. The
+  advertised count and spacing are honored; the crate's own bound is a
+  180-second window from the challenge plus a 200-request runaway guard.
   A process-4 HITAN is validated as the response to the embedded HKTAN. If the
   same response omits HITAB, the archived/current operation definitions
   authorize sending the highest common advertised HKTAB 2-5 order in that

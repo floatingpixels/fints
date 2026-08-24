@@ -1175,6 +1175,118 @@ fn bpd_upd_and_user_allowed_tan_method_are_interpreted_together() {
     assert_eq!(state.tan_methods()[0].max_decoupled_polls(), Some(5));
 }
 
+// PIN/TAN 2020-07-10 DD "Verfahrensparameter Zwei-Schritt-Verfahren" 7,
+// fields 25/26 (optional for Decoupled), and B.4.2.2 (n-fold status query as
+// the base decoupled flow): an institution that leaves both flags empty while
+// advertising a poll count and spacing keeps polling allowed; only an explicit
+// N withdraws a mode. Fictional regression fixture for that live-observed shape.
+#[test]
+fn absent_decoupled_polling_flags_keep_the_base_status_query_flow() {
+    fn method(manual: &str, automatic: &str) -> String {
+        [
+            "940",
+            "2",
+            "decoupled-app",
+            "Decoupled",
+            "",
+            "App approval",
+            "",
+            "",
+            "Approval",
+            "2048",
+            "N",
+            "1",
+            "N",
+            "0",
+            "0",
+            "N",
+            "J",
+            "00",
+            "0",
+            "N",
+            "",
+            "999",
+            "1",
+            "1",
+            manual,
+            automatic,
+        ]
+        .join(":")
+    }
+    let hhd = [
+        "910",
+        "2",
+        "HHD1.3.0",
+        "",
+        "",
+        "Generator",
+        "6",
+        "1",
+        "TAN",
+        "2048",
+        "N",
+        "1",
+        "N",
+        "0",
+        "0",
+        "N",
+        "J",
+        "00",
+        "0",
+        "N",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+    ]
+    .join(":");
+    for (manual, automatic, expected_manual, expected_automatic) in [
+        ("", "", true, true),
+        ("N", "", false, true),
+        ("", "N", true, false),
+        ("J", "N", true, false),
+    ] {
+        let fixture = message(
+            &[
+                "HIRMG:2:2+0010::accepted".into(),
+                "HIBPA:3:3:4+7+280:12345678+Fictional Bank+9+1+300".into(),
+                format!(
+                    "HITANS:4:7:4+1+1+0+N:N:0:{}:{hhd}",
+                    method(manual, automatic)
+                ),
+            ],
+            "dialog1",
+            1,
+        );
+        let mut state = ReusableState::new();
+        Response::parse(&fixture)
+            .unwrap()
+            .apply_parameters(&mut state)
+            .unwrap();
+
+        let methods = state.tan_methods();
+        assert_eq!(methods.len(), 2);
+        let by_function = |function: &str| {
+            methods
+                .iter()
+                .find(|method| method.security_function() == function)
+                .unwrap()
+        };
+        let decoupled = by_function("940");
+        assert_eq!(decoupled.process(), TanProcess::Decoupled);
+        assert_eq!(decoupled.manual_polling_allowed(), expected_manual);
+        assert_eq!(decoupled.automatic_polling_allowed(), expected_automatic);
+        assert_eq!(decoupled.max_decoupled_polls(), Some(999));
+        assert_eq!(decoupled.next_poll_delay_seconds(), Some(1));
+        let generator = by_function("910");
+        assert_eq!(generator.process(), TanProcess::ProcessVariantTwo);
+        assert!(!generator.manual_polling_allowed());
+        assert!(!generator.automatic_polling_allowed());
+    }
+}
+
 // Formals E.2 "UPD-Verwendung": with value 1, an operation omitted from
 // Erlaubte GV is unknown rather than denied; value 0 remains a local deny.
 #[test]
